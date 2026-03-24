@@ -880,3 +880,19 @@ def build_app() -> Application:
 if __name__ == "__main__":
     application = build_app()
     application.run_polling()
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is running")
+
+def run_server():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), Handler)
+    server.serve_forever()
+
+# запускаем веб-сервер в отдельном потоке
+threading.Thread(target=run_server).start()
