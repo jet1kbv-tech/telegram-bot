@@ -1,3 +1,6 @@
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
 import json
 import os
 import uuid
@@ -892,22 +895,24 @@ def run_health_server():
     server = HTTPServer(("0.0.0.0", port), HealthHandler)
     server.serve_forever()
 
-if __name__ == "__main__":
-    application = build_app()
-    application.run_polling()
-import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
-
-class Handler(BaseHTTPRequestHandler):
+class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Bot is running")
+        self.wfile.write(b"OK")
 
-def run_server():
-    port = int(os.environ.get("PORT", 10000))
-    server = HTTPServer(("0.0.0.0", port), Handler)
+    def log_message(self, format, *args):
+        return
+
+
+def run_health_server():
+    port = int(os.environ.get("PORT", "10000"))
+    print(f"Starting health server on port {port}")
+    server = HTTPServer(("0.0.0.0", port), HealthHandler)
     server.serve_forever()
 
-# запускаем веб-сервер в отдельном потоке
-threading.Thread(target=run_server).start()
+
+if __name__ == "__main__":
+    threading.Thread(target=run_health_server, daemon=True).start()
+    application = build_app()
+    application.run_polling()
