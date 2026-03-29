@@ -35,8 +35,8 @@ NOTIFICATION_CHECK_INTERVAL = 60 * 60
 
 # Заполни usernames без @
 ALLOWED_USERS = {
-    "wp_bvv": {"name": "Вова", "wishlist_owner": "vova", "gender": "male", "person_key": "vova"},
-    "privetnormalno": {"name": "Саша", "wishlist_owner": "sasha", "gender": "female", "person_key": "sasha"},
+    "wp_bvv": {"name": "Вова", "wishlist_owner": "vova", "gender": "male"},
+    "privetnormalno": {"name": "Саша", "wishlist_owner": "sasha", "gender": "female"},
 }
 
 KNOWN_WISHLIST_OWNERS = {"vova", "sasha", "unknown"}
@@ -57,7 +57,12 @@ MENU, SECTION = range(2)
     ADDING_EVENT_DATE,
     ADDING_EVENT_TIME,
     ADDING_EVENT_LINK,
-) = range(10, 24)
+    ADDING_CALENDAR_EVENT_TITLE,
+    ADDING_CALENDAR_EVENT_DATE,
+    ADDING_CALENDAR_EVENT_START_TIME,
+    ADDING_CALENDAR_EVENT_END_TIME,
+    ADDING_CALENDAR_EVENT_COMMENT,
+) = range(10, 29)
 
 FILM_STATUSES = ["want", "watched"]
 WISHLIST_STATUSES = ["active", "gifted"]
@@ -109,58 +114,6 @@ WISHLIST_OWNER_LABELS = {
     "unknown": "Без владельца",
 }
 
-FILM_RATERS = {
-    "sasha": "Саша",
-    "vova": "Вова",
-}
-
-
-def canonical_person_key_by_name(name: str) -> str | None:
-    normalized = (name or "").strip().lower()
-    if normalized == "вова":
-        return "vova"
-    if normalized == "саша":
-        return "sasha"
-    return None
-
-
-def gender_word_missed(profile: dict[str, str] | None) -> str:
-    gender = (profile or {}).get("gender")
-    return "забыла" if gender == "female" else "забыл"
-
-
-def get_profile_by_username(username: str) -> dict[str, str] | None:
-    return ALLOWED_USERS.get(username)
-
-
-def get_profile_by_person_key(person_key: str) -> dict[str, str] | None:
-    for profile in ALLOWED_USERS.values():
-        if profile.get("person_key") == person_key:
-            return profile
-    return None
-
-
-def normalize_film_ratings(item: dict[str, Any]) -> dict[str, int | None]:
-    ratings = {"sasha": None, "vova": None}
-    raw_ratings = item.get("ratings")
-    if isinstance(raw_ratings, dict):
-        for key in ratings:
-            ratings[key] = normalize_rating(raw_ratings.get(key))
-    else:
-        legacy_rating = normalize_rating(item.get("rating"))
-        added_by_key = canonical_person_key_by_name(str(item.get("added_by") or ""))
-        if legacy_rating is not None and added_by_key in ratings:
-            ratings[added_by_key] = legacy_rating
-    return ratings
-
-
-def film_average_rating(item: dict[str, Any]) -> float | None:
-    ratings = normalize_film_ratings(item)
-    values = [value for value in ratings.values() if value is not None]
-    if not values:
-        return None
-    return round(sum(values) / len(values), 1)
-
 
 class JsonStorage:
     def __init__(self, path: Path):
@@ -173,6 +126,10 @@ class JsonStorage:
             "wishlist": [],
             "leisure": [],
             "afisha": [],
+            "calendars": {
+                "vova": [],
+                "sasha": [],
+            },
             "meta": {
                 "user_chats": {},
             },
@@ -238,6 +195,13 @@ class JsonStorage:
             if item:
                 data["afisha"].append(item)
 
+        raw_calendars = raw_data.get("calendars") if isinstance(raw_data.get("calendars"), dict) else {}
+        for owner in ("vova", "sasha"):
+            for raw_item in raw_calendars.get(owner, []):
+                item = normalize_calendar_event(raw_item, owner)
+                if item:
+                    data["calendars"][owner].append(item)
+
         meta = raw_data.get("meta") if isinstance(raw_data.get("meta"), dict) else {}
         user_chats = meta.get("user_chats") if isinstance(meta.get("user_chats"), dict) else {}
         data["meta"]["user_chats"] = {
@@ -265,6 +229,25 @@ def normalize_rating(value: Any) -> int | None:
     if 1 <= rating <= 10:
         return rating
     return None
+
+
+def calculate_average_rating(item: dict[str, Any]) -> float | None:
+    ratings = [value for value in [item.get("sasha_rating"), item.get("vova_rating")] if isinstance(value, int)]
+    if len(ratings) == 2:
+        return sum(ratings) / 2
+    legacy_rating = item.get("legacy_rating")
+    if isinstance(legacy_rating, int):
+        return float(legacy_rating)
+    return None
+
+
+def format_average_rating(item: dict[str, Any]) -> str | None:
+    average = calculate_average_rating(item)
+    if average is None:
+        return None
+    if average.is_integer():
+        return str(int(average))
+    return f"{average:.1f}"
 
 
 def parse_event_dt(item: dict[str, Any]) -> datetime | None:
@@ -297,11 +280,41 @@ def sort_events(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(items, key=lambda item: parse_event_dt(item) or datetime.max)
 
 
-def build_calendar_items(data: dict[str, Any]) -> list[dict[str, Any]]:
-    now = datetime.now()
-    items = [item for item in data.get("afisha", []) if is_event_actual(item, now)]
-    return sort_events(items)
+def parse_calendar_event_start_dt(item: dict[str, Any]) -> datetime | None:
+    date_raw = item.get("date")
+    start_time_raw = item.get("start_time")
+    if not date_raw or not start_time_raw:
+        return None
+    try:
+        return datetime.strptime(f"{date_raw} {start_time_raw}", "%Y-%m-%d %H:%M")
+    except ValueError:
+        return None
 
+
+def sort_calendar_events(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(items, key=lambda item: parse_calendar_event_start_dt(item) or datetime.max)
+
+
+def format_calendar_event_range(item: dict[str, Any]) -> str:
+    start_dt = parse_calendar_event_start_dt(item)
+    if not start_dt:
+        return "Дата не указана"
+    end_time = item.get("end_time") or ""
+    if end_time:
+        return f"{start_dt.strftime('%d.%m.%Y')} {item['start_time']}–{end_time}"
+    return start_dt.strftime("%d.%m.%Y %H:%M")
+
+
+def calendar_preview_text(item: dict[str, Any]) -> str:
+    start_dt = parse_calendar_event_start_dt(item)
+    if not start_dt:
+        return item.get("title") or "Событие"
+    return f"{start_dt.strftime('%d.%m.%Y %H:%M')} · {item['title']}"
+
+
+def get_calendar_items(data: dict[str, Any], owner: str) -> list[dict[str, Any]]:
+    raw = data.get("calendars", {}).get(owner, [])
+    return sort_calendar_events(list(raw))
 
 def normalize_film(item: Any) -> dict[str, Any] | None:
     if isinstance(item, str):
@@ -311,19 +324,29 @@ def normalize_film(item: Any) -> dict[str, Any] | None:
             "status": "want",
             "added_by": "unknown",
             "comment": "",
-            "ratings": {"sasha": None, "vova": None},
+            "sasha_rating": None,
+            "vova_rating": None,
+            "legacy_rating": None,
         }
     if isinstance(item, dict):
         status = item.get("status", "want")
         if status not in FILM_STATUSES:
             status = "want"
+        sasha_rating = normalize_rating(item.get("sasha_rating"))
+        vova_rating = normalize_rating(item.get("vova_rating"))
+        legacy_rating = normalize_rating(item.get("legacy_rating"))
+        old_rating = normalize_rating(item.get("rating"))
+        if legacy_rating is None and old_rating is not None and sasha_rating is None and vova_rating is None:
+            legacy_rating = old_rating
         return {
             "id": str(item.get("id") or make_id()),
             "title": str(item.get("title") or "Без названия"),
             "status": status,
             "added_by": str(item.get("added_by") or "unknown"),
             "comment": str(item.get("comment") or ""),
-            "ratings": normalize_film_ratings(item),
+            "sasha_rating": sasha_rating,
+            "vova_rating": vova_rating,
+            "legacy_rating": legacy_rating,
         }
     return None
 
@@ -400,6 +423,35 @@ def normalize_event(item: Any) -> dict[str, Any] | None:
     return None
 
 
+def normalize_calendar_event(item: Any, owner: str | None = None) -> dict[str, Any] | None:
+    if not isinstance(item, dict):
+        return None
+    event_owner = str(item.get("owner") or owner or "")
+    if event_owner not in {"vova", "sasha"}:
+        return None
+    normalized = {
+        "id": str(item.get("id") or make_id()),
+        "owner": event_owner,
+        "title": str(item.get("title") or "Без названия"),
+        "date": str(item.get("date") or ""),
+        "start_time": str(item.get("start_time") or item.get("time") or ""),
+        "end_time": str(item.get("end_time") or ""),
+        "comment": str(item.get("comment") or ""),
+    }
+    if parse_calendar_event_start_dt(normalized) is None:
+        return None
+    end_time = normalized.get("end_time") or ""
+    if end_time:
+        try:
+            start_dt = datetime.strptime(f"{normalized['date']} {normalized['start_time']}", "%Y-%m-%d %H:%M")
+            end_dt = datetime.strptime(f"{normalized['date']} {end_time}", "%Y-%m-%d %H:%M")
+        except ValueError:
+            return None
+        if end_dt <= start_dt:
+            return None
+    return normalized
+
+
 def get_username(update: Update) -> str:
     user = update.effective_user
     if not user or not user.username:
@@ -434,6 +486,18 @@ def get_user_name(update: Update) -> str:
     if not user:
         return "unknown"
     return user.first_name or user.username or str(user.id)
+
+
+def get_gender_by_username(username: str) -> str:
+    profile = ALLOWED_USERS.get(username) or {}
+    return str(profile.get("gender") or "unknown")
+
+
+def reminder_forget_word(username: str) -> str:
+    gender = get_gender_by_username(username)
+    if gender == "female":
+        return "забыла"
+    return "забыл"
 
 
 def get_wishlist_owner_by_user(update: Update) -> str:
@@ -527,7 +591,7 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton("🎁 Wishlist", callback_data="menu|wishlist")],
             [InlineKeyboardButton("✨ Досуг", callback_data="menu|leisure")],
             [InlineKeyboardButton("🗓 Афиша", callback_data="menu|afisha")],
-            [InlineKeyboardButton("📅 Календарь", callback_data="calendar|0")],
+            [InlineKeyboardButton("📅 Календарь", callback_data="calendar_menu")],
         ]
     )
 
@@ -566,8 +630,6 @@ def build_list_callback(section: str, page: int, owner: str | None = None, statu
         return f"list|wishlist|{owner}|{page}"
     if section == "films" and status_filter:
         return f"list|films|{status_filter}|{page}"
-    if section == "calendar":
-        return f"calendar|{page}"
     return f"list|{section}|{page}"
 
 
@@ -598,14 +660,16 @@ def build_item_text(section: str, item: dict[str, Any]) -> str:
             f"Статус: {item_status_label(section, item['status'])}",
             f"Добавил: {item.get('added_by', 'unknown')}",
         ]
-        ratings = normalize_film_ratings(item)
         if item.get("status") == "watched":
-            sasha_rating = ratings.get("sasha")
-            vova_rating = ratings.get("vova")
-            average_rating = film_average_rating(item)
-            lines.append(f"Оценка Саши: {f'{sasha_rating}/10' if sasha_rating is not None else '—'}")
-            lines.append(f"Оценка Вовы: {f'{vova_rating}/10' if vova_rating is not None else '—'}")
-            lines.append(f"Средний рейтинг: {str(average_rating).replace('.', ',') if average_rating is not None else '—'}")
+            if item.get("sasha_rating") is not None:
+                lines.append(f"Оценка Саши: {item['sasha_rating']}/10")
+            if item.get("vova_rating") is not None:
+                lines.append(f"Оценка Вовы: {item['vova_rating']}/10")
+            average = format_average_rating(item)
+            if average is not None:
+                lines.append(f"Средний рейтинг: {average}/10")
+            elif item.get("legacy_rating") is not None:
+                lines.append(f"Рейтинг: {item['legacy_rating']}/10")
         if item.get("comment"):
             lines.append(f"Комментарий: {item['comment']}")
         return "\n".join(lines)
@@ -668,18 +732,90 @@ def build_list_text(section: str, items: list[dict[str, Any]], page: int, total_
     )
 
 
-def build_calendar_text(items: list[dict[str, Any]], page: int, total_pages: int) -> str:
+def build_calendar_menu_text() -> str:
+    return "📅 Календарь\n\nВыбери, чей календарь открыть."
+
+
+def calendar_owner_menu_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("📅 Календарь Саши", callback_data="cal_list|sasha|0")],
+            [InlineKeyboardButton("📅 Календарь Вовы", callback_data="cal_list|vova|0")],
+            [InlineKeyboardButton("⬅️ Назад в меню", callback_data="main")],
+        ]
+    )
+
+
+def build_calendar_owner_text(owner: str, items: list[dict[str, Any]], page: int) -> str:
+    title = f"📅 Календарь {owner_label(owner)}"
     total_items = len(items)
     if total_items == 0:
-        return "📅 Календарь\n\nБлижайших событий пока нет."
+        return f"{title}\n\nПока событий нет."
     start_num = page * PAGE_SIZE + 1
     end_num = min(total_items, start_num + PAGE_SIZE - 1)
     return (
-        "📅 Календарь\n\n"
-        f"Ближайшие события {start_num}–{end_num} из {total_items}.\n"
-        "Список собран автоматически из Афиши."
+        f"{title}\n\n"
+        f"События {start_num}–{end_num} из {total_items}.\n"
+        "Нажми на событие, чтобы открыть карточку или удалить его."
     )
 
+
+
+def calendar_owner_keyboard(owner: str, items: list[dict[str, Any]], page: int) -> InlineKeyboardMarkup:
+    page_items, current_page, total_pages = paginate_items(items, page)
+    rows: list[list[InlineKeyboardButton]] = []
+    for item in page_items:
+        rows.append([
+            InlineKeyboardButton(
+                calendar_preview_text(item),
+                callback_data=f"cal_view|{owner}|{item['id']}|{current_page}",
+            )
+        ])
+
+    if total_pages > 1:
+        row: list[InlineKeyboardButton] = []
+        if current_page > 0:
+            row.append(InlineKeyboardButton("⬅️", callback_data=f"cal_list|{owner}|{current_page - 1}"))
+        row.append(InlineKeyboardButton(f"{current_page + 1}/{total_pages}", callback_data="noop"))
+        if current_page < total_pages - 1:
+            row.append(InlineKeyboardButton("➡️", callback_data=f"cal_list|{owner}|{current_page + 1}"))
+        rows.append(row)
+
+    rows.append([InlineKeyboardButton("➕ Добавить событие", callback_data=f"cal_add|{owner}")])
+    rows.append([InlineKeyboardButton("⬅️ К выбору календаря", callback_data="calendar_menu")])
+    rows.append([InlineKeyboardButton("🏠 В меню", callback_data="main")])
+    return InlineKeyboardMarkup(rows)
+
+
+def build_calendar_event_text(item: dict[str, Any]) -> str:
+    lines = [
+        f"📅 {item['title']}",
+        f"Календарь: {owner_label(item['owner'])}",
+        f"Когда: {format_calendar_event_range(item)}",
+    ]
+    if item.get("comment"):
+        lines.append(f"Комментарий: {item['comment']}")
+    return "\n".join(lines)
+
+
+
+def calendar_event_keyboard(owner: str, item_id: str, page: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("🗑️ Удалить", callback_data=f"cal_delete_confirm|{owner}|{item_id}|{page}")],
+            [InlineKeyboardButton("⬅️ К списку", callback_data=f"cal_list|{owner}|{page}")],
+            [InlineKeyboardButton("🏠 В меню", callback_data="main")],
+        ]
+    )
+
+
+def calendar_event_delete_confirm_keyboard(owner: str, item_id: str, page: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("✅ Да, удалить", callback_data=f"cal_delete|{owner}|{item_id}|{page}")],
+            [InlineKeyboardButton("↩️ Нет, вернуться", callback_data=f"cal_view|{owner}|{item_id}|{page}")],
+        ]
+    )
 
 def list_keyboard(section: str, items: list[dict[str, Any]], page: int, owner: str | None = None, status_filter: str | None = None) -> InlineKeyboardMarkup:
     page_items, current_page, total_pages = paginate_items(items, page)
@@ -710,32 +846,11 @@ def list_keyboard(section: str, items: list[dict[str, Any]], page: int, owner: s
         rows.append([InlineKeyboardButton("⬅️ Назад к разделам фильмов", callback_data="menu|films")])
     elif section == "afisha":
         rows.append([InlineKeyboardButton("➕ Добавить событие", callback_data="add|afisha")])
-        rows.append([InlineKeyboardButton("📅 К календарю", callback_data="calendar|0")])
         rows.append([InlineKeyboardButton("⬅️ Назад", callback_data="menu|afisha")])
     else:
         rows.append([InlineKeyboardButton("➕ Добавить", callback_data=f"add|{section}")])
         rows.append([InlineKeyboardButton("⬅️ Назад", callback_data=f"menu|{section}")])
 
-    return InlineKeyboardMarkup(rows)
-
-
-def calendar_keyboard(items: list[dict[str, Any]], page: int) -> InlineKeyboardMarkup:
-    page_items, current_page, total_pages = paginate_items(items, page)
-    rows: list[list[InlineKeyboardButton]] = []
-    for item in page_items:
-        rows.append([
-            InlineKeyboardButton(
-                f"{format_event_dt(item)} · {item['title']}",
-                callback_data=f"view|afisha|{item['id']}|{current_page}",
-            )
-        ])
-
-    pagination_row = build_pagination_row("calendar", current_page, total_pages)
-    if pagination_row:
-        rows.append(pagination_row)
-
-    rows.append([InlineKeyboardButton("🗓 Открыть Афишу", callback_data="menu|afisha")])
-    rows.append([InlineKeyboardButton("🏠 В меню", callback_data="main")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -763,16 +878,16 @@ def item_keyboard(section: str, item: dict[str, Any], page: int, owner: str | No
         status_callback = f"status|wishlist|{item_id}|{toggle_to}|{owner}|{page}"
         delete_confirm_callback = f"delete_confirm|wishlist|{item_id}|{owner}|{page}"
     elif section == "films" and status_filter:
-        status_callback = f"status|films|{item_id}|{toggle_to}|{status_filter}|{page}"
+        if item["status"] == "want" and toggle_to == "watched":
+            status_callback = f"rate_start|films|{item_id}|{status_filter}|{page}"
+        else:
+            status_callback = f"status|films|{item_id}|{toggle_to}|{status_filter}|{page}"
         delete_confirm_callback = f"delete_confirm|films|{item_id}|{status_filter}|{page}"
     else:
         status_callback = f"status|{section}|{item_id}|{toggle_to}|{page}"
         delete_confirm_callback = f"delete_confirm|{section}|{item_id}|{page}"
 
-    if section == "afisha":
-        back_callback = "calendar|0" if not is_event_actual(item) else build_back_to_list_callback(section, page)
-    else:
-        back_callback = build_back_to_list_callback(section, page, owner, status_filter)
+    back_callback = build_back_to_list_callback(section, page, owner, status_filter)
 
     return InlineKeyboardMarkup(
         [
@@ -828,9 +943,8 @@ async def show_list(update: Update, section: str, page: int = 0, owner: str | No
     elif section == "films" and status_filter in FILM_STATUSES:
         items = [item for item in items if item.get("status") == status_filter]
     elif section == "afisha":
-        items = build_calendar_items(data)
-
-    if section == "afisha":
+        now = datetime.now()
+        items = [item for item in items if is_event_actual(item, now)]
         items = sort_events(items)
 
     _, current_page, total_pages = paginate_items(items, page)
@@ -845,7 +959,7 @@ async def show_list(update: Update, section: str, page: int = 0, owner: str | No
         elif section == "afisha":
             keyboard = InlineKeyboardMarkup([
                 [InlineKeyboardButton("➕ Добавить событие", callback_data="add|afisha")],
-                [InlineKeyboardButton("📅 Календарь", callback_data="calendar|0")],
+                [InlineKeyboardButton("📅 Календарь", callback_data="calendar_menu")],
                 [InlineKeyboardButton("⬅️ Назад", callback_data="menu|afisha")],
             ])
         else:
@@ -860,14 +974,35 @@ async def show_list(update: Update, section: str, page: int = 0, owner: str | No
     return SECTION
 
 
-async def show_calendar(update: Update, page: int = 0) -> int:
+async def show_calendar_menu(update: Update) -> int:
     query = update.callback_query
-    data = storage.load()
-    items = build_calendar_items(data)
-    _, current_page, total_pages = paginate_items(items, page)
-    await safe_edit_message(query, build_calendar_text(items, current_page, total_pages), reply_markup=calendar_keyboard(items, current_page))
+    await safe_edit_message(query, build_calendar_menu_text(), reply_markup=calendar_owner_menu_keyboard())
     return SECTION
 
+
+async def show_calendar_owner(update: Update, owner: str, page: int = 0) -> int:
+    query = update.callback_query
+    data = storage.load()
+    items = get_calendar_items(data, owner)
+    _, current_page, _ = paginate_items(items, page)
+    text = build_calendar_owner_text(owner, items, current_page)
+    await safe_edit_message(query, text, reply_markup=calendar_owner_keyboard(owner, items, current_page))
+    return SECTION
+
+
+async def show_calendar_owner_item(update: Update, owner: str, item_id: str, page: int) -> int:
+    query = update.callback_query
+    data = storage.load()
+    item = find_item(data.get("calendars", {}).get(owner, []), item_id)
+    if not item:
+        await safe_edit_message(
+            query,
+            "Событие не найдено.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ К списку", callback_data=f"cal_list|{owner}|{page}")]]),
+        )
+        return SECTION
+    await safe_edit_message(query, build_calendar_event_text(item), reply_markup=calendar_event_keyboard(owner, item_id, page))
+    return SECTION
 
 async def show_item(update: Update, section: str, item_id: str, page: int, owner: str | None = None, status_filter: str | None = None) -> int:
     query = update.callback_query
@@ -981,9 +1116,9 @@ async def check_afisha_notifications(context: ContextTypes.DEFAULT_TYPE) -> None
             if not chat_id:
                 continue
             name = profile.get("name") or username
-            missed_word = gender_word_missed(profile)
+            forget_word = reminder_forget_word(username)
             text = (
-                f"{name}, привет! Ты же не {missed_word}, что завтра у вас событие: {event['title']}\n"
+                f"{name}, привет! Ты же не {forget_word}, что завтра у вас событие: {event['title']}\n"
                 f"Когда: {format_event_dt(event)}"
             )
             if event.get("place"):
@@ -1070,9 +1205,46 @@ async def section_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         context.user_data["active_section"] = section
         return await show_section_menu(update, section)
 
-    if action == "calendar":
-        page = int(parts[1]) if len(parts) > 1 else 0
-        return await show_calendar(update, page)
+    if action == "calendar_menu":
+        return await show_calendar_menu(update)
+
+    if action == "cal_list":
+        _, owner, page_raw = parts
+        return await show_calendar_owner(update, owner, int(page_raw))
+
+    if action == "cal_view":
+        _, owner, item_id, page_raw = parts
+        return await show_calendar_owner_item(update, owner, item_id, int(page_raw))
+
+    if action == "cal_add":
+        _, owner = parts
+        context.user_data["calendar_owner"] = owner
+        await safe_edit_message(query, f"Календарь {owner_label(owner)}\n\nОтправь название события:")
+        return ADDING_CALENDAR_EVENT_TITLE
+
+    if action == "cal_delete_confirm":
+        _, owner, item_id, page_raw = parts
+        page = int(page_raw)
+        data = storage.load()
+        item = find_item(data.get("calendars", {}).get(owner, []), item_id)
+        if not item:
+            await safe_edit_message(query, "Не удалось найти событие для удаления.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 В меню", callback_data="main")]]))
+            return SECTION
+        await safe_edit_message(query, f"{build_calendar_event_text(item)}\n\nТочно удалить?", reply_markup=calendar_event_delete_confirm_keyboard(owner, item_id, page))
+        return SECTION
+
+    if action == "cal_delete":
+        _, owner, item_id, page_raw = parts
+        requested_page = int(page_raw)
+        data = storage.load()
+        items = data.get("calendars", {}).get(owner, [])
+        item = find_item(items, item_id)
+        if not item:
+            await safe_edit_message(query, "Не удалось удалить: событие не найдено.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 В меню", callback_data="main")]]))
+            return SECTION
+        delete_item_by_id(items, item_id)
+        storage.save(data)
+        return await show_calendar_owner(update, owner, requested_page)
 
     if action == "owners":
         await safe_edit_message(query, "Чей вишлист открыть?", reply_markup=wishlist_owner_keyboard(update))
@@ -1117,6 +1289,29 @@ async def section_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         _, section, item_id, page_raw = parts
         return await show_item(update, section, item_id, int(page_raw))
 
+    if action == "rate_start":
+        _, _, item_id, status_filter, page_raw = parts
+        page = int(page_raw)
+
+        data = storage.load()
+        item = find_item(data.get("films", []), item_id)
+        if not item:
+            await safe_edit_message(
+                query,
+                "Не удалось начать выставление оценок: фильм не найден.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ К списку", callback_data=build_back_to_list_callback("films", page, status_filter=status_filter))]]),
+            )
+            return SECTION
+
+        context.user_data["film_rating_item_id"] = item_id
+        context.user_data["film_rating_page"] = page
+        context.user_data["film_rating_status_filter"] = status_filter
+
+        await query.message.reply_text(
+            f"Фильм: {item['title']}\n\nКакую оценку Саша ставит фильму? Отправь число от 1 до 10."
+        )
+        return ADDING_FILM_SASHA_RATING
+
     if action == "status":
         if parts[1] == "wishlist":
             _, _, item_id, new_status, owner, page_raw = parts
@@ -1145,6 +1340,10 @@ async def section_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             return SECTION
 
         item["status"] = new_status
+        if section == "films" and new_status == "want":
+            item["sasha_rating"] = None
+            item["vova_rating"] = None
+            item["legacy_rating"] = None
         if section == "wishlist":
             item["reserved_by"] = get_user_name(update) if new_status == "gifted" else ""
         if section == "afisha" and new_status != "active":
@@ -1256,28 +1455,16 @@ async def add_film_comment(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     comment = (update.message.text or "").strip()
     if comment == "-":
         comment = ""
-    context.user_data["film_comment"] = comment
-    await update.message.reply_text("Теперь отправь рейтинг фильма от 1 до 10. Если без рейтинга — напиши -")
-    return ADDING_FILM_RATING
-
-
-async def add_film_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if not await ensure_access(update):
-        return ConversationHandler.END
-    await remember_current_chat(update)
-    raw_rating = (update.message.text or "").strip()
-    rating = normalize_rating(raw_rating)
-    if raw_rating != "-" and rating is None:
-        await update.message.reply_text("Нужно отправить число от 1 до 10 или -. Попробуй ещё раз:")
-        return ADDING_FILM_RATING
 
     item = {
         "id": make_id(),
         "title": context.user_data.get("film_title", "Без названия"),
         "status": "want",
         "added_by": get_user_name(update),
-        "comment": context.user_data.get("film_comment", ""),
-        "rating": rating,
+        "comment": comment,
+        "sasha_rating": None,
+        "vova_rating": None,
+        "legacy_rating": None,
     }
     data = storage.load()
     data["films"].append(item)
@@ -1287,7 +1474,64 @@ async def add_film_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     context.user_data.pop("film_comment", None)
     context.user_data["active_section"] = "films"
 
-    await update.message.reply_text(f"Фильм сохранён:\n\n{build_item_text('films', item)}", reply_markup=item_keyboard("films", item, page=0, status_filter="want"))
+    await update.message.reply_text(
+        f"Фильм сохранён:\n\n{build_item_text('films', item)}",
+        reply_markup=item_keyboard("films", item, page=0, status_filter="want"),
+    )
+    return SECTION
+
+
+async def add_film_sasha_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not await ensure_access(update):
+        return ConversationHandler.END
+    await remember_current_chat(update)
+
+    rating = normalize_rating((update.message.text or "").strip())
+    if rating is None:
+        await update.message.reply_text("Нужно отправить число от 1 до 10. Попробуй ещё раз:")
+        return ADDING_FILM_SASHA_RATING
+
+    context.user_data["pending_sasha_rating"] = rating
+    await update.message.reply_text("Какую оценку Вова ставит фильму? Отправь число от 1 до 10.")
+    return ADDING_FILM_VOVA_RATING
+
+
+async def add_film_vova_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not await ensure_access(update):
+        return ConversationHandler.END
+    await remember_current_chat(update)
+
+    rating = normalize_rating((update.message.text or "").strip())
+    if rating is None:
+        await update.message.reply_text("Нужно отправить число от 1 до 10. Попробуй ещё раз:")
+        return ADDING_FILM_VOVA_RATING
+
+    item_id = context.user_data.get("film_rating_item_id")
+    page = int(context.user_data.get("film_rating_page", 0))
+    status_filter = str(context.user_data.get("film_rating_status_filter") or "want")
+    sasha_rating = context.user_data.get("pending_sasha_rating")
+
+    data = storage.load()
+    item = find_item(data.get("films", []), item_id)
+    if not item:
+        await update.message.reply_text("Не удалось сохранить оценки: фильм не найден.", reply_markup=main_menu_keyboard())
+        for key in ["film_rating_item_id", "film_rating_page", "film_rating_status_filter", "pending_sasha_rating"]:
+            context.user_data.pop(key, None)
+        return MENU
+
+    item["sasha_rating"] = sasha_rating
+    item["vova_rating"] = rating
+    item["legacy_rating"] = None
+    item["status"] = "watched"
+    storage.save(data)
+
+    for key in ["film_rating_item_id", "film_rating_page", "film_rating_status_filter", "pending_sasha_rating"]:
+        context.user_data.pop(key, None)
+
+    await update.message.reply_text(
+        f"Фильм перенесён в просмотренные:\n\n{build_item_text('films', item)}",
+        reply_markup=item_keyboard("films", item, page=page, status_filter="watched"),
+    )
     return SECTION
 
 
@@ -1472,6 +1716,125 @@ async def add_event_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await update.message.reply_text(f"Событие сохранено:\n\n{build_item_text('afisha', item)}", reply_markup=item_keyboard("afisha", item, page=0))
     return SECTION
 
+async def add_calendar_event_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not await ensure_access(update):
+        return ConversationHandler.END
+    await remember_current_chat(update)
+    title = (update.message.text or "").strip()
+    if not title:
+        await update.message.reply_text("Название события не должно быть пустым. Попробуй ещё раз:")
+        return ADDING_CALENDAR_EVENT_TITLE
+    context.user_data["calendar_event_title"] = title
+    await update.message.reply_text("Теперь отправь дату в формате ГГГГ-ММ-ДД, например 2026-04-05")
+    return ADDING_CALENDAR_EVENT_DATE
+
+
+async def add_calendar_event_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not await ensure_access(update):
+        return ConversationHandler.END
+    await remember_current_chat(update)
+    date_raw = (update.message.text or "").strip()
+    try:
+        datetime.strptime(date_raw, "%Y-%m-%d")
+    except ValueError:
+        await update.message.reply_text("Дата должна быть в формате ГГГГ-ММ-ДД. Попробуй ещё раз:")
+        return ADDING_CALENDAR_EVENT_DATE
+    context.user_data["calendar_event_date"] = date_raw
+    await update.message.reply_text("Теперь отправь время начала в формате ЧЧ:ММ, например 19:30")
+    return ADDING_CALENDAR_EVENT_START_TIME
+
+
+async def add_calendar_event_start_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not await ensure_access(update):
+        return ConversationHandler.END
+    await remember_current_chat(update)
+    start_time = (update.message.text or "").strip()
+    try:
+        datetime.strptime(start_time, "%H:%M")
+    except ValueError:
+        await update.message.reply_text("Время начала должно быть в формате ЧЧ:ММ. Попробуй ещё раз:")
+        return ADDING_CALENDAR_EVENT_START_TIME
+    context.user_data["calendar_event_start_time"] = start_time
+    await update.message.reply_text("Теперь отправь время окончания в формате ЧЧ:ММ. Если оно не нужно, напиши -")
+    return ADDING_CALENDAR_EVENT_END_TIME
+
+
+async def add_calendar_event_end_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not await ensure_access(update):
+        return ConversationHandler.END
+    await remember_current_chat(update)
+    end_time = (update.message.text or "").strip()
+    if end_time == "-":
+        end_time = ""
+    if end_time:
+        try:
+            start_dt = datetime.strptime(
+                f"{context.user_data.get('calendar_event_date', '')} {context.user_data.get('calendar_event_start_time', '')}",
+                "%Y-%m-%d %H:%M",
+            )
+            end_dt = datetime.strptime(
+                f"{context.user_data.get('calendar_event_date', '')} {end_time}",
+                "%Y-%m-%d %H:%M",
+            )
+        except ValueError:
+            await update.message.reply_text("Время окончания должно быть в формате ЧЧ:ММ. Попробуй ещё раз:")
+            return ADDING_CALENDAR_EVENT_END_TIME
+        if end_dt <= start_dt:
+            await update.message.reply_text("Время окончания должно быть позже времени начала. Попробуй ещё раз:")
+            return ADDING_CALENDAR_EVENT_END_TIME
+    context.user_data["calendar_event_end_time"] = end_time
+    await update.message.reply_text("Теперь отправь комментарий. Если не нужен, напиши -")
+    return ADDING_CALENDAR_EVENT_COMMENT
+
+
+async def add_calendar_event_comment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not await ensure_access(update):
+        return ConversationHandler.END
+    await remember_current_chat(update)
+    comment = (update.message.text or "").strip()
+    if comment == "-":
+        comment = ""
+
+    owner = str(context.user_data.get("calendar_owner") or "")
+    if owner not in {"vova", "sasha"}:
+        await update.message.reply_text("Не удалось понять, в какой календарь сохранять событие.", reply_markup=main_menu_keyboard())
+        return MENU
+
+    item = {
+        "id": make_id(),
+        "owner": owner,
+        "title": context.user_data.get("calendar_event_title", "Без названия"),
+        "date": context.user_data.get("calendar_event_date", ""),
+        "start_time": context.user_data.get("calendar_event_start_time", ""),
+        "end_time": context.user_data.get("calendar_event_end_time", ""),
+        "comment": comment,
+    }
+    normalized_item = normalize_calendar_event(item, owner)
+    if normalized_item is None:
+        await update.message.reply_text("Не удалось сохранить событие: проверь дату и время.")
+        return SECTION
+
+    data = storage.load()
+    data.setdefault("calendars", {}).setdefault(owner, []).append(normalized_item)
+    data["calendars"][owner] = sort_calendar_events(data["calendars"][owner])
+    storage.save(data)
+
+    for key in [
+        "calendar_owner",
+        "calendar_event_title",
+        "calendar_event_date",
+        "calendar_event_start_time",
+        "calendar_event_end_time",
+    ]:
+        context.user_data.pop(key, None)
+
+    await update.message.reply_text(
+        f"Событие сохранено:\n\n{build_calendar_event_text(normalized_item)}",
+        reply_markup=calendar_event_keyboard(owner, normalized_item["id"], page=0),
+    )
+    return SECTION
+
+
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not await ensure_access(update):
@@ -1512,6 +1875,11 @@ def build_app() -> Application:
             ADDING_FILM_COMMENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_film_comment)],
             ADDING_FILM_SASHA_RATING: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_film_sasha_rating)],
             ADDING_FILM_VOVA_RATING: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_film_vova_rating)],
+            ADDING_CALENDAR_EVENT_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_calendar_event_title)],
+            ADDING_CALENDAR_EVENT_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_calendar_event_date)],
+            ADDING_CALENDAR_EVENT_START_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_calendar_event_start_time)],
+            ADDING_CALENDAR_EVENT_END_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_calendar_event_end_time)],
+            ADDING_CALENDAR_EVENT_COMMENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_calendar_event_comment)],
             ADDING_WISHLIST_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_wishlist_title)],
             ADDING_WISHLIST_LINK: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_wishlist_link)],
             ADDING_WISHLIST_COMMENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_wishlist_comment)],
