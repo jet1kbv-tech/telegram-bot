@@ -56,18 +56,23 @@ MENU, SECTION = range(2)
     ADDING_EVENT_PLACE,
     ADDING_EVENT_DATE,
     ADDING_EVENT_TIME,
+    ADDING_EVENT_END_DATE,
+    ADDING_EVENT_END_TIME,
     ADDING_EVENT_LINK,
     ADDING_CALENDAR_EVENT_TITLE,
     ADDING_CALENDAR_EVENT_DATE,
     ADDING_CALENDAR_EVENT_START_TIME,
     ADDING_CALENDAR_EVENT_END_TIME,
     ADDING_CALENDAR_EVENT_COMMENT,
-) = range(10, 29)
+    ADDING_BACKLOG_TITLE,
+    ADDING_BACKLOG_DESCRIPTION,
+) = range(10, 33)
 
 FILM_STATUSES = ["want", "watched"]
 WISHLIST_STATUSES = ["active", "gifted"]
 LEISURE_STATUSES = ["want", "done"]
 AFISHA_STATUSES = ["active", "done"]
+BACKLOG_STATUSES = ["todo", "done"]
 
 SECTION_CONFIG: dict[str, dict[str, Any]] = {
     "films": {
@@ -106,6 +111,15 @@ SECTION_CONFIG: dict[str, dict[str, Any]] = {
             "done": "Выполнено",
         },
     },
+    "backlog": {
+        "title": "🧩 Бэклог",
+        "empty_text": "Пока фич нет.",
+        "statuses": BACKLOG_STATUSES,
+        "status_labels": {
+            "todo": "К реализации",
+            "done": "Реализовано",
+        },
+    },
 }
 
 WISHLIST_OWNER_LABELS = {
@@ -126,6 +140,7 @@ class JsonStorage:
             "wishlist": [],
             "leisure": [],
             "afisha": [],
+            "backlog": [],
             "calendars": {
                 "vova": [],
                 "sasha": [],
@@ -195,6 +210,11 @@ class JsonStorage:
             if item:
                 data["afisha"].append(item)
 
+        for raw_item in raw_data.get("backlog", []):
+            item = normalize_backlog_item(raw_item)
+            if item:
+                data["backlog"].append(item)
+
         raw_calendars = raw_data.get("calendars") if isinstance(raw_data.get("calendars"), dict) else {}
         for owner in ("vova", "sasha"):
             for raw_item in raw_calendars.get(owner, []):
@@ -261,19 +281,39 @@ def parse_event_dt(item: dict[str, Any]) -> datetime | None:
         return None
 
 
+def parse_event_end_dt(item: dict[str, Any]) -> datetime | None:
+    end_date_raw = item.get("end_date") or item.get("date")
+    end_time_raw = item.get("end_time") or item.get("time")
+    if not end_date_raw or not end_time_raw:
+        return None
+    try:
+        return datetime.strptime(f"{end_date_raw} {end_time_raw}", "%Y-%m-%d %H:%M")
+    except ValueError:
+        return None
+
+
+def event_effective_end_dt(item: dict[str, Any]) -> datetime | None:
+    return parse_event_end_dt(item) or parse_event_dt(item)
+
+
 def format_event_dt(item: dict[str, Any]) -> str:
-    dt = parse_event_dt(item)
-    if not dt:
+    start_dt = parse_event_dt(item)
+    if not start_dt:
         return "Дата не указана"
-    return dt.strftime("%d.%m.%Y %H:%M")
+    end_dt = parse_event_end_dt(item)
+    if end_dt and end_dt > start_dt:
+        if start_dt.date() == end_dt.date():
+            return f"{start_dt.strftime('%d.%m.%Y %H:%M')} – {end_dt.strftime('%H:%M')}"
+        return f"{start_dt.strftime('%d.%m.%Y %H:%M')} – {end_dt.strftime('%d.%m.%Y %H:%M')}"
+    return start_dt.strftime("%d.%m.%Y %H:%M")
 
 
 def is_event_actual(item: dict[str, Any], now: datetime | None = None) -> bool:
     now = now or datetime.now()
-    event_dt = parse_event_dt(item)
-    if not event_dt:
+    event_end_dt = event_effective_end_dt(item)
+    if not event_end_dt:
         return False
-    return item.get("status") == "active" and event_dt >= now
+    return item.get("status") == "active" and event_end_dt >= now
 
 
 def sort_events(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -289,6 +329,28 @@ def parse_calendar_event_start_dt(item: dict[str, Any]) -> datetime | None:
         return datetime.strptime(f"{date_raw} {start_time_raw}", "%Y-%m-%d %H:%M")
     except ValueError:
         return None
+
+
+def parse_calendar_event_end_dt(item: dict[str, Any]) -> datetime | None:
+    date_raw = item.get("date")
+    start_dt = parse_calendar_event_start_dt(item)
+    end_time_raw = item.get("end_time") or ""
+    if end_time_raw and date_raw:
+        try:
+            end_dt = datetime.strptime(f"{date_raw} {end_time_raw}", "%Y-%m-%d %H:%M")
+            if start_dt and end_dt > start_dt:
+                return end_dt
+        except ValueError:
+            return None
+    return start_dt
+
+
+def is_calendar_event_actual(item: dict[str, Any], now: datetime | None = None) -> bool:
+    now = now or datetime.now()
+    end_dt = parse_calendar_event_end_dt(item)
+    if not end_dt:
+        return False
+    return end_dt >= now
 
 
 def sort_calendar_events(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -312,9 +374,13 @@ def calendar_preview_text(item: dict[str, Any]) -> str:
     return f"{start_dt.strftime('%d.%m.%Y %H:%M')} · {item['title']}"
 
 
-def get_calendar_items(data: dict[str, Any], owner: str) -> list[dict[str, Any]]:
+def get_calendar_items(data: dict[str, Any], owner: str, include_past: bool = False) -> list[dict[str, Any]]:
     raw = data.get("calendars", {}).get(owner, [])
-    return sort_calendar_events(list(raw))
+    items = list(raw)
+    if not include_past:
+        now = datetime.now()
+        items = [item for item in items if is_calendar_event_actual(item, now)]
+    return sort_calendar_events(items)
 
 def normalize_film(item: Any) -> dict[str, Any] | None:
     if isinstance(item, str):
@@ -413,13 +479,46 @@ def normalize_event(item: Any) -> dict[str, Any] | None:
             "place": str(item.get("place") or ""),
             "date": str(item.get("date") or ""),
             "time": str(item.get("time") or ""),
+            "end_date": str(item.get("end_date") or ""),
+            "end_time": str(item.get("end_time") or ""),
             "link": str(item.get("link") or ""),
             "status": status,
             "notified_24h": bool(item.get("notified_24h", False)),
         }
         if parse_event_dt(normalized) is None:
             return None
+        start_dt = parse_event_dt(normalized)
+        end_dt = parse_event_end_dt(normalized)
+        if normalized["end_date"] or normalized["end_time"]:
+            if not normalized["end_date"]:
+                normalized["end_date"] = normalized["date"]
+            if not normalized["end_time"]:
+                normalized["end_time"] = normalized["time"]
+            end_dt = parse_event_end_dt(normalized)
+            if not end_dt or (start_dt and end_dt < start_dt):
+                return None
         return normalized
+    return None
+
+
+def normalize_backlog_item(item: Any) -> dict[str, Any] | None:
+    if isinstance(item, str):
+        return {
+            "id": make_id(),
+            "title": item,
+            "description": "",
+            "status": "todo",
+        }
+    if isinstance(item, dict):
+        status = item.get("status", "todo")
+        if status not in BACKLOG_STATUSES:
+            status = "todo"
+        return {
+            "id": str(item.get("id") or make_id()),
+            "title": str(item.get("title") or "Без названия"),
+            "description": str(item.get("description") or ""),
+            "status": status,
+        }
     return None
 
 
@@ -437,6 +536,7 @@ def normalize_calendar_event(item: Any, owner: str | None = None) -> dict[str, A
         "start_time": str(item.get("start_time") or item.get("time") or ""),
         "end_time": str(item.get("end_time") or ""),
         "comment": str(item.get("comment") or ""),
+        "notified_24h": bool(item.get("notified_24h", False)),
     }
     if parse_calendar_event_start_dt(normalized) is None:
         return None
@@ -574,6 +674,12 @@ def section_menu_keyboard(section: str) -> InlineKeyboardMarkup:
             [InlineKeyboardButton("➕ Добавить событие", callback_data="add|afisha")],
             [InlineKeyboardButton("📋 Актуальные события", callback_data="list|afisha|0")],
         ]
+    elif section == "backlog":
+        rows = [
+            [InlineKeyboardButton("➕ Добавить фичу", callback_data="add|backlog")],
+            [InlineKeyboardButton("🧩 В планах", callback_data="list|backlog|todo|0")],
+            [InlineKeyboardButton("✅ Реализовано", callback_data="list|backlog|done|0")],
+        ]
     else:
         rows = [
             [InlineKeyboardButton("➕ Добавить", callback_data=f"add|{section}")],
@@ -592,6 +698,7 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton("✨ Досуг", callback_data="menu|leisure")],
             [InlineKeyboardButton("🗓 Афиша", callback_data="menu|afisha")],
             [InlineKeyboardButton("📅 Календарь", callback_data="calendar_menu")],
+            [InlineKeyboardButton("🧩 Бэклог", callback_data="menu|backlog")],
         ]
     )
 
@@ -628,16 +735,16 @@ def paginate_items(items: list[dict[str, Any]], page: int) -> tuple[list[dict[st
 def build_list_callback(section: str, page: int, owner: str | None = None, status_filter: str | None = None) -> str:
     if section == "wishlist" and owner:
         return f"list|wishlist|{owner}|{page}"
-    if section == "films" and status_filter:
-        return f"list|films|{status_filter}|{page}"
+    if section in {"films", "backlog"} and status_filter:
+        return f"list|{section}|{status_filter}|{page}"
     return f"list|{section}|{page}"
 
 
 def build_view_callback(section: str, item_id: str, page: int, owner: str | None = None, status_filter: str | None = None) -> str:
     if section == "wishlist" and owner:
         return f"view|wishlist|{item_id}|{owner}|{page}"
-    if section == "films" and status_filter:
-        return f"view|films|{item_id}|{status_filter}|{page}"
+    if section in {"films", "backlog"} and status_filter:
+        return f"view|{section}|{item_id}|{status_filter}|{page}"
     return f"view|{section}|{item_id}|{page}"
 
 
@@ -709,6 +816,15 @@ def build_item_text(section: str, item: dict[str, Any]) -> str:
             lines.append(f"Ссылка: {item['link']}")
         return "\n".join(lines)
 
+    if section == "backlog":
+        lines = [
+            f"🧩 {item['title']}",
+            f"Статус: {item_status_label(section, item['status'])}",
+        ]
+        if item.get("description"):
+            lines.append(f"Описание: {item['description']}")
+        return "\n".join(lines)
+
     return "Элемент"
 
 
@@ -718,6 +834,8 @@ def build_list_text(section: str, items: list[dict[str, Any]], page: int, total_
         title = f"🎁 Wishlist · {owner_label(owner)}"
     elif section == "films" and status_filter:
         title = f"🎬 Фильмы · {item_status_label(section, status_filter)}"
+    elif section == "backlog" and status_filter:
+        title = f"🧩 Бэклог · {item_status_label(section, status_filter)}"
 
     total_items = len(items)
     if total_items == 0:
@@ -750,7 +868,7 @@ def build_calendar_owner_text(owner: str, items: list[dict[str, Any]], page: int
     title = f"📅 Календарь {owner_label(owner)}"
     total_items = len(items)
     if total_items == 0:
-        return f"{title}\n\nПока событий нет."
+        return f"{title}\n\nПока актуальных событий нет."
     start_num = page * PAGE_SIZE + 1
     end_num = min(total_items, start_num + PAGE_SIZE - 1)
     return (
@@ -847,6 +965,9 @@ def list_keyboard(section: str, items: list[dict[str, Any]], page: int, owner: s
     elif section == "afisha":
         rows.append([InlineKeyboardButton("➕ Добавить событие", callback_data="add|afisha")])
         rows.append([InlineKeyboardButton("⬅️ Назад", callback_data="menu|afisha")])
+    elif section == "backlog":
+        rows.append([InlineKeyboardButton("➕ Добавить фичу", callback_data="add|backlog")])
+        rows.append([InlineKeyboardButton("⬅️ Назад к разделам бэклога", callback_data="menu|backlog")])
     else:
         rows.append([InlineKeyboardButton("➕ Добавить", callback_data=f"add|{section}")])
         rows.append([InlineKeyboardButton("⬅️ Назад", callback_data=f"menu|{section}")])
@@ -870,6 +991,9 @@ def item_keyboard(section: str, item: dict[str, Any], page: int, owner: str | No
     elif section == "afisha":
         toggle_to = "done" if item["status"] == "active" else "active"
         toggle_text = "✅ Отметить как выполнено" if toggle_to == "done" else "↩️ Вернуть в не выполнено"
+    elif section == "backlog":
+        toggle_to = "done" if item["status"] == "todo" else "todo"
+        toggle_text = "✅ Отметить как реализовано" if toggle_to == "done" else "↩️ Вернуть в бэклог"
     else:
         toggle_to = "done" if item["status"] == "want" else "want"
         toggle_text = "✅ Отметить как сделано" if toggle_to == "done" else "↩️ Вернуть в планы"
@@ -883,6 +1007,9 @@ def item_keyboard(section: str, item: dict[str, Any], page: int, owner: str | No
         else:
             status_callback = f"status|films|{item_id}|{toggle_to}|{status_filter}|{page}"
         delete_confirm_callback = f"delete_confirm|films|{item_id}|{status_filter}|{page}"
+    elif section == "backlog" and status_filter:
+        status_callback = f"status|backlog|{item_id}|{toggle_to}|{status_filter}|{page}"
+        delete_confirm_callback = f"delete_confirm|backlog|{item_id}|{status_filter}|{page}"
     else:
         status_callback = f"status|{section}|{item_id}|{toggle_to}|{page}"
         delete_confirm_callback = f"delete_confirm|{section}|{item_id}|{page}"
@@ -903,9 +1030,9 @@ def delete_confirm_keyboard(section: str, item_id: str, page: int, owner: str | 
     if section == "wishlist" and owner:
         delete_callback = f"delete|wishlist|{item_id}|{owner}|{page}"
         back_callback = f"view|wishlist|{item_id}|{owner}|{page}"
-    elif section == "films" and status_filter:
-        delete_callback = f"delete|films|{item_id}|{status_filter}|{page}"
-        back_callback = f"view|films|{item_id}|{status_filter}|{page}"
+    elif section in {"films", "backlog"} and status_filter:
+        delete_callback = f"delete|{section}|{item_id}|{status_filter}|{page}"
+        back_callback = f"view|{section}|{item_id}|{status_filter}|{page}"
     else:
         delete_callback = f"delete|{section}|{item_id}|{page}"
         back_callback = f"view|{section}|{item_id}|{page}"
@@ -942,6 +1069,8 @@ async def show_list(update: Update, section: str, page: int = 0, owner: str | No
         items = [item for item in items if item.get("owner") == owner]
     elif section == "films" and status_filter in FILM_STATUSES:
         items = [item for item in items if item.get("status") == status_filter]
+    elif section == "backlog" and status_filter in BACKLOG_STATUSES:
+        items = [item for item in items if item.get("status") == status_filter]
     elif section == "afisha":
         now = datetime.now()
         items = [item for item in items if is_event_actual(item, now)]
@@ -961,6 +1090,11 @@ async def show_list(update: Update, section: str, page: int = 0, owner: str | No
                 [InlineKeyboardButton("➕ Добавить событие", callback_data="add|afisha")],
                 [InlineKeyboardButton("📅 Календарь", callback_data="calendar_menu")],
                 [InlineKeyboardButton("⬅️ Назад", callback_data="menu|afisha")],
+            ])
+        elif section == "backlog":
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("➕ Добавить фичу", callback_data="add|backlog")],
+                [InlineKeyboardButton("⬅️ Назад", callback_data="menu|backlog")],
             ])
         else:
             keyboard = InlineKeyboardMarkup([
@@ -1133,6 +1267,47 @@ async def check_afisha_notifications(context: ContextTypes.DEFAULT_TYPE) -> None
         event["notified_24h"] = True
         changed = True
 
+    for owner in ("vova", "sasha"):
+        for event in data.get("calendars", {}).get(owner, []):
+            event_dt = parse_calendar_event_start_dt(event)
+            if not event_dt:
+                continue
+            if event_dt <= now:
+                continue
+
+            minutes_left = (event_dt - now).total_seconds() / 60
+            if not (NOTIFY_LOOKAHEAD_MIN <= minutes_left <= NOTIFY_LOOKAHEAD_MAX):
+                if minutes_left > NOTIFY_LOOKAHEAD_MAX and event.get("notified_24h"):
+                    event["notified_24h"] = False
+                    changed = True
+                continue
+
+            if event.get("notified_24h"):
+                continue
+
+            username = next((u for u, p in ALLOWED_USERS.items() if p.get("wishlist_owner") == owner), None)
+            if not username:
+                continue
+            chat_id = user_chats.get(username)
+            if not chat_id:
+                continue
+            profile = ALLOWED_USERS.get(username, {})
+            name = profile.get("name") or owner_label(owner)
+            forget_word = reminder_forget_word(username)
+            text = (
+                f"{name}, привет! Ты же не {forget_word}, что завтра у тебя событие в календаре: {event['title']}\n"
+                f"Когда: {format_calendar_event_range(event)}"
+            )
+            if event.get("comment"):
+                text += f"\nКомментарий: {event['comment']}"
+            try:
+                await context.bot.send_message(chat_id=chat_id, text=text)
+            except TelegramError:
+                logger.exception("Не удалось отправить календарное напоминание для %s", username)
+
+            event["notified_24h"] = True
+            changed = True
+
     if changed:
         storage.save(data)
 
@@ -1268,14 +1443,17 @@ async def section_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if section == "afisha":
             await safe_edit_message(query, "Отправь название события:")
             return ADDING_EVENT_TITLE
+        if section == "backlog":
+            await safe_edit_message(query, "Отправь название фичи для бэклога:")
+            return ADDING_BACKLOG_TITLE
 
     if action == "list":
         if parts[1] == "wishlist":
             _, _, owner, page_raw = parts
             return await show_list(update, "wishlist", int(page_raw), owner=owner)
-        if parts[1] == "films" and len(parts) == 4:
-            _, _, status_filter, page_raw = parts
-            return await show_list(update, "films", int(page_raw), status_filter=status_filter)
+        if parts[1] in {"films", "backlog"} and len(parts) == 4:
+            _, section, status_filter, page_raw = parts
+            return await show_list(update, section, int(page_raw), status_filter=status_filter)
         _, section, page_raw = parts
         return await show_list(update, section, int(page_raw))
 
@@ -1283,9 +1461,9 @@ async def section_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if parts[1] == "wishlist":
             _, _, item_id, owner, page_raw = parts
             return await show_item(update, "wishlist", item_id, int(page_raw), owner=owner)
-        if parts[1] == "films" and len(parts) == 5:
-            _, _, item_id, status_filter, page_raw = parts
-            return await show_item(update, "films", item_id, int(page_raw), status_filter=status_filter)
+        if parts[1] in {"films", "backlog"} and len(parts) == 5:
+            _, section, item_id, status_filter, page_raw = parts
+            return await show_item(update, section, item_id, int(page_raw), status_filter=status_filter)
         _, section, item_id, page_raw = parts
         return await show_item(update, section, item_id, int(page_raw))
 
@@ -1318,10 +1496,9 @@ async def section_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             page = int(page_raw)
             section = "wishlist"
             status_filter = None
-        elif parts[1] == "films" and len(parts) == 6:
-            _, _, item_id, new_status, status_filter, page_raw = parts
+        elif parts[1] in {"films", "backlog"} and len(parts) == 6:
+            _, section, item_id, new_status, status_filter, page_raw = parts
             page = int(page_raw)
-            section = "films"
             owner = None
         else:
             _, section, item_id, new_status, page_raw = parts
@@ -1358,10 +1535,9 @@ async def section_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             page = int(page_raw)
             section = "wishlist"
             status_filter = None
-        elif parts[1] == "films" and len(parts) == 5:
-            _, _, item_id, status_filter, page_raw = parts
+        elif parts[1] in {"films", "backlog"} and len(parts) == 5:
+            _, section, item_id, status_filter, page_raw = parts
             page = int(page_raw)
-            section = "films"
             owner = None
         else:
             _, section, item_id, page_raw = parts
@@ -1384,10 +1560,9 @@ async def section_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             requested_page = int(page_raw)
             section = "wishlist"
             status_filter = None
-        elif parts[1] == "films" and len(parts) == 5:
-            _, _, item_id, status_filter, page_raw = parts
+        elif parts[1] in {"films", "backlog"} and len(parts) == 5:
+            _, section, item_id, status_filter, page_raw = parts
             requested_page = int(page_raw)
-            section = "films"
             owner = None
         else:
             _, section, item_id, page_raw = parts
@@ -1419,6 +1594,8 @@ async def section_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
         if section == "afisha":
             return await show_list(update, "afisha", requested_page)
+        if section in {"films", "backlog"} and status_filter:
+            return await show_list(update, section, requested_page, status_filter=status_filter)
 
         section_items = data[section]
         current_page = clamp_page(requested_page, len(section_items))
@@ -1663,7 +1840,7 @@ async def add_event_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text("Дата должна быть в формате ГГГГ-ММ-ДД. Попробуй ещё раз:")
         return ADDING_EVENT_DATE
     context.user_data["event_date"] = date_raw
-    await update.message.reply_text("Теперь отправь время в формате ЧЧ:ММ, например 19:30")
+    await update.message.reply_text("Теперь отправь время начала в формате ЧЧ:ММ, например 19:30")
     return ADDING_EVENT_TIME
 
 
@@ -1675,9 +1852,63 @@ async def add_event_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     try:
         datetime.strptime(time_raw, "%H:%M")
     except ValueError:
-        await update.message.reply_text("Время должно быть в формате ЧЧ:ММ. Попробуй ещё раз:")
+        await update.message.reply_text("Время начала должно быть в формате ЧЧ:ММ. Попробуй ещё раз:")
         return ADDING_EVENT_TIME
     context.user_data["event_time"] = time_raw
+    await update.message.reply_text("Теперь отправь дату окончания в формате ГГГГ-ММ-ДД. Если не нужно, напиши -")
+    return ADDING_EVENT_END_DATE
+
+
+async def add_event_end_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not await ensure_access(update):
+        return ConversationHandler.END
+    await remember_current_chat(update)
+    end_date_raw = (update.message.text or "").strip()
+    if end_date_raw == "-":
+        end_date_raw = ""
+    if end_date_raw:
+        try:
+            datetime.strptime(end_date_raw, "%Y-%m-%d")
+        except ValueError:
+            await update.message.reply_text("Дата окончания должна быть в формате ГГГГ-ММ-ДД или -. Попробуй ещё раз:")
+            return ADDING_EVENT_END_DATE
+        start_date = context.user_data.get("event_date", "")
+        if end_date_raw < start_date:
+            await update.message.reply_text("Дата окончания не может быть раньше даты начала. Попробуй ещё раз:")
+            return ADDING_EVENT_END_DATE
+    context.user_data["event_end_date"] = end_date_raw
+    await update.message.reply_text("Теперь отправь время окончания в формате ЧЧ:ММ. Если не нужно, напиши -")
+    return ADDING_EVENT_END_TIME
+
+
+async def add_event_end_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not await ensure_access(update):
+        return ConversationHandler.END
+    await remember_current_chat(update)
+    end_time_raw = (update.message.text or "").strip()
+    if end_time_raw == "-":
+        end_time_raw = ""
+    if end_time_raw:
+        try:
+            datetime.strptime(end_time_raw, "%H:%M")
+        except ValueError:
+            await update.message.reply_text("Время окончания должно быть в формате ЧЧ:ММ или -. Попробуй ещё раз:")
+            return ADDING_EVENT_END_TIME
+
+        start_date = context.user_data.get("event_date", "")
+        start_time = context.user_data.get("event_time", "")
+        end_date = context.user_data.get("event_end_date") or start_date
+        try:
+            start_dt = datetime.strptime(f"{start_date} {start_time}", "%Y-%m-%d %H:%M")
+            end_dt = datetime.strptime(f"{end_date} {end_time_raw}", "%Y-%m-%d %H:%M")
+        except ValueError:
+            await update.message.reply_text("Не удалось распознать дату или время окончания. Попробуй ещё раз:")
+            return ADDING_EVENT_END_TIME
+        if end_dt < start_dt:
+            await update.message.reply_text("Окончание не может быть раньше начала. Попробуй ещё раз:")
+            return ADDING_EVENT_END_TIME
+
+    context.user_data["event_end_time"] = end_time_raw
     await update.message.reply_text("Теперь отправь ссылку. Если ссылки нет, напиши -")
     return ADDING_EVENT_LINK
 
@@ -1696,25 +1927,29 @@ async def add_event_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         "place": context.user_data.get("event_place", ""),
         "date": context.user_data.get("event_date", ""),
         "time": context.user_data.get("event_time", ""),
+        "end_date": context.user_data.get("event_end_date", ""),
+        "end_time": context.user_data.get("event_end_time", ""),
         "link": link,
         "status": "active",
         "notified_24h": False,
     }
-    if parse_event_dt(item) is None:
-        await update.message.reply_text("Не удалось сохранить событие: дата или время некорректны.")
+    normalized_item = normalize_event(item)
+    if normalized_item is None:
+        await update.message.reply_text("Не удалось сохранить событие: проверь дату и время.")
         return SECTION
 
     data = storage.load()
-    data["afisha"].append(item)
+    data["afisha"].append(normalized_item)
     data["afisha"] = sort_events(data["afisha"])
     storage.save(data)
 
-    for key in ["event_title", "event_place", "event_date", "event_time"]:
+    for key in ["event_title", "event_place", "event_date", "event_time", "event_end_date", "event_end_time"]:
         context.user_data.pop(key, None)
     context.user_data["active_section"] = "afisha"
 
-    await update.message.reply_text(f"Событие сохранено:\n\n{build_item_text('afisha', item)}", reply_markup=item_keyboard("afisha", item, page=0))
+    await update.message.reply_text(f"Событие сохранено:\n\n{build_item_text('afisha', normalized_item)}", reply_markup=item_keyboard("afisha", normalized_item, page=0))
     return SECTION
+
 
 async def add_calendar_event_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not await ensure_access(update):
@@ -1808,6 +2043,7 @@ async def add_calendar_event_comment(update: Update, context: ContextTypes.DEFAU
         "start_time": context.user_data.get("calendar_event_start_time", ""),
         "end_time": context.user_data.get("calendar_event_end_time", ""),
         "comment": comment,
+        "notified_24h": False,
     }
     normalized_item = normalize_calendar_event(item, owner)
     if normalized_item is None:
@@ -1836,6 +2072,51 @@ async def add_calendar_event_comment(update: Update, context: ContextTypes.DEFAU
 
 
 
+async def add_backlog_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not await ensure_access(update):
+        return ConversationHandler.END
+    await remember_current_chat(update)
+    title = (update.message.text or "").strip()
+    if not title:
+        await update.message.reply_text("Название фичи не должно быть пустым. Попробуй ещё раз:")
+        return ADDING_BACKLOG_TITLE
+    context.user_data["backlog_title"] = title
+    await update.message.reply_text("Теперь отправь описание. Если не нужно, напиши -")
+    return ADDING_BACKLOG_DESCRIPTION
+
+
+async def add_backlog_description(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not await ensure_access(update):
+        return ConversationHandler.END
+    await remember_current_chat(update)
+    description = (update.message.text or "").strip()
+    if description == "-":
+        description = ""
+
+    item = {
+        "id": make_id(),
+        "title": context.user_data.get("backlog_title", "Без названия"),
+        "description": description,
+        "status": "todo",
+    }
+    normalized_item = normalize_backlog_item(item)
+    if normalized_item is None:
+        await update.message.reply_text("Не удалось сохранить фичу.")
+        return SECTION
+
+    data = storage.load()
+    data["backlog"].append(normalized_item)
+    storage.save(data)
+
+    context.user_data.pop("backlog_title", None)
+    context.user_data["active_section"] = "backlog"
+    await update.message.reply_text(
+        f"Фича добавлена в бэклог:\n\n{build_item_text('backlog', normalized_item)}",
+        reply_markup=item_keyboard("backlog", normalized_item, page=0, status_filter="todo"),
+    )
+    return SECTION
+
+
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not await ensure_access(update):
         return ConversationHandler.END
@@ -1862,13 +2143,13 @@ def build_app() -> Application:
         states={
             MENU: [
                 CallbackQueryHandler(back_to_main, pattern=r"^main$"),
-                CallbackQueryHandler(menu_router, pattern=r"^menu\|(films|wishlist|leisure|afisha)$"),
+                CallbackQueryHandler(menu_router, pattern=r"^menu\|(films|wishlist|leisure|afisha|backlog)$"),
                 CallbackQueryHandler(section_router),
             ],
             SECTION: [
                 CallbackQueryHandler(noop, pattern=r"^noop$"),
                 CallbackQueryHandler(back_to_main, pattern=r"^main$"),
-                CallbackQueryHandler(menu_router, pattern=r"^menu\|(films|wishlist|leisure|afisha)$"),
+                CallbackQueryHandler(menu_router, pattern=r"^menu\|(films|wishlist|leisure|afisha|backlog)$"),
                 CallbackQueryHandler(section_router),
             ],
             ADDING_FILM_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_film_title)],
@@ -1880,6 +2161,8 @@ def build_app() -> Application:
             ADDING_CALENDAR_EVENT_START_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_calendar_event_start_time)],
             ADDING_CALENDAR_EVENT_END_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_calendar_event_end_time)],
             ADDING_CALENDAR_EVENT_COMMENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_calendar_event_comment)],
+            ADDING_BACKLOG_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_backlog_title)],
+            ADDING_BACKLOG_DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_backlog_description)],
             ADDING_WISHLIST_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_wishlist_title)],
             ADDING_WISHLIST_LINK: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_wishlist_link)],
             ADDING_WISHLIST_COMMENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_wishlist_comment)],
@@ -1889,6 +2172,8 @@ def build_app() -> Application:
             ADDING_EVENT_PLACE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_place)],
             ADDING_EVENT_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_date)],
             ADDING_EVENT_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_time)],
+            ADDING_EVENT_END_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_end_date)],
+            ADDING_EVENT_END_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_end_time)],
             ADDING_EVENT_LINK: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_link)],
         },
         fallbacks=[CommandHandler("cancel", cancel), CommandHandler("start", start)],
