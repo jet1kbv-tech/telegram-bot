@@ -5,280 +5,510 @@
       "title": "Поймай меня если сможешь",
       "status": "want",
       "added_by": "VB",
-      "comment": ""
+      "comment": "",
+      "sasha_rating": null,
+      "vova_rating": null,
+      "legacy_rating": null
     },
     {
       "id": "29b316da",
       "title": "Большое смелое красивое путешествие",
       "status": "watched",
       "added_by": "Саша",
-      "comment": ""
+      "comment": "",
+      "sasha_rating": 7,
+      "vova_rating": 8,
+      "legacy_rating": null
     },
     {
       "id": "9b401119",
       "title": "Сочувствие господину  месть",
       "status": "want",
       "added_by": "Саша",
-      "comment": ""
+      "comment": "",
+      "sasha_rating": null,
+      "vova_rating": null,
+      "legacy_rating": null
     },
     {
       "id": "db929267",
       "title": "Последний император",
       "status": "want",
       "added_by": "Саша",
-      "comment": ""
+      "comment": "",
+      "sasha_rating": null,
+      "vova_rating": null,
+      "legacy_rating": null
     },
     {
       "id": "24353d06",
       "title": "ДАУ Наташа",
       "status": "want",
       "added_by": "Саша",
-      "comment": ""
+      "comment": "",
+      "sasha_rating": null,
+      "vova_rating": null,
+      "legacy_rating": null
     },
     {
       "id": "1eb0b497",
       "title": "Жизнь в забвении",
       "status": "want",
       "added_by": "Саша",
-      "comment": ""
+      "comment": "",
+      "sasha_rating": null,
+      "vova_rating": null,
+      "legacy_rating": null
     },
     {
       "id": "51e0c9c5",
       "title": "Переходный возраст (мини-сериал)",
       "status": "want",
       "added_by": "Саша",
-      "comment": ""
+      "comment": "",
+      "sasha_rating": null,
+      "vova_rating": null,
+      "legacy_rating": null
     },
     {
       "id": "b4ded019",
       "title": "Жена Чайковского",
       "status": "want",
       "added_by": "Саша",
-      "comment": ""
+      "comment": "",
+      "sasha_rating": null,
+      "vova_rating": null,
+      "legacy_rating": null
     },
     {
       "id": "5affea6f",
       "title": "Хиросима моя любовь",
       "status": "watched",
       "added_by": "Саша",
-      "comment": ""
+      "comment": "",
+      "sasha_rating": 8,
+      "vova_rating": 9,
+      "legacy_rating": null
     },
     {
       "id": "65ed31cb",
       "title": "Бойфренд из будущего",
       "status": "want",
       "added_by": "Вова",
-      "comment": ""
+      "comment": "",
+      "sasha_rating": null,
+      "vova_rating": null,
+      "legacy_rating": null
     },
     {
       "id": "c8469256",
       "title": "Про уродов и людей",
       "status": "want",
       "added_by": "Саша",
-      "comment": ""
+      "comment": "",
+      "sasha_rating": null,
+      "vova_rating": null,
+      "legacy_rating": null
     },
     {
       "id": "1a2ea1ef",
       "title": "Так держать!",
       "status": "want",
       "added_by": "Саша",
-      "comment": ""
+      "comment": "",
+      "sasha_rating": null,
+      "vova_rating": null,
+      "legacy_rating": null
     },
     {
       "id": "36580562",
       "title": "Двое в пустом Париже",
       "status": "want",
       "added_by": "Вова",
-      "comment": ""
+      "comment": "",
+      "sasha_rating": null,
+      "vova_rating": null,
+      "legacy_rating": null
     },
     {
       "id": "e6ee2e6e",
       "title": "Финикийская схема",
       "status": "want",
       "added_by": "Саша",
-      "comment": ""
+      "comment": "",
+      "sasha_rating": null,
+      "vova_rating": null,
+      "legacy_rating": null
     },
     {
       "id": "92c7bbe5",
       "title": "Бедные несчастные",
       "status": "watched",
       "added_by": "Вова",
-      "comment": ""
+      "comment": "",
+      "sasha_rating": 10,
+      "vova_rating": 8,
+      "legacy_rating": null
     },
     {
       "id": "b650e365",
       "title": "Игры разума",
       "status": "want",
       "added_by": "Саша",
-      "comment": ""
+      "comment": "",
+      "sasha_rating": null,
+      "vova_rating": null,
+      "legacy_rating": null
     },
     {
       "id": "3a687de0",
       "title": "Игра",
       "status": "want",
       "added_by": "Саша",
-      "comment": ""
+      "comment": "",
+      "sasha_rating": null,
+      "vova_rating": null,
+      "legacy_rating": null
     },
     {
       "id": "2a603f4e",
       "title": "Богемская рапсодия",
       "status": "want",
       "added_by": "Вова",
-      "comment": ""
+      "comment": "",
+      "sasha_rating": null,
+      "vova_rating": null,
+      "legacy_rating": null
     },
     {
       "id": "c6804edb",
       "title": "Трасса 60",
       "status": "watched",
       "added_by": "Саша",
-      "comment": ""
+      "comment": "",
+      "sasha_rating": 8,
+      "vova_rating": 9,
+      "legacy_rating": null
     },
     {
       "id": "12319fa6",
       "title": "Драйв",
       "status": "want",
       "added_by": "Вова",
-      "comment": ""
+      "comment": "",
+      "sasha_rating": null,
+      "vova_rating": null,
+      "legacy_rating": null
     },
     {
       "id": "6ab8f202",
       "title": "Опасный метод",
       "status": "want",
       "added_by": "Вова",
-      "comment": ""
+      "comment": "",
+      "sasha_rating": null,
+      "vova_rating": null,
+      "legacy_rating": null
     },
     {
       "id": "33596013",
       "title": "Бесславные ублюдки",
       "status": "want",
       "added_by": "Саша",
-      "comment": ""
+      "comment": "",
+      "sasha_rating": null,
+      "vova_rating": null,
+      "legacy_rating": null
     },
     {
       "id": "8b16026a",
       "title": "Шугар (мини-сериал)",
       "status": "want",
       "added_by": "Саша",
-      "comment": ""
+      "comment": "",
+      "sasha_rating": null,
+      "vova_rating": null,
+      "legacy_rating": null
     },
     {
       "id": "3c453ff9",
       "title": "Титаник",
       "status": "want",
       "added_by": "Саша",
-      "comment": ""
+      "comment": "",
+      "sasha_rating": null,
+      "vova_rating": null,
+      "legacy_rating": null
     },
     {
       "id": "94405c1a",
       "title": "99 франков",
       "status": "want",
       "added_by": "Саша",
-      "comment": ""
+      "comment": "",
+      "sasha_rating": null,
+      "vova_rating": null,
+      "legacy_rating": null
     },
     {
       "id": "d362b5a8",
       "title": "Уродцы",
       "status": "want",
       "added_by": "Саша",
-      "comment": ""
+      "comment": "",
+      "sasha_rating": null,
+      "vova_rating": null,
+      "legacy_rating": null
     },
     {
       "id": "a2831b7f",
       "title": "Психо",
       "status": "want",
       "added_by": "Саша",
-      "comment": ""
+      "comment": "",
+      "sasha_rating": null,
+      "vova_rating": null,
+      "legacy_rating": null
     },
     {
       "id": "59eb1639",
       "title": "Жизнь других",
       "status": "want",
       "added_by": "Саша",
-      "comment": ""
+      "comment": "",
+      "sasha_rating": null,
+      "vova_rating": null,
+      "legacy_rating": null
     },
     {
       "id": "400bb2cd",
       "title": "Необратимость",
       "status": "want",
       "added_by": "Саша",
-      "comment": ""
+      "comment": "",
+      "sasha_rating": null,
+      "vova_rating": null,
+      "legacy_rating": null
     },
     {
       "id": "a05fab49",
       "title": "Малхолланд драйв",
       "status": "want",
       "added_by": "Саша",
-      "comment": ""
+      "comment": "",
+      "sasha_rating": null,
+      "vova_rating": null,
+      "legacy_rating": null
     },
     {
       "id": "81319200",
       "title": "Поток",
       "status": "want",
       "added_by": "Саша",
-      "comment": ""
+      "comment": "",
+      "sasha_rating": null,
+      "vova_rating": null,
+      "legacy_rating": null
     },
     {
       "id": "becf21f0",
       "title": "Дикий робот",
       "status": "want",
       "added_by": "Саша",
-      "comment": ""
+      "comment": "",
+      "sasha_rating": null,
+      "vova_rating": null,
+      "legacy_rating": null
     },
     {
       "id": "e040f94f",
       "title": "Лило и Стич",
       "status": "want",
       "added_by": "Саша",
-      "comment": ""
+      "comment": "",
+      "sasha_rating": null,
+      "vova_rating": null,
+      "legacy_rating": null
     },
     {
       "id": "66a60896",
       "title": "Окно во двор",
       "status": "want",
       "added_by": "Саша",
-      "comment": ""
+      "comment": "",
+      "sasha_rating": null,
+      "vova_rating": null,
+      "legacy_rating": null
     },
     {
       "id": "3c54dd3a",
       "title": "Субстанция",
       "status": "want",
       "added_by": "Саша",
-      "comment": ""
+      "comment": "",
+      "sasha_rating": null,
+      "vova_rating": null,
+      "legacy_rating": null
     },
     {
       "id": "f84d969c",
       "title": "Орлеан",
       "status": "want",
       "added_by": "Саша",
-      "comment": ""
+      "comment": "",
+      "sasha_rating": null,
+      "vova_rating": null,
+      "legacy_rating": null
     },
     {
       "id": "0a02bc44",
       "title": "Человек-швейцарский нож",
       "status": "want",
       "added_by": "Саша",
-      "comment": ""
+      "comment": "",
+      "sasha_rating": null,
+      "vova_rating": null,
+      "legacy_rating": null
     },
     {
       "id": "f3c6aa7b",
       "title": "Треугольник печали",
       "status": "want",
       "added_by": "Саша",
-      "comment": ""
+      "comment": "",
+      "sasha_rating": null,
+      "vova_rating": null,
+      "legacy_rating": null
     },
     {
       "id": "2eaba336",
       "title": "Красота по-американски",
       "status": "want",
       "added_by": "Саша",
-      "comment": ""
+      "comment": "",
+      "sasha_rating": null,
+      "vova_rating": null,
+      "legacy_rating": null
     },
     {
       "id": "fe0135c8",
       "title": "Уроки фарси",
       "status": "want",
       "added_by": "Вова",
-      "comment": ""
+      "comment": "",
+      "sasha_rating": null,
+      "vova_rating": null,
+      "legacy_rating": null
+    },
+    {
+      "id": "8905d848",
+      "title": "Наркоз",
+      "status": "want",
+      "added_by": "Вова",
+      "comment": "",
+      "sasha_rating": null,
+      "vova_rating": null,
+      "legacy_rating": null
+    },
+    {
+      "id": "6433154d",
+      "title": "Вход в пустоту",
+      "status": "want",
+      "added_by": "Вова",
+      "comment": "",
+      "sasha_rating": null,
+      "vova_rating": null,
+      "legacy_rating": null
+    },
+    {
+      "id": "10ce9e1c",
+      "title": "Три мушкетёра",
+      "status": "want",
+      "added_by": "Вова",
+      "comment": "С боярским",
+      "sasha_rating": null,
+      "vova_rating": null,
+      "legacy_rating": null
+    },
+    {
+      "id": "77a7d834",
+      "title": "Начало",
+      "status": "want",
+      "added_by": "Вова",
+      "comment": "",
+      "sasha_rating": null,
+      "vova_rating": null,
+      "legacy_rating": null
+    },
+    {
+      "id": "8ea7f796",
+      "title": "Везунчики",
+      "status": "watched",
+      "added_by": "Вова",
+      "comment": "",
+      "sasha_rating": 10,
+      "vova_rating": 10,
+      "legacy_rating": null
+    },
+    {
+      "id": "f164f327",
+      "title": "Этому быть",
+      "status": "want",
+      "added_by": "Вова",
+      "comment": "",
+      "sasha_rating": null,
+      "vova_rating": null,
+      "legacy_rating": null
+    },
+    {
+      "id": "aa679cc6",
+      "title": "Проект \"конец света\"",
+      "status": "want",
+      "added_by": "Вова",
+      "comment": "",
+      "sasha_rating": null,
+      "vova_rating": null,
+      "legacy_rating": null
+    },
+    {
+      "id": "0f1ff823",
+      "title": "Борат",
+      "status": "want",
+      "added_by": "Вова",
+      "comment": "",
+      "sasha_rating": null,
+      "vova_rating": null,
+      "legacy_rating": null
+    },
+    {
+      "id": "94118832",
+      "title": "Пуп круиз",
+      "status": "want",
+      "added_by": "Саша",
+      "comment": "",
+      "sasha_rating": null,
+      "vova_rating": null,
+      "legacy_rating": null
+    },
+    {
+      "id": "fd6b9d71",
+      "title": "Треугольник печали",
+      "status": "want",
+      "added_by": "Саша",
+      "comment": "",
+      "sasha_rating": null,
+      "vova_rating": null,
+      "legacy_rating": null
+    },
+    {
+      "id": "b83a1630",
+      "title": "Пятый элемент",
+      "status": "want",
+      "added_by": "Саша",
+      "comment": "",
+      "sasha_rating": null,
+      "vova_rating": null,
+      "legacy_rating": null
     }
   ],
   "wishlist": [
@@ -288,7 +518,17 @@
       "link": "",
       "comment": "",
       "status": "active",
-      "owner": "unknown"
+      "owner": "unknown",
+      "reserved_by": ""
+    },
+    {
+      "id": "967ca63f",
+      "title": "Школа дрифта",
+      "link": "https://kultura-zanosa.ru/msk",
+      "comment": "",
+      "status": "active",
+      "owner": "vova",
+      "reserved_by": ""
     }
   ],
   "leisure": [
@@ -341,12 +581,6 @@
       "status": "want"
     },
     {
-      "id": "8483af9d",
-      "title": "Психологические тесты",
-      "comment": "",
-      "status": "want"
-    },
-    {
       "id": "f37e7595",
       "title": "Прочитать книгу Алёны Ванченко",
       "comment": "",
@@ -387,6 +621,162 @@
       "title": "Расшифровка генетического теста",
       "comment": "",
       "status": "want"
+    },
+    {
+      "id": "e39196fd",
+      "title": "Парный массаж",
+      "comment": "",
+      "status": "want"
+    },
+    {
+      "id": "5947a20b",
+      "title": "Экскурсия в Яндекс",
+      "comment": "",
+      "status": "want"
+    },
+    {
+      "id": "3cf4134a",
+      "title": "Психологические тесты",
+      "comment": "https://www.instagram.com/p/DWqTWg5DRJw/?img_index=5&igsh=dHYyOTRsZzBwODBh",
+      "status": "want"
+    },
+    {
+      "id": "ee8f74ea",
+      "title": "Парк аттракционов",
+      "comment": "",
+      "status": "want"
+    },
+    {
+      "id": "319483ae",
+      "title": "Сходить в \"Дворец впечатлений\"",
+      "comment": "Место с разными визуальными локациями, похоже на то что в Японии",
+      "status": "want"
     }
-  ]
+  ],
+  "afisha": [
+    {
+      "id": "0663ea42",
+      "title": "Пупу",
+      "place": "",
+      "date": "2026-04-01",
+      "time": "18:00",
+      "end_date": "",
+      "end_time": "",
+      "link": "",
+      "status": "done",
+      "notified_24h": true
+    },
+    {
+      "id": "4930c593",
+      "title": "Квиз - финал месяца",
+      "place": "Большевик лофт",
+      "date": "2026-04-02",
+      "time": "20:00",
+      "end_date": "",
+      "end_time": "",
+      "link": "",
+      "status": "active",
+      "notified_24h": true
+    },
+    {
+      "id": "8f2eb1ea",
+      "title": "Гуляем по ВДНХ",
+      "place": "",
+      "date": "2026-04-06",
+      "time": "12:00",
+      "end_date": "",
+      "end_time": "",
+      "link": "",
+      "status": "active",
+      "notified_24h": true
+    },
+    {
+      "id": "db5824e6",
+      "title": "Спектакль Ирины Горбачевой",
+      "place": "Театр Эстрады",
+      "date": "2026-04-13",
+      "time": "19:00",
+      "end_date": "",
+      "end_time": "",
+      "link": "",
+      "status": "active",
+      "notified_24h": true
+    },
+    {
+      "id": "d68b2fa4",
+      "title": "Делаем лимончеллу",
+      "place": "",
+      "date": "2026-04-15",
+      "time": "19:30",
+      "end_date": "",
+      "end_time": "",
+      "link": "",
+      "status": "active",
+      "notified_24h": false
+    },
+    {
+      "id": "47520444",
+      "title": "Едем на дачу к Лёхе",
+      "place": "",
+      "date": "2026-04-16",
+      "time": "18:00",
+      "end_date": "",
+      "end_time": "",
+      "link": "",
+      "status": "active",
+      "notified_24h": false
+    },
+    {
+      "id": "552d9274",
+      "title": "Серёга Орлов ставит песни с телефона",
+      "place": "Бар summerpunch",
+      "date": "2026-04-17",
+      "time": "22:00",
+      "end_date": "",
+      "end_time": "",
+      "link": "",
+      "status": "active",
+      "notified_24h": false
+    }
+  ],
+  "backlog": [
+    {
+      "id": "c368b808",
+      "title": "Связь афиши и календарей",
+      "description": "Когда добавляется мероприятие в \"афиша\", то оно сразу падает в наши календари",
+      "status": "todo"
+    }
+  ],
+  "calendars": {
+    "vova": [
+      {
+        "id": "efb05ad6",
+        "owner": "vova",
+        "title": "Подписание договора аренды",
+        "date": "2026-04-08",
+        "start_time": "17:00",
+        "end_time": "18:00",
+        "comment": "Взять с собой паспорт и не забыть про правки: срок оплаты, животные",
+        "notified_24h": false
+      }
+    ],
+    "sasha": [
+      {
+        "id": "a969e9d9",
+        "owner": "sasha",
+        "title": "Маникюр",
+        "date": "2026-04-20",
+        "start_time": "20:00",
+        "end_time": "22:30",
+        "comment": "",
+        "notified_24h": false
+      }
+    ]
+  },
+  "meta": {
+    "user_chats": {
+      "wp_bvv": 429328460,
+      "privetnormalno": 240685452
+    }
+  }
 }
