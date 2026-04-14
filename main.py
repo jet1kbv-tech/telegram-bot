@@ -46,6 +46,7 @@ from bot.handlers.films import (
     configure_films_handlers,
     show_random_film,
 )
+from bot.handlers.leisure import add_leisure_comment, add_leisure_title, configure_leisure_handlers
 from bot.states import (
     ADDING_BACKLOG_DESCRIPTION,
     ADDING_BACKLOG_TITLE,
@@ -1043,43 +1044,6 @@ async def add_wishlist_comment(update: Update, context: ContextTypes.DEFAULT_TYP
     return SECTION
 
 
-async def add_leisure_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if not await ensure_access(update):
-        return ConversationHandler.END
-    await remember_current_chat(update)
-    title = (update.message.text or "").strip()
-    if not title:
-        await update.message.reply_text("Идея не должна быть пустой. Попробуй ещё раз:")
-        return ADDING_LEISURE_TITLE
-    context.user_data["leisure_title"] = title
-    await update.message.reply_text("Теперь отправь комментарий. Если не нужен, напиши -")
-    return ADDING_LEISURE_COMMENT
-
-
-async def add_leisure_comment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if not await ensure_access(update):
-        return ConversationHandler.END
-    await remember_current_chat(update)
-    comment = (update.message.text or "").strip()
-    if comment == "-":
-        comment = ""
-
-    item = {
-        "id": make_id(),
-        "title": context.user_data.get("leisure_title", "Без названия"),
-        "comment": comment,
-        "status": "want",
-    }
-    data = storage.load()
-    data["leisure"].append(item)
-    storage.save(data)
-
-    context.user_data.pop("leisure_title", None)
-    context.user_data["active_section"] = "leisure"
-    await update.message.reply_text(f"Идея для досуга сохранена:\n\n{build_item_text('leisure', item)}", reply_markup=item_keyboard("leisure", item, page=0))
-    return SECTION
-
-
 async def add_event_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not await ensure_access(update):
         return ConversationHandler.END
@@ -1364,6 +1328,7 @@ def build_app() -> Application:
         item_keyboard=item_keyboard,
         main_menu_keyboard=main_menu_keyboard,
     )
+    configure_leisure_handlers(build_item_text=build_item_text, item_keyboard=item_keyboard)
 
     if app.job_queue is not None:
         app.job_queue.run_repeating(check_afisha_notifications, interval=NOTIFICATION_CHECK_INTERVAL, first=30, name="afisha_notifications")
