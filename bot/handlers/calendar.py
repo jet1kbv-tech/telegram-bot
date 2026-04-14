@@ -1,6 +1,9 @@
-from datetime import datetime
+from __future__ import annotations
 
-from telegram import Update
+from datetime import datetime
+from typing import Any, Awaitable, Callable
+
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes, ConversationHandler
 
 from bot.states import (
@@ -12,8 +15,200 @@ from bot.states import (
     MENU,
     SECTION,
 )
-from bot.storage import make_id, normalize_calendar_event, sort_calendar_events, storage
-from bot.utils import ensure_access, remember_current_chat
+from bot.config import PAGE_SIZE
+from bot.storage import (
+    calendar_preview_text,
+    delete_item_by_id,
+    find_item,
+    format_calendar_event_range,
+    get_calendar_items,
+    make_id,
+    normalize_calendar_event,
+    sort_calendar_events,
+    storage,
+)
+from bot.utils import ensure_access, owner_label, paginate_items, remember_current_chat
+
+_safe_edit_message: Callable[..., Awaitable[None]] | None = None
+_main_menu_keyboard: Callable[[], InlineKeyboardMarkup] | None = None
+
+
+def configure_calendar_handlers(
+    *,
+    safe_edit_message: Callable[..., Awaitable[None]],
+    main_menu_keyboard: Callable[[], InlineKeyboardMarkup],
+) -> None:
+    global _safe_edit_message, _main_menu_keyboard
+    _safe_edit_message = safe_edit_message
+    _main_menu_keyboard = main_menu_keyboard
+
+
+def _require_safe_edit_message() -> Callable[..., Awaitable[None]]:
+    if _safe_edit_message is None:
+        raise RuntimeError("Calendar handlers are not configured")
+    return _safe_edit_message
+
+
+def _require_main_menu_keyboard() -> Callable[[], InlineKeyboardMarkup]:
+    if _main_menu_keyboard is None:
+        raise RuntimeError("Calendar handlers are not configured")
+    return _main_menu_keyboard
+
+
+def build_calendar_menu_text() -> str:
+    return "📅 Календарь\n\nВыбери, чей календарь открыть."
+
+
+def calendar_owner_menu_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("📅 Календарь Саши", callback_data="cal_list|sasha|0")],
+            [InlineKeyboardButton("📅 Календарь Вовы", callback_data="cal_list|vova|0")],
+            [InlineKeyboardButton("⬅️ Назад в меню", callback_data="main")],
+        ]
+    )
+
+
+def build_calendar_owner_text(owner: str, items: list[dict[str, Any]], page: int) -> str:
+    title = f"📅 Календарь {owner_label(owner)}"
+    total_items = len(items)
+    if total_items == 0:
+        return f"{title}\n\nПока актуальных событий нет."
+    start_num = page * PAGE_SIZE + 1
+    end_num = min(total_items, start_num + PAGE_SIZE - 1)
+    return (
+        f"{title}\n\n"
+        f"События {start_num}–{end_num} из {total_items}.\n"
+        "Нажми на событие, чтобы открыть карточку или удалить его."
+    )
+
+
+def calendar_owner_keyboard(owner: str, items: list[dict[str, Any]], page: int) -> InlineKeyboardMarkup:
+    page_items, current_page, total_pages = paginate_items(items, page)
+    rows: list[list[InlineKeyboardButton]] = []
+    for item in page_items:
+        rows.append([
+            InlineKeyboardButton(
+                calendar_preview_text(item),
+                callback_data=f"cal_view|{owner}|{item['id']}|{current_page}",
+            )
+        ])
+
+    if total_pages > 1:
+        row: list[InlineKeyboardButton] = []
+        if current_page > 0:
+            row.append(InlineKeyboardButton("⬅️", callback_data=f"cal_list|{owner}|{current_page - 1}"))
+        row.append(InlineKeyboardButton(f"{current_page + 1}/{total_pages}", callback_data="noop"))
+        if current_page < total_pages - 1:
+            row.append(InlineKeyboardButton("➡️", callback_data=f"cal_list|{owner}|{current_page + 1}"))
+        rows.append(row)
+
+    rows.append([InlineKeyboardButton("➕ Добавить событие", callback_data=f"cal_add|{owner}")])
+    rows.append([InlineKeyboardButton("⬅️ К выбору календаря", callback_data="calendar_menu")])
+    rows.append([InlineKeyboardButton("🏠 В меню", callback_data="main")])
+    return InlineKeyboardMarkup(rows)
+
+
+def build_calendar_event_text(item: dict[str, Any]) -> str:
+    lines = [
+        f"📅 {item['title']}",
+        f"Календарь: {owner_label(item['owner'])}",
+        f"Когда: {format_calendar_event_range(item)}",
+    ]
+    if item.get("comment"):
+        lines.append(f"Комментарий: {item['comment']}")
+    return "\n".join(lines)
+
+
+def calendar_event_keyboard(owner: str, item_id: str, page: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("🗑️ Удалить", callback_data=f"cal_delete_confirm|{owner}|{item_id}|{page}")],
+            [InlineKeyboardButton("⬅️ К списку", callback_data=f"cal_list|{owner}|{page}")],
+            [InlineKeyboardButton("🏠 В меню", callback_data="main")],
+        ]
+    )
+
+
+def calendar_event_delete_confirm_keyboard(owner: str, item_id: str, page: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("✅ Да, удалить", callback_data=f"cal_delete|{owner}|{item_id}|{page}")],
+            [InlineKeyboardButton("↩️ Нет, вернуться", callback_data=f"cal_view|{owner}|{item_id}|{page}")],
+        ]
+    )
+
+
+async def show_calendar_menu(update: Update) -> int:
+    query = update.callback_query
+    safe_edit_message = _require_safe_edit_message()
+    await safe_edit_message(query, build_calendar_menu_text(), reply_markup=calendar_owner_menu_keyboard())
+    return SECTION
+
+
+async def show_calendar_owner(update: Update, owner: str, page: int = 0) -> int:
+    query = update.callback_query
+    data = storage.load()
+    items = get_calendar_items(data, owner)
+    _, current_page, _ = paginate_items(items, page)
+    text = build_calendar_owner_text(owner, items, current_page)
+    safe_edit_message = _require_safe_edit_message()
+    await safe_edit_message(query, text, reply_markup=calendar_owner_keyboard(owner, items, current_page))
+    return SECTION
+
+
+async def show_calendar_owner_item(update: Update, owner: str, item_id: str, page: int) -> int:
+    query = update.callback_query
+    data = storage.load()
+    item = find_item(data.get("calendars", {}).get(owner, []), item_id)
+    safe_edit_message = _require_safe_edit_message()
+    if not item:
+        await safe_edit_message(
+            query,
+            "Событие не найдено.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ К списку", callback_data=f"cal_list|{owner}|{page}")]]),
+        )
+        return SECTION
+    await safe_edit_message(query, build_calendar_event_text(item), reply_markup=calendar_event_keyboard(owner, item_id, page))
+    return SECTION
+
+
+async def handle_calendar_delete_confirm(update: Update, owner: str, item_id: str, page: int) -> int:
+    query = update.callback_query
+    data = storage.load()
+    item = find_item(data.get("calendars", {}).get(owner, []), item_id)
+    safe_edit_message = _require_safe_edit_message()
+    if not item:
+        await safe_edit_message(
+            query,
+            "Не удалось найти событие для удаления.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 В меню", callback_data="main")]]),
+        )
+        return SECTION
+    await safe_edit_message(
+        query,
+        f"{build_calendar_event_text(item)}\n\nТочно удалить?",
+        reply_markup=calendar_event_delete_confirm_keyboard(owner, item_id, page),
+    )
+    return SECTION
+
+
+async def handle_calendar_delete(update: Update, owner: str, item_id: str, requested_page: int) -> int:
+    query = update.callback_query
+    data = storage.load()
+    items = data.get("calendars", {}).get(owner, [])
+    item = find_item(items, item_id)
+    safe_edit_message = _require_safe_edit_message()
+    if not item:
+        await safe_edit_message(
+            query,
+            "Не удалось удалить: событие не найдено.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 В меню", callback_data="main")]]),
+        )
+        return SECTION
+    delete_item_by_id(items, item_id)
+    storage.save(data)
+    return await show_calendar_owner(update, owner, requested_page)
 
 
 async def add_calendar_event_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -97,9 +292,10 @@ async def add_calendar_event_comment(update: Update, context: ContextTypes.DEFAU
 
     owner = str(context.user_data.get("calendar_owner") or "")
     if owner not in {"vova", "sasha"}:
-        from main import main_menu_keyboard
-
-        await update.message.reply_text("Не удалось понять, в какой календарь сохранять событие.", reply_markup=main_menu_keyboard())
+        await update.message.reply_text(
+            "Не удалось понять, в какой календарь сохранять событие.",
+            reply_markup=_require_main_menu_keyboard()(),
+        )
         return MENU
 
     item = {
@@ -130,8 +326,6 @@ async def add_calendar_event_comment(update: Update, context: ContextTypes.DEFAU
         "calendar_event_end_time",
     ]:
         context.user_data.pop(key, None)
-
-    from main import build_calendar_event_text, calendar_event_keyboard
 
     await update.message.reply_text(
         f"Событие сохранено:\n\n{build_calendar_event_text(normalized_item)}",

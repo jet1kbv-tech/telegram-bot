@@ -62,6 +62,12 @@ from bot.handlers.calendar import (
     add_calendar_event_end_time,
     add_calendar_event_start_time,
     add_calendar_event_title,
+    configure_calendar_handlers,
+    handle_calendar_delete,
+    handle_calendar_delete_confirm,
+    show_calendar_menu,
+    show_calendar_owner,
+    show_calendar_owner_item,
 )
 from bot.handlers.wishlist import (
     add_wishlist_comment,
@@ -100,9 +106,7 @@ from bot.storage import (
     delete_item_by_id,
     find_item,
     format_average_rating,
-    format_calendar_event_range,
     format_event_dt,
-    get_calendar_items,
     is_calendar_event_actual,
     is_event_actual,
     make_id,
@@ -118,7 +122,6 @@ from bot.storage import (
     sort_calendar_events,
     sort_events,
     storage,
-    calendar_preview_text,
 )
 from bot.utils import (
     clamp_page,
@@ -314,91 +317,6 @@ def build_list_text(section: str, items: list[dict[str, Any]], page: int, total_
     )
 
 
-def build_calendar_menu_text() -> str:
-    return "📅 Календарь\n\nВыбери, чей календарь открыть."
-
-
-def calendar_owner_menu_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton("📅 Календарь Саши", callback_data="cal_list|sasha|0")],
-            [InlineKeyboardButton("📅 Календарь Вовы", callback_data="cal_list|vova|0")],
-            [InlineKeyboardButton("⬅️ Назад в меню", callback_data="main")],
-        ]
-    )
-
-
-def build_calendar_owner_text(owner: str, items: list[dict[str, Any]], page: int) -> str:
-    title = f"📅 Календарь {owner_label(owner)}"
-    total_items = len(items)
-    if total_items == 0:
-        return f"{title}\n\nПока актуальных событий нет."
-    start_num = page * PAGE_SIZE + 1
-    end_num = min(total_items, start_num + PAGE_SIZE - 1)
-    return (
-        f"{title}\n\n"
-        f"События {start_num}–{end_num} из {total_items}.\n"
-        "Нажми на событие, чтобы открыть карточку или удалить его."
-    )
-
-
-
-def calendar_owner_keyboard(owner: str, items: list[dict[str, Any]], page: int) -> InlineKeyboardMarkup:
-    page_items, current_page, total_pages = paginate_items(items, page)
-    rows: list[list[InlineKeyboardButton]] = []
-    for item in page_items:
-        rows.append([
-            InlineKeyboardButton(
-                calendar_preview_text(item),
-                callback_data=f"cal_view|{owner}|{item['id']}|{current_page}",
-            )
-        ])
-
-    if total_pages > 1:
-        row: list[InlineKeyboardButton] = []
-        if current_page > 0:
-            row.append(InlineKeyboardButton("⬅️", callback_data=f"cal_list|{owner}|{current_page - 1}"))
-        row.append(InlineKeyboardButton(f"{current_page + 1}/{total_pages}", callback_data="noop"))
-        if current_page < total_pages - 1:
-            row.append(InlineKeyboardButton("➡️", callback_data=f"cal_list|{owner}|{current_page + 1}"))
-        rows.append(row)
-
-    rows.append([InlineKeyboardButton("➕ Добавить событие", callback_data=f"cal_add|{owner}")])
-    rows.append([InlineKeyboardButton("⬅️ К выбору календаря", callback_data="calendar_menu")])
-    rows.append([InlineKeyboardButton("🏠 В меню", callback_data="main")])
-    return InlineKeyboardMarkup(rows)
-
-
-def build_calendar_event_text(item: dict[str, Any]) -> str:
-    lines = [
-        f"📅 {item['title']}",
-        f"Календарь: {owner_label(item['owner'])}",
-        f"Когда: {format_calendar_event_range(item)}",
-    ]
-    if item.get("comment"):
-        lines.append(f"Комментарий: {item['comment']}")
-    return "\n".join(lines)
-
-
-
-def calendar_event_keyboard(owner: str, item_id: str, page: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton("🗑️ Удалить", callback_data=f"cal_delete_confirm|{owner}|{item_id}|{page}")],
-            [InlineKeyboardButton("⬅️ К списку", callback_data=f"cal_list|{owner}|{page}")],
-            [InlineKeyboardButton("🏠 В меню", callback_data="main")],
-        ]
-    )
-
-
-def calendar_event_delete_confirm_keyboard(owner: str, item_id: str, page: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton("✅ Да, удалить", callback_data=f"cal_delete|{owner}|{item_id}|{page}")],
-            [InlineKeyboardButton("↩️ Нет, вернуться", callback_data=f"cal_view|{owner}|{item_id}|{page}")],
-        ]
-    )
-
 def list_keyboard(section: str, items: list[dict[str, Any]], page: int, owner: str | None = None, status_filter: str | None = None) -> InlineKeyboardMarkup:
     page_items, current_page, total_pages = paginate_items(items, page)
     rows: list[list[InlineKeyboardButton]] = []
@@ -571,36 +489,6 @@ async def show_list(update: Update, section: str, page: int = 0, owner: str | No
     await safe_edit_message(query, text, reply_markup=list_keyboard(section, items, current_page, owner, status_filter))
     return SECTION
 
-
-async def show_calendar_menu(update: Update) -> int:
-    query = update.callback_query
-    await safe_edit_message(query, build_calendar_menu_text(), reply_markup=calendar_owner_menu_keyboard())
-    return SECTION
-
-
-async def show_calendar_owner(update: Update, owner: str, page: int = 0) -> int:
-    query = update.callback_query
-    data = storage.load()
-    items = get_calendar_items(data, owner)
-    _, current_page, _ = paginate_items(items, page)
-    text = build_calendar_owner_text(owner, items, current_page)
-    await safe_edit_message(query, text, reply_markup=calendar_owner_keyboard(owner, items, current_page))
-    return SECTION
-
-
-async def show_calendar_owner_item(update: Update, owner: str, item_id: str, page: int) -> int:
-    query = update.callback_query
-    data = storage.load()
-    item = find_item(data.get("calendars", {}).get(owner, []), item_id)
-    if not item:
-        await safe_edit_message(
-            query,
-            "Событие не найдено.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ К списку", callback_data=f"cal_list|{owner}|{page}")]]),
-        )
-        return SECTION
-    await safe_edit_message(query, build_calendar_event_text(item), reply_markup=calendar_event_keyboard(owner, item_id, page))
-    return SECTION
 
 async def show_item(update: Update, section: str, item_id: str, page: int, owner: str | None = None, status_filter: str | None = None) -> int:
     query = update.callback_query
@@ -798,27 +686,11 @@ async def section_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     if action == "cal_delete_confirm":
         _, owner, item_id, page_raw = parts
-        page = int(page_raw)
-        data = storage.load()
-        item = find_item(data.get("calendars", {}).get(owner, []), item_id)
-        if not item:
-            await safe_edit_message(query, "Не удалось найти событие для удаления.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 В меню", callback_data="main")]]))
-            return SECTION
-        await safe_edit_message(query, f"{build_calendar_event_text(item)}\n\nТочно удалить?", reply_markup=calendar_event_delete_confirm_keyboard(owner, item_id, page))
-        return SECTION
+        return await handle_calendar_delete_confirm(update, owner, item_id, int(page_raw))
 
     if action == "cal_delete":
         _, owner, item_id, page_raw = parts
-        requested_page = int(page_raw)
-        data = storage.load()
-        items = data.get("calendars", {}).get(owner, [])
-        item = find_item(items, item_id)
-        if not item:
-            await safe_edit_message(query, "Не удалось удалить: событие не найдено.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 В меню", callback_data="main")]]))
-            return SECTION
-        delete_item_by_id(items, item_id)
-        storage.save(data)
-        return await show_calendar_owner(update, owner, requested_page)
+        return await handle_calendar_delete(update, owner, item_id, int(page_raw))
 
     if action == "owners":
         await safe_edit_message(query, "Чей вишлист открыть?", reply_markup=wishlist_owner_keyboard(update))
@@ -1032,6 +904,11 @@ def build_app() -> Application:
         build_item_text=build_item_text,
         item_keyboard=item_keyboard,
         notify_other_user_about_wishlist_item=notify_other_user_about_wishlist_item,
+    )
+
+    configure_calendar_handlers(
+        safe_edit_message=safe_edit_message,
+        main_menu_keyboard=main_menu_keyboard,
     )
 
     if app.job_queue is not None:
