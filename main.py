@@ -48,6 +48,7 @@ from bot.handlers.films import (
 )
 from bot.handlers.leisure import add_leisure_comment, add_leisure_title, configure_leisure_handlers
 from bot.handlers.afisha import (
+    afisha_empty_list_keyboard,
     add_event_date,
     add_event_end_date,
     add_event_end_time,
@@ -55,6 +56,10 @@ from bot.handlers.afisha import (
     add_event_place,
     add_event_time,
     add_event_title,
+    apply_afisha_status_update,
+    build_afisha_item_text,
+    build_afisha_list_button_text,
+    get_actual_afisha_items,
 )
 from bot.handlers.calendar import (
     add_calendar_event_comment,
@@ -108,7 +113,6 @@ from bot.storage import (
     format_average_rating,
     format_event_dt,
     is_calendar_event_actual,
-    is_event_actual,
     make_id,
     normalize_calendar_event,
     normalize_event,
@@ -120,7 +124,6 @@ from bot.storage import (
     parse_calendar_event_start_dt,
     parse_event_dt,
     sort_calendar_events,
-    sort_events,
     storage,
 )
 from bot.utils import (
@@ -272,16 +275,7 @@ def build_item_text(section: str, item: dict[str, Any]) -> str:
         return "\n".join(lines)
 
     if section == "afisha":
-        lines = [
-            f"🗓 {item['title']}",
-            f"Статус: {item_status_label(section, item['status'])}",
-            f"Когда: {format_event_dt(item)}",
-        ]
-        if item.get("place"):
-            lines.append(f"Где: {item['place']}")
-        if item.get("link"):
-            lines.append(f"Ссылка: {item['link']}")
-        return "\n".join(lines)
+        return build_afisha_item_text(item)
 
     if section == "backlog":
         lines = [
@@ -323,7 +317,7 @@ def list_keyboard(section: str, items: list[dict[str, Any]], page: int, owner: s
 
     for item in page_items:
         if section == "afisha":
-            button_text = f"{format_event_dt(item)} · {item['title']}"
+            button_text = build_afisha_list_button_text(item)
         else:
             button_text = f"{item['title']} · {item_status_label(section, item['status'])}"
         rows.append([
@@ -454,9 +448,7 @@ async def show_list(update: Update, section: str, page: int = 0, owner: str | No
     elif section == "backlog" and status_filter in BACKLOG_STATUSES:
         items = [item for item in items if item.get("status") == status_filter]
     elif section == "afisha":
-        now = datetime.now()
-        items = [item for item in items if is_event_actual(item, now)]
-        items = sort_events(items)
+        items = get_actual_afisha_items(items)
 
     _, current_page, total_pages = paginate_items(items, page)
     text = build_list_text(section, items, current_page, total_pages, owner, status_filter)
@@ -468,11 +460,7 @@ async def show_list(update: Update, section: str, page: int = 0, owner: str | No
                 [InlineKeyboardButton("⬅️ Выбрать другой вишлист", callback_data="owners|wishlist")],
             ])
         elif section == "afisha":
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("➕ Добавить событие", callback_data="add|afisha")],
-                [InlineKeyboardButton("📅 Календарь", callback_data="calendar_menu")],
-                [InlineKeyboardButton("⬅️ Назад", callback_data="menu|afisha")],
-            ])
+            keyboard = afisha_empty_list_keyboard()
         elif section == "backlog":
             keyboard = InlineKeyboardMarkup([
                 [InlineKeyboardButton("➕ Добавить фичу", callback_data="add|backlog")],
@@ -794,8 +782,8 @@ async def section_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             item["legacy_rating"] = None
         if section == "wishlist":
             item["reserved_by"] = get_user_name(update) if new_status == "gifted" else ""
-        if section == "afisha" and new_status != "active":
-            item["notified_24h"] = True
+        if section == "afisha":
+            apply_afisha_status_update(item, new_status)
         storage.save(data)
         await safe_edit_message(query, build_item_text(section, item), reply_markup=item_keyboard(section, item, page, owner, status_filter))
         return SECTION
