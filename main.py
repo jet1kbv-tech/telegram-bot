@@ -47,6 +47,12 @@ from bot.handlers.films import (
     show_random_film,
 )
 from bot.handlers.leisure import add_leisure_comment, add_leisure_title, configure_leisure_handlers
+from bot.handlers.wishlist import (
+    add_wishlist_comment,
+    add_wishlist_link,
+    add_wishlist_title,
+    configure_wishlist_handlers,
+)
 from bot.states import (
     ADDING_BACKLOG_DESCRIPTION,
     ADDING_BACKLOG_TITLE,
@@ -989,61 +995,6 @@ async def section_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     return SECTION
 
 
-async def add_wishlist_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if not await ensure_access(update):
-        return ConversationHandler.END
-    await remember_current_chat(update)
-    title = (update.message.text or "").strip()
-    if not title:
-        await update.message.reply_text("Название не должно быть пустым. Попробуй ещё раз:")
-        return ADDING_WISHLIST_TITLE
-    context.user_data["wishlist_title"] = title
-    await update.message.reply_text("Теперь отправь ссылку. Если ссылки нет, напиши -")
-    return ADDING_WISHLIST_LINK
-
-
-async def add_wishlist_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if not await ensure_access(update):
-        return ConversationHandler.END
-    await remember_current_chat(update)
-    link = (update.message.text or "").strip()
-    if link == "-":
-        link = ""
-    context.user_data["wishlist_link"] = link
-    await update.message.reply_text("Теперь отправь комментарий. Если не нужен, напиши -")
-    return ADDING_WISHLIST_COMMENT
-
-
-async def add_wishlist_comment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if not await ensure_access(update):
-        return ConversationHandler.END
-    await remember_current_chat(update)
-    comment = (update.message.text or "").strip()
-    if comment == "-":
-        comment = ""
-
-    item = {
-        "id": make_id(),
-        "title": context.user_data.get("wishlist_title", "Без названия"),
-        "link": context.user_data.get("wishlist_link", ""),
-        "comment": comment,
-        "status": "active",
-        "owner": get_wishlist_owner_by_user(update),
-        "reserved_by": "",
-    }
-    data = storage.load()
-    data["wishlist"].append(item)
-    storage.save(data)
-
-    context.user_data.pop("wishlist_title", None)
-    context.user_data.pop("wishlist_link", None)
-    context.user_data["active_section"] = "wishlist"
-
-    await update.message.reply_text(f"Пункт wishlist сохранён:\n\n{build_item_text('wishlist', item)}", reply_markup=item_keyboard("wishlist", item, page=0, owner=item["owner"]))
-    await notify_other_user_about_wishlist_item(context, update, item)
-    return SECTION
-
-
 async def add_event_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not await ensure_access(update):
         return ConversationHandler.END
@@ -1329,6 +1280,11 @@ def build_app() -> Application:
         main_menu_keyboard=main_menu_keyboard,
     )
     configure_leisure_handlers(build_item_text=build_item_text, item_keyboard=item_keyboard)
+    configure_wishlist_handlers(
+        build_item_text=build_item_text,
+        item_keyboard=item_keyboard,
+        notify_other_user_about_wishlist_item=notify_other_user_about_wishlist_item,
+    )
 
     if app.job_queue is not None:
         app.job_queue.run_repeating(check_afisha_notifications, interval=NOTIFICATION_CHECK_INTERVAL, first=30, name="afisha_notifications")
