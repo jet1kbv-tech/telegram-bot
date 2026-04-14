@@ -37,6 +37,7 @@ from bot.config import (
     PAGE_SIZE,
     SECTION_CONFIG,
 )
+from bot.handlers.common import back_to_main, cancel, configure_common_handlers, noop, start, whoami
 from bot.states import (
     ADDING_BACKLOG_DESCRIPTION,
     ADDING_BACKLOG_TITLE,
@@ -745,28 +746,6 @@ async def check_afisha_notifications(context: ContextTypes.DEFAULT_TYPE) -> None
         storage.save(data)
 
 
-async def whoami(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user = update.effective_user
-    username = user.username if user and user.username else "нет username"
-    text = f"id: {user.id}\nusername: {username}" if user else "Пользователь не найден"
-    await update.message.reply_text(text)
-
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if not await ensure_access(update):
-        return ConversationHandler.END
-
-    await remember_current_chat(update)
-    context.user_data.clear()
-    name = get_user_name(update)
-    text = f"Привет, {name}! Это ваш бот для общих списков.\n\nЧто хочешь открыть?"
-    if update.message:
-        await update.message.reply_text(text, reply_markup=main_menu_keyboard())
-    elif update.callback_query:
-        await safe_edit_message(update.callback_query, text, reply_markup=main_menu_keyboard())
-    return MENU
-
-
 async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not await ensure_access(update):
         return ConversationHandler.END
@@ -778,21 +757,6 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     _, section = query.data.split("|", 1)
     context.user_data["active_section"] = section
     return await show_section_menu(update, section)
-
-
-async def back_to_main(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if not await ensure_access(update):
-        return ConversationHandler.END
-
-    await remember_current_chat(update)
-    query = update.callback_query
-    await query.answer()
-    return await start(update, context)
-
-
-async def noop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.callback_query.answer()
-    return SECTION
 
 
 async def section_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -1550,21 +1514,13 @@ async def add_backlog_description(update: Update, context: ContextTypes.DEFAULT_
     return SECTION
 
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if not await ensure_access(update):
-        return ConversationHandler.END
-    await remember_current_chat(update)
-    context.user_data.clear()
-    await update.message.reply_text("Окей, возвращаемся в главное меню.", reply_markup=main_menu_keyboard())
-    return MENU
-
-
 def build_app() -> Application:
     token = os.getenv("BOT_TOKEN")
     if not token:
         raise RuntimeError("Переменная окружения BOT_TOKEN не установлена.")
 
     app = Application.builder().token(token).build()
+    configure_common_handlers(main_menu_keyboard=main_menu_keyboard, safe_edit_message=safe_edit_message)
 
     if app.job_queue is not None:
         app.job_queue.run_repeating(check_afisha_notifications, interval=NOTIFICATION_CHECK_INTERVAL, first=30, name="afisha_notifications")
