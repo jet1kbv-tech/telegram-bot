@@ -1,6 +1,7 @@
 from datetime import datetime
+from typing import Any
 
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes, ConversationHandler
 
 from bot.states import (
@@ -14,7 +15,46 @@ from bot.states import (
     SECTION,
 )
 from bot.storage import make_id, normalize_event, sort_events, storage
-from bot.utils import ensure_access, remember_current_chat
+from bot.storage import format_event_dt, is_event_actual
+from bot.utils import ensure_access, item_status_label, remember_current_chat
+
+
+def build_afisha_item_text(item: dict[str, Any]) -> str:
+    lines = [
+        f"🗓 {item['title']}",
+        f"Статус: {item_status_label('afisha', item['status'])}",
+        f"Когда: {format_event_dt(item)}",
+    ]
+    if item.get("place"):
+        lines.append(f"Где: {item['place']}")
+    if item.get("link"):
+        lines.append(f"Ссылка: {item['link']}")
+    return "\n".join(lines)
+
+
+def build_afisha_list_button_text(item: dict[str, Any]) -> str:
+    return f"{format_event_dt(item)} · {item['title']}"
+
+
+def get_actual_afisha_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    now = datetime.now()
+    actual_items = [item for item in items if is_event_actual(item, now)]
+    return sort_events(actual_items)
+
+
+def afisha_empty_list_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("➕ Добавить событие", callback_data="add|afisha")],
+            [InlineKeyboardButton("📅 Календарь", callback_data="calendar_menu")],
+            [InlineKeyboardButton("⬅️ Назад", callback_data="menu|afisha")],
+        ]
+    )
+
+
+def apply_afisha_status_update(item: dict[str, Any], new_status: str) -> None:
+    if new_status != "active":
+        item["notified_24h"] = True
 
 
 async def add_event_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
