@@ -27,634 +27,82 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-DATA_FILE = Path("data.json")
-PAGE_SIZE = 10
-NOTIFY_LOOKAHEAD_MIN = 23 * 60
-NOTIFY_LOOKAHEAD_MAX = 25 * 60
-NOTIFICATION_CHECK_INTERVAL = 60 * 60
-
-# Заполни usernames без @
-ALLOWED_USERS = {
-    "wp_bvv": {"name": "Вова", "wishlist_owner": "vova", "gender": "male"},
-    "privetnormalno": {"name": "Саша", "wishlist_owner": "sasha", "gender": "female"},
-}
-
-KNOWN_WISHLIST_OWNERS = {"vova", "sasha", "unknown"}
-
-MENU, SECTION = range(2)
-(
-    ADDING_FILM_TITLE,
-    ADDING_FILM_COMMENT,
-    ADDING_FILM_SASHA_RATING,
-    ADDING_FILM_VOVA_RATING,
-    ADDING_WISHLIST_TITLE,
-    ADDING_WISHLIST_LINK,
-    ADDING_WISHLIST_COMMENT,
-    ADDING_LEISURE_TITLE,
-    ADDING_LEISURE_COMMENT,
-    ADDING_EVENT_TITLE,
-    ADDING_EVENT_PLACE,
+from bot.config import (
+    ALLOWED_USERS,
+    BACKLOG_STATUSES,
+    FILM_STATUSES,
+    NOTIFICATION_CHECK_INTERVAL,
+    NOTIFY_LOOKAHEAD_MAX,
+    NOTIFY_LOOKAHEAD_MIN,
+    PAGE_SIZE,
+    SECTION_CONFIG,
+)
+from bot.states import (
+    ADDING_BACKLOG_DESCRIPTION,
+    ADDING_BACKLOG_TITLE,
+    ADDING_CALENDAR_EVENT_COMMENT,
+    ADDING_CALENDAR_EVENT_DATE,
+    ADDING_CALENDAR_EVENT_END_TIME,
+    ADDING_CALENDAR_EVENT_START_TIME,
+    ADDING_CALENDAR_EVENT_TITLE,
     ADDING_EVENT_DATE,
-    ADDING_EVENT_TIME,
     ADDING_EVENT_END_DATE,
     ADDING_EVENT_END_TIME,
     ADDING_EVENT_LINK,
-    ADDING_CALENDAR_EVENT_TITLE,
-    ADDING_CALENDAR_EVENT_DATE,
-    ADDING_CALENDAR_EVENT_START_TIME,
-    ADDING_CALENDAR_EVENT_END_TIME,
-    ADDING_CALENDAR_EVENT_COMMENT,
-    ADDING_BACKLOG_TITLE,
-    ADDING_BACKLOG_DESCRIPTION,
-) = range(10, 33)
-
-FILM_STATUSES = ["want", "watched"]
-WISHLIST_STATUSES = ["active", "gifted"]
-LEISURE_STATUSES = ["want", "done"]
-AFISHA_STATUSES = ["active", "done"]
-BACKLOG_STATUSES = ["todo", "done"]
-
-SECTION_CONFIG: dict[str, dict[str, Any]] = {
-    "films": {
-        "title": "🎬 Фильмы",
-        "empty_text": "Пока пусто. Добавьте первый фильм.",
-        "statuses": FILM_STATUSES,
-        "status_labels": {
-            "want": "Непросмотренные",
-            "watched": "Просмотренные",
-        },
-    },
-    "wishlist": {
-        "title": "🎁 Wishlist",
-        "empty_text": "Пока пусто.",
-        "statuses": WISHLIST_STATUSES,
-        "status_labels": {
-            "active": "Актуально",
-            "gifted": "Подарено",
-        },
-    },
-    "leisure": {
-        "title": "✨ Досуг",
-        "empty_text": "Пока пусто. Добавьте первую идею.",
-        "statuses": LEISURE_STATUSES,
-        "status_labels": {
-            "want": "Хотим сделать",
-            "done": "Сделано",
-        },
-    },
-    "afisha": {
-        "title": "🗓 Афиша",
-        "empty_text": "Пока нет актуальных событий.",
-        "statuses": AFISHA_STATUSES,
-        "status_labels": {
-            "active": "Не выполнено",
-            "done": "Выполнено",
-        },
-    },
-    "backlog": {
-        "title": "🧩 Бэклог",
-        "empty_text": "Пока фич нет.",
-        "statuses": BACKLOG_STATUSES,
-        "status_labels": {
-            "todo": "К реализации",
-            "done": "Реализовано",
-        },
-    },
-}
-
-WISHLIST_OWNER_LABELS = {
-    "vova": "Вова",
-    "sasha": "Саша",
-    "unknown": "Без владельца",
-}
-
-
-class JsonStorage:
-    def __init__(self, path: Path):
-        self.path = path
-        self._lock = RLock()
-
-    def default_data(self) -> dict[str, Any]:
-        return {
-            "films": [],
-            "wishlist": [],
-            "leisure": [],
-            "afisha": [],
-            "backlog": [],
-            "calendars": {
-                "vova": [],
-                "sasha": [],
-            },
-            "meta": {
-                "user_chats": {},
-            },
-        }
-
-    def load(self) -> dict[str, Any]:
-        with self._lock:
-            if not self.path.exists():
-                return self.default_data()
-
-            try:
-                with self.path.open("r", encoding="utf-8") as file:
-                    raw_data = json.load(file)
-            except (json.JSONDecodeError, OSError):
-                logger.exception("Не удалось прочитать data.json, использую пустую структуру")
-                return self.default_data()
-
-            return self._normalize_data(raw_data)
-
-    def save(self, data: dict[str, Any]) -> None:
-        normalized = self._normalize_data(data)
-        with self._lock:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            with tempfile.NamedTemporaryFile(
-                "w",
-                encoding="utf-8",
-                dir=str(self.path.parent),
-                delete=False,
-            ) as temp_file:
-                json.dump(normalized, temp_file, ensure_ascii=False, indent=2)
-                temp_name = temp_file.name
-            os.replace(temp_name, self.path)
-
-    def update(self, mutator):
-        with self._lock:
-            data = self.load()
-            result = mutator(data)
-            self.save(data)
-            return result, data
-
-    def _normalize_data(self, raw_data: Any) -> dict[str, Any]:
-        data = self.default_data()
-        if not isinstance(raw_data, dict):
-            return data
-
-        for raw_item in raw_data.get("films", []):
-            item = normalize_film(raw_item)
-            if item:
-                data["films"].append(item)
-
-        for raw_item in raw_data.get("wishlist", []):
-            item = normalize_wishlist(raw_item)
-            if item:
-                data["wishlist"].append(item)
-
-        for raw_item in raw_data.get("leisure", []):
-            item = normalize_leisure(raw_item)
-            if item:
-                data["leisure"].append(item)
-
-        for raw_item in raw_data.get("afisha", []):
-            item = normalize_event(raw_item)
-            if item:
-                data["afisha"].append(item)
-
-        for raw_item in raw_data.get("backlog", []):
-            item = normalize_backlog_item(raw_item)
-            if item:
-                data["backlog"].append(item)
-
-        raw_calendars = raw_data.get("calendars") if isinstance(raw_data.get("calendars"), dict) else {}
-        for owner in ("vova", "sasha"):
-            for raw_item in raw_calendars.get(owner, []):
-                item = normalize_calendar_event(raw_item, owner)
-                if item:
-                    data["calendars"][owner].append(item)
-
-        meta = raw_data.get("meta") if isinstance(raw_data.get("meta"), dict) else {}
-        user_chats = meta.get("user_chats") if isinstance(meta.get("user_chats"), dict) else {}
-        data["meta"]["user_chats"] = {
-            str(username): chat_id
-            for username, chat_id in user_chats.items()
-            if isinstance(username, str) and isinstance(chat_id, int)
-        }
-        return data
-
-
-storage = JsonStorage(DATA_FILE)
-
-
-def make_id() -> str:
-    return uuid.uuid4().hex[:8]
-
-
-def normalize_rating(value: Any) -> int | None:
-    if value in (None, "", "-"):
-        return None
-    try:
-        rating = int(value)
-    except (TypeError, ValueError):
-        return None
-    if 1 <= rating <= 10:
-        return rating
-    return None
-
-
-def calculate_average_rating(item: dict[str, Any]) -> float | None:
-    ratings = [value for value in [item.get("sasha_rating"), item.get("vova_rating")] if isinstance(value, int)]
-    if len(ratings) == 2:
-        return sum(ratings) / 2
-    legacy_rating = item.get("legacy_rating")
-    if isinstance(legacy_rating, int):
-        return float(legacy_rating)
-    return None
-
-
-def format_average_rating(item: dict[str, Any]) -> str | None:
-    average = calculate_average_rating(item)
-    if average is None:
-        return None
-    if average.is_integer():
-        return str(int(average))
-    return f"{average:.1f}"
-
-
-def parse_event_dt(item: dict[str, Any]) -> datetime | None:
-    date_raw = item.get("date")
-    time_raw = item.get("time")
-    if not date_raw or not time_raw:
-        return None
-    try:
-        return datetime.strptime(f"{date_raw} {time_raw}", "%Y-%m-%d %H:%M")
-    except ValueError:
-        return None
-
-
-def parse_event_end_dt(item: dict[str, Any]) -> datetime | None:
-    end_date_raw = item.get("end_date") or item.get("date")
-    end_time_raw = item.get("end_time") or item.get("time")
-    if not end_date_raw or not end_time_raw:
-        return None
-    try:
-        return datetime.strptime(f"{end_date_raw} {end_time_raw}", "%Y-%m-%d %H:%M")
-    except ValueError:
-        return None
-
-
-def event_effective_end_dt(item: dict[str, Any]) -> datetime | None:
-    return parse_event_end_dt(item) or parse_event_dt(item)
-
-
-def format_event_dt(item: dict[str, Any]) -> str:
-    start_dt = parse_event_dt(item)
-    if not start_dt:
-        return "Дата не указана"
-    end_dt = parse_event_end_dt(item)
-    if end_dt and end_dt > start_dt:
-        if start_dt.date() == end_dt.date():
-            return f"{start_dt.strftime('%d.%m.%Y %H:%M')} – {end_dt.strftime('%H:%M')}"
-        return f"{start_dt.strftime('%d.%m.%Y %H:%M')} – {end_dt.strftime('%d.%m.%Y %H:%M')}"
-    return start_dt.strftime("%d.%m.%Y %H:%M")
-
-
-def is_event_actual(item: dict[str, Any], now: datetime | None = None) -> bool:
-    now = now or datetime.now()
-    event_end_dt = event_effective_end_dt(item)
-    if not event_end_dt:
-        return False
-    return item.get("status") == "active" and event_end_dt >= now
-
-
-def sort_events(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return sorted(items, key=lambda item: parse_event_dt(item) or datetime.max)
-
-
-def parse_calendar_event_start_dt(item: dict[str, Any]) -> datetime | None:
-    date_raw = item.get("date")
-    start_time_raw = item.get("start_time")
-    if not date_raw or not start_time_raw:
-        return None
-    try:
-        return datetime.strptime(f"{date_raw} {start_time_raw}", "%Y-%m-%d %H:%M")
-    except ValueError:
-        return None
-
-
-def parse_calendar_event_end_dt(item: dict[str, Any]) -> datetime | None:
-    date_raw = item.get("date")
-    start_dt = parse_calendar_event_start_dt(item)
-    end_time_raw = item.get("end_time") or ""
-    if end_time_raw and date_raw:
-        try:
-            end_dt = datetime.strptime(f"{date_raw} {end_time_raw}", "%Y-%m-%d %H:%M")
-            if start_dt and end_dt > start_dt:
-                return end_dt
-        except ValueError:
-            return None
-    return start_dt
-
-
-def is_calendar_event_actual(item: dict[str, Any], now: datetime | None = None) -> bool:
-    now = now or datetime.now()
-    end_dt = parse_calendar_event_end_dt(item)
-    if not end_dt:
-        return False
-    return end_dt >= now
-
-
-def sort_calendar_events(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return sorted(items, key=lambda item: parse_calendar_event_start_dt(item) or datetime.max)
-
-
-def format_calendar_event_range(item: dict[str, Any]) -> str:
-    start_dt = parse_calendar_event_start_dt(item)
-    if not start_dt:
-        return "Дата не указана"
-    end_time = item.get("end_time") or ""
-    if end_time:
-        return f"{start_dt.strftime('%d.%m.%Y')} {item['start_time']}–{end_time}"
-    return start_dt.strftime("%d.%m.%Y %H:%M")
-
-
-def calendar_preview_text(item: dict[str, Any]) -> str:
-    start_dt = parse_calendar_event_start_dt(item)
-    if not start_dt:
-        return item.get("title") or "Событие"
-    return f"{start_dt.strftime('%d.%m.%Y %H:%M')} · {item['title']}"
-
-
-def get_calendar_items(data: dict[str, Any], owner: str, include_past: bool = False) -> list[dict[str, Any]]:
-    raw = data.get("calendars", {}).get(owner, [])
-    items = list(raw)
-    if not include_past:
-        now = datetime.now()
-        items = [item for item in items if is_calendar_event_actual(item, now)]
-    return sort_calendar_events(items)
-
-def normalize_film(item: Any) -> dict[str, Any] | None:
-    if isinstance(item, str):
-        return {
-            "id": make_id(),
-            "title": item,
-            "status": "want",
-            "added_by": "unknown",
-            "comment": "",
-            "sasha_rating": None,
-            "vova_rating": None,
-            "legacy_rating": None,
-        }
-    if isinstance(item, dict):
-        status = item.get("status", "want")
-        if status not in FILM_STATUSES:
-            status = "want"
-        sasha_rating = normalize_rating(item.get("sasha_rating"))
-        vova_rating = normalize_rating(item.get("vova_rating"))
-        legacy_rating = normalize_rating(item.get("legacy_rating"))
-        old_rating = normalize_rating(item.get("rating"))
-        if legacy_rating is None and old_rating is not None and sasha_rating is None and vova_rating is None:
-            legacy_rating = old_rating
-        return {
-            "id": str(item.get("id") or make_id()),
-            "title": str(item.get("title") or "Без названия"),
-            "status": status,
-            "added_by": str(item.get("added_by") or "unknown"),
-            "comment": str(item.get("comment") or ""),
-            "sasha_rating": sasha_rating,
-            "vova_rating": vova_rating,
-            "legacy_rating": legacy_rating,
-        }
-    return None
-
-
-def normalize_wishlist(item: Any) -> dict[str, Any] | None:
-    if isinstance(item, str):
-        return {
-            "id": make_id(),
-            "title": item,
-            "link": "",
-            "comment": "",
-            "status": "active",
-            "owner": "unknown",
-            "reserved_by": "",
-        }
-    if isinstance(item, dict):
-        status = item.get("status", "active")
-        if status not in WISHLIST_STATUSES:
-            status = "active"
-        owner = item.get("owner", "unknown")
-        if owner not in KNOWN_WISHLIST_OWNERS:
-            owner = "unknown"
-        return {
-            "id": str(item.get("id") or make_id()),
-            "title": str(item.get("title") or "Без названия"),
-            "link": str(item.get("link") or ""),
-            "comment": str(item.get("comment") or ""),
-            "status": status,
-            "owner": owner,
-            "reserved_by": str(item.get("reserved_by") or ""),
-        }
-    return None
-
-
-def normalize_leisure(item: Any) -> dict[str, Any] | None:
-    if isinstance(item, str):
-        return {
-            "id": make_id(),
-            "title": item,
-            "comment": "",
-            "status": "want",
-        }
-    if isinstance(item, dict):
-        status = item.get("status", "want")
-        if status not in LEISURE_STATUSES:
-            status = "want"
-        return {
-            "id": str(item.get("id") or make_id()),
-            "title": str(item.get("title") or "Без названия"),
-            "comment": str(item.get("comment") or ""),
-            "status": status,
-        }
-    return None
-
-
-def normalize_event(item: Any) -> dict[str, Any] | None:
-    if isinstance(item, dict):
-        status = item.get("status", "active")
-        if status not in AFISHA_STATUSES:
-            status = "active"
-        normalized = {
-            "id": str(item.get("id") or make_id()),
-            "title": str(item.get("title") or "Без названия"),
-            "place": str(item.get("place") or ""),
-            "date": str(item.get("date") or ""),
-            "time": str(item.get("time") or ""),
-            "end_date": str(item.get("end_date") or ""),
-            "end_time": str(item.get("end_time") or ""),
-            "link": str(item.get("link") or ""),
-            "status": status,
-            "notified_24h": bool(item.get("notified_24h", False)),
-        }
-        if parse_event_dt(normalized) is None:
-            return None
-        start_dt = parse_event_dt(normalized)
-        end_dt = parse_event_end_dt(normalized)
-        if normalized["end_date"] or normalized["end_time"]:
-            if not normalized["end_date"]:
-                normalized["end_date"] = normalized["date"]
-            if not normalized["end_time"]:
-                normalized["end_time"] = normalized["time"]
-            end_dt = parse_event_end_dt(normalized)
-            if not end_dt or (start_dt and end_dt < start_dt):
-                return None
-        return normalized
-    return None
-
-
-def normalize_backlog_item(item: Any) -> dict[str, Any] | None:
-    if isinstance(item, str):
-        return {
-            "id": make_id(),
-            "title": item,
-            "description": "",
-            "status": "todo",
-        }
-    if isinstance(item, dict):
-        status = item.get("status", "todo")
-        if status not in BACKLOG_STATUSES:
-            status = "todo"
-        return {
-            "id": str(item.get("id") or make_id()),
-            "title": str(item.get("title") or "Без названия"),
-            "description": str(item.get("description") or ""),
-            "status": status,
-        }
-    return None
-
-
-def normalize_calendar_event(item: Any, owner: str | None = None) -> dict[str, Any] | None:
-    if not isinstance(item, dict):
-        return None
-    event_owner = str(item.get("owner") or owner or "")
-    if event_owner not in {"vova", "sasha"}:
-        return None
-    normalized = {
-        "id": str(item.get("id") or make_id()),
-        "owner": event_owner,
-        "title": str(item.get("title") or "Без названия"),
-        "date": str(item.get("date") or ""),
-        "start_time": str(item.get("start_time") or item.get("time") or ""),
-        "end_time": str(item.get("end_time") or ""),
-        "comment": str(item.get("comment") or ""),
-        "notified_24h": bool(item.get("notified_24h", False)),
-    }
-    if parse_calendar_event_start_dt(normalized) is None:
-        return None
-    end_time = normalized.get("end_time") or ""
-    if end_time:
-        try:
-            start_dt = datetime.strptime(f"{normalized['date']} {normalized['start_time']}", "%Y-%m-%d %H:%M")
-            end_dt = datetime.strptime(f"{normalized['date']} {end_time}", "%Y-%m-%d %H:%M")
-        except ValueError:
-            return None
-        if end_dt <= start_dt:
-            return None
-    return normalized
-
-
-def get_username(update: Update) -> str:
-    user = update.effective_user
-    if not user or not user.username:
-        return ""
-    return user.username
-
-
-def get_allowed_profile(update: Update) -> dict[str, str] | None:
-    return ALLOWED_USERS.get(get_username(update))
-
-
-async def ensure_access(update: Update) -> bool:
-    profile = get_allowed_profile(update)
-    if profile:
-        return True
-    text = (
-        "У этого бота закрытый доступ.\n\n"
-        "Попроси владельца добавить твой Telegram username в ALLOWED_USERS."
-    )
-    if update.message:
-        await update.message.reply_text(text)
-    elif update.callback_query:
-        await update.callback_query.answer("Нет доступа", show_alert=True)
-    return False
-
-
-def get_user_name(update: Update) -> str:
-    profile = get_allowed_profile(update)
-    if profile:
-        return profile["name"]
-    user = update.effective_user
-    if not user:
-        return "unknown"
-    return user.first_name or user.username or str(user.id)
-
-
-def get_gender_by_username(username: str) -> str:
-    profile = ALLOWED_USERS.get(username) or {}
-    return str(profile.get("gender") or "unknown")
-
-
-def reminder_forget_word(username: str) -> str:
-    gender = get_gender_by_username(username)
-    if gender == "female":
-        return "забыла"
-    return "забыл"
-
-
-def get_wishlist_owner_by_user(update: Update) -> str:
-    profile = get_allowed_profile(update)
-    return profile["wishlist_owner"] if profile else "unknown"
-
-
-def get_other_wishlist_owner(update: Update) -> str:
-    current_owner = get_wishlist_owner_by_user(update)
-    if current_owner == "vova":
-        return "sasha"
-    if current_owner == "sasha":
-        return "vova"
-    return "unknown"
-
-
-def owner_label(owner: str) -> str:
-    return WISHLIST_OWNER_LABELS.get(owner, owner)
-
-
-def item_status_label(section: str, status: str) -> str:
-    return SECTION_CONFIG[section]["status_labels"].get(status, status)
-
-
-def find_item(items: list[dict[str, Any]], item_id: str) -> dict[str, Any] | None:
-    for item in items:
-        if item.get("id") == item_id:
-            return item
-    return None
-
-
-def delete_item_by_id(items: list[dict[str, Any]], item_id: str) -> bool:
-    for index, item in enumerate(items):
-        if item.get("id") == item_id:
-            del items[index]
-            return True
-    return False
-
-
-def upsert_user_chat_id(data: dict[str, Any], username: str, chat_id: int) -> None:
-    if not username or not isinstance(chat_id, int):
-        return
-    data.setdefault("meta", {}).setdefault("user_chats", {})[username] = chat_id
-
-
-async def remember_current_chat(update: Update) -> None:
-    username = get_username(update)
-    chat = update.effective_chat
-    if not username or not chat:
-        return
-
-    def mutator(data: dict[str, Any]):
-        upsert_user_chat_id(data, username, chat.id)
-        return None
-
-    storage.update(mutator)
-
+    ADDING_EVENT_PLACE,
+    ADDING_EVENT_TIME,
+    ADDING_EVENT_TITLE,
+    ADDING_FILM_COMMENT,
+    ADDING_FILM_SASHA_RATING,
+    ADDING_FILM_TITLE,
+    ADDING_FILM_VOVA_RATING,
+    ADDING_LEISURE_COMMENT,
+    ADDING_LEISURE_TITLE,
+    ADDING_WISHLIST_COMMENT,
+    ADDING_WISHLIST_LINK,
+    ADDING_WISHLIST_TITLE,
+    MENU,
+    SECTION,
+)
+from bot.storage import (
+    delete_item_by_id,
+    find_item,
+    format_average_rating,
+    format_calendar_event_range,
+    format_event_dt,
+    get_calendar_items,
+    is_calendar_event_actual,
+    is_event_actual,
+    make_id,
+    normalize_backlog_item,
+    normalize_calendar_event,
+    normalize_event,
+    normalize_film,
+    normalize_leisure,
+    normalize_rating,
+    normalize_wishlist,
+    parse_calendar_event_end_dt,
+    parse_calendar_event_start_dt,
+    parse_event_dt,
+    sort_calendar_events,
+    sort_events,
+    storage,
+    calendar_preview_text,
+)
+from bot.utils import (
+    clamp_page,
+    ensure_access,
+    get_other_wishlist_owner,
+    get_user_name,
+    get_username,
+    get_wishlist_owner_by_user,
+    item_status_label,
+    owner_label,
+    paginate_items,
+    remember_current_chat,
+    reminder_forget_word,
+    upsert_user_chat_id,
+)
 
 def section_menu_keyboard(section: str) -> InlineKeyboardMarkup:
     if section == "films":
@@ -715,21 +163,6 @@ def wishlist_owner_keyboard(update: Update) -> InlineKeyboardMarkup:
             [InlineKeyboardButton("⬅️ Назад", callback_data="menu|wishlist")],
         ]
     )
-
-
-def clamp_page(page: int, total_items: int) -> int:
-    if total_items <= 0:
-        return 0
-    last_page = (total_items - 1) // PAGE_SIZE
-    return max(0, min(page, last_page))
-
-
-def paginate_items(items: list[dict[str, Any]], page: int) -> tuple[list[dict[str, Any]], int, int]:
-    page = clamp_page(page, len(items))
-    start = page * PAGE_SIZE
-    end = start + PAGE_SIZE
-    total_pages = max(1, (len(items) + PAGE_SIZE - 1) // PAGE_SIZE)
-    return items[start:end], page, total_pages
 
 
 def build_list_callback(section: str, page: int, owner: str | None = None, status_filter: str | None = None) -> str:
