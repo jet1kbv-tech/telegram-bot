@@ -13,6 +13,14 @@ from bot.utils import (
 )
 
 
+def main_menu_button() -> InlineKeyboardButton:
+    return InlineKeyboardButton("🏠 В меню", callback_data="menu:main")
+
+
+def main_menu_row() -> list[InlineKeyboardButton]:
+    return [main_menu_button()]
+
+
 def section_menu_keyboard(section: str) -> InlineKeyboardMarkup:
     if section == "films":
         rows = [
@@ -43,7 +51,7 @@ def section_menu_keyboard(section: str) -> InlineKeyboardMarkup:
             [InlineKeyboardButton("📋 Посмотреть список", callback_data=f"list|{section}|0")],
         ]
 
-    rows.append([InlineKeyboardButton("⬅️ Назад в меню", callback_data="main")])
+    rows.append(main_menu_row())
     return InlineKeyboardMarkup(rows)
 
 
@@ -71,6 +79,7 @@ def wishlist_owner_keyboard(update: Update) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(f"📋 Вишлист: {current_name}", callback_data=f"list|wishlist|{current_owner}|0")],
             [InlineKeyboardButton(f"📋 Вишлист: {other_name}", callback_data=f"list|wishlist|{other_owner}|0")],
             [InlineKeyboardButton("⬅️ Назад", callback_data="menu|wishlist")],
+            main_menu_row(),
         ]
     )
 
@@ -153,6 +162,7 @@ def list_keyboard(
     else:
         rows.append([InlineKeyboardButton("➕ Добавить", callback_data=f"add|{section}")])
         rows.append([InlineKeyboardButton("⬅️ Назад", callback_data=f"menu|{section}")])
+    rows.append(main_menu_row())
 
     return InlineKeyboardMarkup(rows)
 
@@ -209,7 +219,7 @@ def item_keyboard(
             [InlineKeyboardButton(toggle_text, callback_data=status_callback)],
             [InlineKeyboardButton("🗑️ Удалить", callback_data=delete_confirm_callback)],
             [InlineKeyboardButton("⬅️ К списку", callback_data=back_callback)],
-            [InlineKeyboardButton("🏠 В меню", callback_data="main")],
+            [InlineKeyboardButton("🏠 В меню", callback_data="menu:main")],
         ]
     )
 
@@ -234,5 +244,6 @@ def delete_confirm_keyboard(
         [
             [InlineKeyboardButton("✅ Да, удалить", callback_data=delete_callback)],
             [InlineKeyboardButton("↩️ Нет, вернуться", callback_data=back_callback)],
+            main_menu_row(),
         ]
     )

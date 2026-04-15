@@ -64,7 +64,7 @@ def calendar_owner_menu_keyboard() -> InlineKeyboardMarkup:
         [
             [InlineKeyboardButton("📅 Календарь Саши", callback_data="cal_list|sasha|0")],
             [InlineKeyboardButton("📅 Календарь Вовы", callback_data="cal_list|vova|0")],
-            [InlineKeyboardButton("⬅️ Назад в меню", callback_data="main")],
+            [InlineKeyboardButton("🏠 В меню", callback_data="menu:main")],
         ]
     )
 
@@ -105,7 +105,7 @@ def calendar_owner_keyboard(owner: str, items: list[dict[str, Any]], page: int) 
 
     rows.append([InlineKeyboardButton("➕ Добавить событие", callback_data=f"cal_add|{owner}")])
     rows.append([InlineKeyboardButton("⬅️ К выбору календаря", callback_data="calendar_menu")])
-    rows.append([InlineKeyboardButton("🏠 В меню", callback_data="main")])
+    rows.append([InlineKeyboardButton("🏠 В меню", callback_data="menu:main")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -125,7 +125,7 @@ def calendar_event_keyboard(owner: str, item_id: str, page: int) -> InlineKeyboa
         [
             [InlineKeyboardButton("🗑️ Удалить", callback_data=f"cal_delete_confirm|{owner}|{item_id}|{page}")],
             [InlineKeyboardButton("⬅️ К списку", callback_data=f"cal_list|{owner}|{page}")],
-            [InlineKeyboardButton("🏠 В меню", callback_data="main")],
+            [InlineKeyboardButton("🏠 В меню", callback_data="menu:main")],
         ]
     )
 
@@ -135,6 +135,7 @@ def calendar_event_delete_confirm_keyboard(owner: str, item_id: str, page: int) 
         [
             [InlineKeyboardButton("✅ Да, удалить", callback_data=f"cal_delete|{owner}|{item_id}|{page}")],
             [InlineKeyboardButton("↩️ Нет, вернуться", callback_data=f"cal_view|{owner}|{item_id}|{page}")],
+            [InlineKeyboardButton("🏠 В меню", callback_data="menu:main")],
         ]
     )
 
@@ -182,7 +183,7 @@ async def handle_calendar_delete_confirm(update: Update, owner: str, item_id: st
         await safe_edit_message(
             query,
             "Не удалось найти событие для удаления.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 В меню", callback_data="main")]]),
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 В меню", callback_data="menu:main")]]),
         )
         return SECTION
     await safe_edit_message(
@@ -203,7 +204,7 @@ async def handle_calendar_delete(update: Update, owner: str, item_id: str, reque
         await safe_edit_message(
             query,
             "Не удалось удалить: событие не найдено.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 В меню", callback_data="main")]]),
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 В меню", callback_data="menu:main")]]),
         )
         return SECTION
     delete_item_by_id(items, item_id)

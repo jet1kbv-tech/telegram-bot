@@ -65,7 +65,7 @@ async def show_random_film(update: Update) -> int:
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("🎲 Выбрать ещё", callback_data="random|films")],
             [InlineKeyboardButton("📋 Все непросмотренные", callback_data="list|films|want|0")],
-            [InlineKeyboardButton("🏠 В меню", callback_data="main")],
+            [InlineKeyboardButton("🏠 В меню", callback_data="menu:main")],
         ]),
     )
     return SECTION

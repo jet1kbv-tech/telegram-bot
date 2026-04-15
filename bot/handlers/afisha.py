@@ -75,6 +75,7 @@ def afisha_empty_list_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton("➕ Добавить событие", callback_data="add|afisha")],
             [InlineKeyboardButton("📅 Календарь", callback_data="calendar_menu")],
             [InlineKeyboardButton("⬅️ Назад", callback_data="menu|afisha")],
+            [InlineKeyboardButton("🏠 В меню", callback_data="menu:main")],
         ]
     )
 
