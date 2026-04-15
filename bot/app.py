@@ -41,6 +41,7 @@ from bot.handlers.films import (
     configure_films_handlers,
 )
 from bot.handlers.leisure import add_leisure_comment, add_leisure_title, configure_leisure_handlers
+from bot.handlers.spark import add_spark_description, add_spark_title, configure_spark_handlers, spark_callback_router
 from bot.handlers.places import (
     add_city_country,
     add_city_name,
@@ -82,6 +83,8 @@ from bot.states import (
     ADDING_FILM_VOVA_RATING,
     ADDING_LEISURE_COMMENT,
     ADDING_LEISURE_TITLE,
+    ADDING_SPARK_DESCRIPTION,
+    ADDING_SPARK_TITLE,
     CITY_ADD_COUNTRY,
     CITY_ADD_NAME,
     CITY_PLACE_ADD_COMMENT,
@@ -142,6 +145,7 @@ def build_app() -> Application:
         main_menu_keyboard=main_menu_keyboard,
     )
     configure_leisure_handlers(build_item_text=build_item_text, item_keyboard=item_keyboard)
+    configure_spark_handlers(safe_edit_message=safe_edit_message)
     configure_wishlist_handlers(
         build_item_text=build_item_text,
         item_keyboard=item_keyboard,
@@ -182,6 +186,7 @@ def build_app() -> Application:
                 CallbackQueryHandler(back_to_main, pattern=r"^(main|menu:main)$"),
                 CallbackQueryHandler(menu_router, pattern=r"^menu\|(films|wishlist|leisure|afisha|backlog)$"),
                 CallbackQueryHandler(places_callback_router, pattern=r"^places:"),
+                CallbackQueryHandler(spark_callback_router, pattern=r"^spark:"),
                 CallbackQueryHandler(section_router),
             ],
             SECTION: [
@@ -190,6 +195,7 @@ def build_app() -> Application:
                 CallbackQueryHandler(back_to_main, pattern=r"^(main|menu:main)$"),
                 CallbackQueryHandler(menu_router, pattern=r"^menu\|(films|wishlist|leisure|afisha|backlog)$"),
                 CallbackQueryHandler(places_callback_router, pattern=r"^places:"),
+                CallbackQueryHandler(spark_callback_router, pattern=r"^spark:"),
                 CallbackQueryHandler(section_router),
             ],
             ADDING_FILM_TITLE: text_state(add_film_title),
@@ -208,6 +214,8 @@ def build_app() -> Application:
             ADDING_WISHLIST_COMMENT: text_state(add_wishlist_comment),
             ADDING_LEISURE_TITLE: text_state(add_leisure_title),
             ADDING_LEISURE_COMMENT: text_state(add_leisure_comment),
+            ADDING_SPARK_TITLE: text_state(add_spark_title),
+            ADDING_SPARK_DESCRIPTION: text_state(add_spark_description),
             ADDING_EVENT_TITLE: text_state(add_event_title),
             ADDING_EVENT_PLACE: text_state(add_event_place),
             ADDING_EVENT_DATE: text_state(add_event_date),
