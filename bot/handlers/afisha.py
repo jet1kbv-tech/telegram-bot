@@ -146,6 +146,7 @@ async def edit_afisha_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     item.update(normalized_item)
     if original_date != date_raw:
         item["notified_24h"] = False
+        item["notified_morning"] = False
         remove_afisha_from_calendars(data, item_id)
     project_afisha_to_calendars(data, item)
     data["afisha"] = sort_events(data.get("afisha", []))
@@ -203,6 +204,7 @@ async def edit_afisha_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     item.update(normalized_item)
     if original_time != time_raw:
         item["notified_24h"] = False
+        item["notified_morning"] = False
         remove_afisha_from_calendars(data, item_id)
     project_afisha_to_calendars(data, item)
     data["afisha"] = sort_events(data.get("afisha", []))
@@ -353,6 +355,7 @@ async def add_event_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         "link": link,
         "status": "active",
         "notified_24h": False,
+        "notified_morning": False,
     }
     normalized_item = normalize_event(item)
     if normalized_item is None:
