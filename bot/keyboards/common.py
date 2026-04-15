@@ -55,15 +55,25 @@ def section_menu_keyboard(section: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-def main_menu_keyboard() -> InlineKeyboardMarkup:
+def activity_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton("🎬 Фильмы", callback_data="menu|films")],
-            [InlineKeyboardButton("🎁 Вишлист", callback_data="menu|wishlist")],
             [InlineKeyboardButton("✨ Досуг", callback_data="menu|leisure")],
+            [InlineKeyboardButton("📍 В Москве", callback_data="places:moscow")],
+            [InlineKeyboardButton("🌍 Города", callback_data="places:cities:0")],
+            [InlineKeyboardButton("🏠 В меню", callback_data="menu:main")],
+        ]
+    )
+
+
+def main_menu_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("Чем займемся", callback_data="activity:menu")],
+            [InlineKeyboardButton("🎁 Вишлист", callback_data="menu|wishlist")],
             [InlineKeyboardButton("🗓 Афиша", callback_data="menu|afisha")],
             [InlineKeyboardButton("📅 Календарь", callback_data="calendar_menu")],
-            [InlineKeyboardButton("📍 Места", callback_data="places:menu")],
             [InlineKeyboardButton("🧩 Бэклог", callback_data="menu|backlog")],
         ]
     )

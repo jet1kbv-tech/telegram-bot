@@ -139,6 +139,7 @@ from bot.keyboards.common import (
     delete_confirm_keyboard,
     item_keyboard,
     list_keyboard,
+    activity_menu_keyboard,
     main_menu_keyboard,
     section_menu_keyboard,
     wishlist_owner_keyboard,
@@ -374,6 +375,10 @@ async def section_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     if action in {"main", "menu:main"}:
         return await back_to_main(update, context)
+
+    if query.data == "activity:menu":
+        await safe_edit_message(query, "Чем займемся", reply_markup=activity_menu_keyboard())
+        return SECTION
 
     if action == "menu":
         section = parts[1]
