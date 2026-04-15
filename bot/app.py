@@ -1,11 +1,13 @@
 import logging
 import os
 
+from telegram import Update
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
     CommandHandler,
     ConversationHandler,
+    ContextTypes,
     MessageHandler,
     filters,
 )
@@ -86,6 +88,21 @@ from bot.ui.common import build_item_text
 logger = logging.getLogger(__name__)
 
 
+async def handle_application_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.exception("Unhandled exception while processing Telegram update.", exc_info=context.error)
+
+    if not isinstance(update, Update):
+        return
+
+    if update.effective_message is None:
+        return
+
+    try:
+        await update.effective_message.reply_text("Что-то пошло не так. Попробуй ещё раз.")
+    except Exception:
+        logger.exception("Failed to send generic error message to user.")
+
+
 def build_app() -> Application:
     token = os.getenv("BOT_TOKEN")
     if not token:
@@ -162,4 +179,5 @@ def build_app() -> Application:
 
     app.add_handler(CommandHandler("whoami", whoami))
     app.add_handler(conv_handler)
+    app.add_error_handler(handle_application_error)
     return app
