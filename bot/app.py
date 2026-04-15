@@ -19,6 +19,7 @@ from bot.handlers.afisha import (
     add_event_place,
     add_event_time,
     add_event_title,
+    configure_afisha_handlers,
 )
 from bot.handlers.backlog import add_backlog_description, add_backlog_title, configure_backlog_handlers
 from bot.handlers.calendar import (
@@ -106,6 +107,7 @@ def build_app() -> Application:
         item_keyboard=item_keyboard,
         notify_other_user_about_wishlist_item=notify_other_user_about_wishlist_item,
     )
+    configure_afisha_handlers(build_item_text=build_item_text, item_keyboard=item_keyboard)
 
     configure_calendar_handlers(
         safe_edit_message=safe_edit_message,

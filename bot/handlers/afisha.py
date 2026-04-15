@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Callable
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes, ConversationHandler
@@ -17,6 +17,33 @@ from bot.states import (
 from bot.storage import make_id, normalize_event, sort_events, storage
 from bot.storage import format_event_dt, is_event_actual
 from bot.utils import ensure_access, item_status_label, remember_current_chat
+
+
+
+_build_item_text: Callable[[str, dict[str, Any]], str] | None = None
+_item_keyboard: Callable[..., InlineKeyboardMarkup] | None = None
+
+
+def configure_afisha_handlers(
+    *,
+    build_item_text: Callable[[str, dict[str, Any]], str],
+    item_keyboard: Callable[..., InlineKeyboardMarkup],
+) -> None:
+    global _build_item_text, _item_keyboard
+    _build_item_text = build_item_text
+    _item_keyboard = item_keyboard
+
+
+def _require_build_item_text() -> Callable[[str, dict[str, Any]], str]:
+    if _build_item_text is None:
+        raise RuntimeError("Afisha handlers are not configured")
+    return _build_item_text
+
+
+def _require_item_keyboard() -> Callable[..., InlineKeyboardMarkup]:
+    if _item_keyboard is None:
+        raise RuntimeError("Afisha handlers are not configured")
+    return _item_keyboard
 
 
 def build_afisha_item_text(item: dict[str, Any]) -> str:
@@ -200,7 +227,8 @@ async def add_event_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         context.user_data.pop(key, None)
     context.user_data["active_section"] = "afisha"
 
-    from main import build_item_text, item_keyboard
+    build_item_text = _require_build_item_text()
+    item_keyboard = _require_item_keyboard()
 
     await update.message.reply_text(
         f"Событие сохранено:\n\n{build_item_text('afisha', normalized_item)}",
