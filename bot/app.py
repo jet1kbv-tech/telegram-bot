@@ -73,16 +73,15 @@ from bot.states import (
     SECTION,
 )
 
+from bot.keyboards.common import item_keyboard, main_menu_keyboard
 from bot.runtime import (
-    build_item_text,
     check_afisha_notifications,
-    item_keyboard,
-    main_menu_keyboard,
     menu_router,
     notify_other_user_about_wishlist_item,
     safe_edit_message,
     section_router,
 )
+from bot.ui.common import build_item_text
 
 logger = logging.getLogger(__name__)
 
