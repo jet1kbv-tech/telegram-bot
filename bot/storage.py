@@ -406,6 +406,7 @@ def normalize_event(item: Any) -> dict[str, Any] | None:
             "link": str(item.get("link") or ""),
             "status": status,
             "notified_24h": bool(item.get("notified_24h", False)),
+            "notified_morning": bool(item.get("notified_morning", False)),
         }
         if parse_event_dt(normalized) is None:
             return None

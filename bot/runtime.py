@@ -27,6 +27,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 from bot.config import (
+    AFISHA_MORNING_END_HOUR,
+    AFISHA_MORNING_START_HOUR,
     ALLOWED_USERS,
     BACKLOG_STATUSES,
     FILM_STATUSES,
@@ -328,6 +330,30 @@ async def check_afisha_notifications(context: ContextTypes.DEFAULT_TYPE) -> None
         event_dt = parse_event_dt(event)
         if not event_dt:
             continue
+
+        is_today = event_dt.date() == now.date()
+        in_morning_window = AFISHA_MORNING_START_HOUR <= now.hour < AFISHA_MORNING_END_HOUR
+        if is_today and in_morning_window and not event.get("notified_morning"):
+            for username, profile in ALLOWED_USERS.items():
+                chat_id = user_chats.get(username)
+                if not chat_id:
+                    continue
+                name = profile.get("name") or username
+                forget_word = reminder_forget_word(username)
+                text = (
+                    f"{name}, доброе утро! Ты же не {forget_word}, что сегодня у вас событие: {event['title']}\n"
+                    f"Когда: {format_event_dt(event)}"
+                )
+                if event.get("place"):
+                    text += f"\nГде: {event['place']}"
+                if event.get("link"):
+                    text += f"\nСсылка: {event['link']}"
+                try:
+                    await context.bot.send_message(chat_id=chat_id, text=text)
+                except TelegramError:
+                    logger.exception("Не удалось отправить утреннее напоминание для %s", username)
+            event["notified_morning"] = True
+            changed = True
 
         if event_dt <= now:
             continue
