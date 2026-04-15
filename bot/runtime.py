@@ -257,6 +257,53 @@ async def notify_other_user_about_wishlist_item(context: ContextTypes.DEFAULT_TY
         logger.exception("Не удалось отправить уведомление второму участнику")
 
 
+async def notify_other_user_about_calendar_item(context: ContextTypes.DEFAULT_TYPE, update: Update, item: dict[str, Any]) -> None:
+    if item.get("source") != "manual":
+        return
+
+    owner = str(item.get("owner") or "")
+    username = get_username(update)
+    other_username = next(
+        (
+            allowed_username
+            for allowed_username, profile in ALLOWED_USERS.items()
+            if allowed_username != username and profile.get("wishlist_owner") != owner
+        ),
+        None,
+    )
+    if not other_username:
+        return
+
+    data = storage.load()
+    chat_id = data.get("meta", {}).get("user_chats", {}).get(other_username)
+    if not chat_id:
+        logger.info("Не найден chat_id для %s — уведомление о календаре пропущено", other_username)
+        return
+
+    added_by = get_user_name(update)
+    date = str(item.get("date") or "")
+    start_time = str(item.get("start_time") or "")
+    end_time = str(item.get("end_time") or "")
+    time_range = f"{date} {start_time}".strip()
+    if end_time:
+        time_range = f"{time_range}–{end_time}".strip()
+    lines = [
+        "📅 Новые планы!",
+        "",
+        f"Календарь: {owner_label(owner)}",
+        f"Событие: {item.get('title', 'Без названия')}",
+        f"Когда: {time_range}",
+        f"Добавил(а): {added_by}",
+    ]
+    if item.get("comment"):
+        lines.append(f"Комментарий: {item['comment']}")
+
+    try:
+        await context.bot.send_message(chat_id=chat_id, text="\n".join(lines))
+    except TelegramError:
+        logger.exception("Не удалось отправить уведомление второму участнику о календарном событии")
+
+
 async def check_afisha_notifications(context: ContextTypes.DEFAULT_TYPE) -> None:
     data = storage.load()
     now = datetime.now()
@@ -632,6 +679,7 @@ def build_app() -> Application:
     configure_calendar_handlers(
         safe_edit_message=safe_edit_message,
         main_menu_keyboard=main_menu_keyboard,
+        notify_other_user_about_calendar_item=notify_other_user_about_calendar_item,
     )
 
     if app.job_queue is not None:
