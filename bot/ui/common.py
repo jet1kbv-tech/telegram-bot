@@ -75,7 +75,7 @@ def build_list_text(
 ) -> str:
     title = SECTION_CONFIG[section]["title"]
     if section == "wishlist" and owner:
-        title = f"🎁 Wishlist · {owner_label(owner)}"
+        title = f"🎁 Вишлист · {owner_label(owner)}"
     elif section == "films" and status_filter:
         title = f"🎬 Фильмы · {item_status_label(section, status_filter)}"
     elif section == "backlog" and status_filter:

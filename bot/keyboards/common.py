@@ -51,10 +51,11 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton("🎬 Фильмы", callback_data="menu|films")],
-            [InlineKeyboardButton("🎁 Wishlist", callback_data="menu|wishlist")],
+            [InlineKeyboardButton("🎁 Вишлист", callback_data="menu|wishlist")],
             [InlineKeyboardButton("✨ Досуг", callback_data="menu|leisure")],
             [InlineKeyboardButton("🗓 Афиша", callback_data="menu|afisha")],
             [InlineKeyboardButton("📅 Календарь", callback_data="calendar_menu")],
+            [InlineKeyboardButton("📍 Места", callback_data="places:menu")],
             [InlineKeyboardButton("🧩 Бэклог", callback_data="menu|backlog")],
         ]
     )

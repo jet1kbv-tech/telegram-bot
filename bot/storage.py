@@ -33,6 +33,13 @@ class JsonStorage:
             "leisure": [],
             "afisha": [],
             "backlog": [],
+            "places": {
+                "moscow": {
+                    "active": [],
+                    "visited": [],
+                },
+                "cities": [],
+            },
             "calendars": {
                 "vova": [],
                 "sasha": [],
@@ -106,6 +113,8 @@ class JsonStorage:
             item = normalize_backlog_item(raw_item)
             if item:
                 data["backlog"].append(item)
+
+        normalize_places_root(data, raw_data.get("places"))
 
         raw_calendars = raw_data.get("calendars") if isinstance(raw_data.get("calendars"), dict) else {}
         for owner in ("vova", "sasha"):
@@ -458,3 +467,73 @@ def normalize_calendar_event(item: Any, owner: str | None = None) -> dict[str, A
         if end_dt <= start_dt:
             return None
     return normalized
+
+
+def normalize_places_root(data: dict[str, Any], raw_places: Any) -> None:
+    places_data = data.setdefault("places", {})
+    moscow_data = places_data.setdefault("moscow", {"active": [], "visited": []})
+    moscow_data.setdefault("active", [])
+    moscow_data.setdefault("visited", [])
+    places_data.setdefault("cities", [])
+
+    if not isinstance(raw_places, dict):
+        return
+
+    raw_moscow = raw_places.get("moscow") if isinstance(raw_places.get("moscow"), dict) else {}
+    for raw_place in raw_moscow.get("active", []):
+        item = normalize_place(raw_place)
+        if item:
+            moscow_data["active"].append(item)
+    for raw_place in raw_moscow.get("visited", []):
+        item = normalize_place(raw_place)
+        if item:
+            moscow_data["visited"].append(item)
+
+    raw_cities = raw_places.get("cities") if isinstance(raw_places.get("cities"), list) else []
+    for raw_city in raw_cities:
+        city = normalize_city(raw_city)
+        if city:
+            places_data["cities"].append(city)
+
+
+def normalize_place(item: Any) -> dict[str, Any] | None:
+    if not isinstance(item, dict):
+        return None
+    return {
+        "id": str(item.get("id") or make_id()),
+        "name": str(item.get("name") or "Без названия"),
+        "yandex_link": str(item.get("yandex_link")) if item.get("yandex_link") else None,
+        "comment": str(item.get("comment")) if item.get("comment") else None,
+    }
+
+
+def normalize_visited_city_place(item: Any) -> dict[str, Any] | None:
+    place = normalize_place(item)
+    if place is None:
+        return None
+    place["visit_comment"] = str(item.get("visit_comment")) if isinstance(item, dict) and item.get("visit_comment") else None
+    return place
+
+
+def normalize_city(item: Any) -> dict[str, Any] | None:
+    if not isinstance(item, dict):
+        return None
+    city = {
+        "id": str(item.get("id") or make_id()),
+        "name": str(item.get("name") or "Без названия"),
+        "country": str(item.get("country")) if item.get("country") else None,
+        "places": {
+            "active": [],
+            "visited": [],
+        },
+    }
+    raw_places = item.get("places") if isinstance(item.get("places"), dict) else {}
+    for raw_place in raw_places.get("active", []):
+        place = normalize_place(raw_place)
+        if place:
+            city["places"]["active"].append(place)
+    for raw_place in raw_places.get("visited", []):
+        place = normalize_visited_city_place(raw_place)
+        if place:
+            city["places"]["visited"].append(place)
+    return city

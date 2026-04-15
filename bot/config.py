@@ -32,7 +32,7 @@ SECTION_CONFIG: dict[str, dict[str, Any]] = {
         },
     },
     "wishlist": {
-        "title": "🎁 Wishlist",
+        "title": "🎁 Вишлист",
         "empty_text": "Пока пусто.",
         "statuses": WISHLIST_STATUSES,
         "status_labels": {

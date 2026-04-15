@@ -41,6 +41,19 @@ from bot.handlers.films import (
     configure_films_handlers,
 )
 from bot.handlers.leisure import add_leisure_comment, add_leisure_title, configure_leisure_handlers
+from bot.handlers.places import (
+    add_city_country,
+    add_city_name,
+    add_city_place_comment,
+    add_city_place_link,
+    add_city_place_name,
+    add_city_place_visit_comment,
+    add_place_comment,
+    add_place_link,
+    add_place_name,
+    configure_places_handlers,
+    places_callback_router,
+)
 from bot.handlers.wishlist import (
     add_wishlist_comment,
     add_wishlist_link,
@@ -68,6 +81,15 @@ from bot.states import (
     ADDING_FILM_VOVA_RATING,
     ADDING_LEISURE_COMMENT,
     ADDING_LEISURE_TITLE,
+    CITY_ADD_COUNTRY,
+    CITY_ADD_NAME,
+    CITY_PLACE_ADD_COMMENT,
+    CITY_PLACE_ADD_LINK,
+    CITY_PLACE_ADD_NAME,
+    CITY_PLACE_VISIT_COMMENT,
+    PLACE_ADD_COMMENT,
+    PLACE_ADD_LINK,
+    PLACE_ADD_NAME,
     ADDING_WISHLIST_COMMENT,
     ADDING_WISHLIST_LINK,
     ADDING_WISHLIST_TITLE,
@@ -124,6 +146,7 @@ def build_app() -> Application:
         notify_other_user_about_wishlist_item=notify_other_user_about_wishlist_item,
     )
     configure_afisha_handlers(build_item_text=build_item_text, item_keyboard=item_keyboard)
+    configure_places_handlers(safe_edit_message=safe_edit_message)
 
     configure_calendar_handlers(
         safe_edit_message=safe_edit_message,
@@ -141,12 +164,14 @@ def build_app() -> Application:
             MENU: [
                 CallbackQueryHandler(back_to_main, pattern=r"^main$"),
                 CallbackQueryHandler(menu_router, pattern=r"^menu\|(films|wishlist|leisure|afisha|backlog)$"),
+                CallbackQueryHandler(places_callback_router, pattern=r"^places:"),
                 CallbackQueryHandler(section_router),
             ],
             SECTION: [
                 CallbackQueryHandler(noop, pattern=r"^noop$"),
                 CallbackQueryHandler(back_to_main, pattern=r"^main$"),
                 CallbackQueryHandler(menu_router, pattern=r"^menu\|(films|wishlist|leisure|afisha|backlog)$"),
+                CallbackQueryHandler(places_callback_router, pattern=r"^places:"),
                 CallbackQueryHandler(section_router),
             ],
             ADDING_FILM_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_film_title)],
@@ -172,6 +197,15 @@ def build_app() -> Application:
             ADDING_EVENT_END_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_end_date)],
             ADDING_EVENT_END_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_end_time)],
             ADDING_EVENT_LINK: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_link)],
+            PLACE_ADD_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_place_name)],
+            PLACE_ADD_LINK: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_place_link)],
+            PLACE_ADD_COMMENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_place_comment)],
+            CITY_ADD_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_city_name)],
+            CITY_ADD_COUNTRY: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_city_country)],
+            CITY_PLACE_ADD_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_city_place_name)],
+            CITY_PLACE_ADD_LINK: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_city_place_link)],
+            CITY_PLACE_ADD_COMMENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_city_place_comment)],
+            CITY_PLACE_VISIT_COMMENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_city_place_visit_comment)],
         },
         fallbacks=[CommandHandler("cancel", cancel), CommandHandler("start", start)],
         allow_reentry=True,
