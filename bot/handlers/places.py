@@ -1,356 +1,452 @@
-from typing import Any
+from __future__ import annotations
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from typing import Awaitable, Callable
+
+from telegram import Update
 from telegram.ext import ContextTypes, ConversationHandler
 
-from bot.config import PAGE_SIZE
-from bot.keyboards.places import main_menu_keyboard, places_menu_keyboard, places_moscow_menu_keyboard
+from bot.keyboards.places import (
+    cities_keyboard,
+    city_menu_keyboard,
+    city_place_item_keyboard,
+    city_places_keyboard,
+    moscow_item_keyboard,
+    moscow_list_keyboard,
+    moscow_menu_keyboard,
+    places_menu_keyboard,
+)
 from bot.states import (
-    ADDING_CITY_COUNTRY,
-    ADDING_CITY_PLACE_COMMENT,
-    ADDING_CITY_PLACE_LINK,
-    ADDING_CITY_PLACE_TITLE,
-    ADDING_CITY_PLACE_VISITED_COMMENT,
-    ADDING_CITY_TITLE,
-    ADDING_MOSCOW_PLACE_COMMENT,
-    ADDING_MOSCOW_PLACE_LINK,
-    ADDING_MOSCOW_PLACE_TITLE,
-    MENU,
+    CITY_ADD_COUNTRY,
+    CITY_ADD_NAME,
+    CITY_PLACE_ADD_COMMENT,
+    CITY_PLACE_ADD_LINK,
+    CITY_PLACE_ADD_NAME,
+    CITY_PLACE_VISIT_COMMENT,
+    PLACE_ADD_COMMENT,
+    PLACE_ADD_LINK,
+    PLACE_ADD_NAME,
     SECTION,
 )
 from bot.storage import make_id, storage
+from bot.utils import ensure_access, remember_current_chat
+
+_safe_edit_message: Callable[..., Awaitable[None]] | None = None
 
 
-def _paginate(items: list[dict[str, Any]], page: int) -> tuple[list[dict[str, Any]], int, int]:
-    total = len(items)
-    total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
-    page = max(0, min(page, total_pages - 1))
-    start = page * PAGE_SIZE
-    return items[start:start + PAGE_SIZE], page, total_pages
+def configure_places_handlers(*, safe_edit_message: Callable[..., Awaitable[None]]) -> None:
+    global _safe_edit_message
+    _safe_edit_message = safe_edit_message
 
 
-def _find(items: list[dict[str, Any]], item_id: str) -> dict[str, Any] | None:
+def _ensure_places_structure(data: dict) -> dict:
+    places = data.setdefault("places", {})
+    moscow = places.setdefault("moscow", {})
+    moscow.setdefault("active", [])
+    moscow.setdefault("visited", [])
+    places.setdefault("cities", [])
+    return places
+
+
+def _find_by_id(items: list[dict], item_id: str) -> dict | None:
     for item in items:
         if item.get("id") == item_id:
             return item
     return None
 
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    text = "Привет! Что хочешь открыть?"
-    if update.message:
-        await update.message.reply_text(text, reply_markup=main_menu_keyboard())
-    elif update.callback_query:
-        await update.callback_query.edit_message_text(text, reply_markup=main_menu_keyboard())
-    return MENU
+def _place_card_text(place: dict, show_visit_comment: bool = False) -> str:
+    lines = [f"📍 {place.get('name', 'Без названия')}"]
+    if place.get("yandex_link"):
+        lines.append(f"Яндекс Карты: {place['yandex_link']}")
+    if place.get("comment"):
+        lines.append(f"Комментарий: {place['comment']}")
+    if show_visit_comment and place.get("visit_comment"):
+        lines.append(f"Комментарий после посещения: {place['visit_comment']}")
+    return "\n".join(lines)
+
+
+async def _edit_or_reply(update: Update, text: str, reply_markup=None) -> None:
+    if _safe_edit_message is None:
+        raise RuntimeError("Places handlers are not configured")
+
+    if update.callback_query:
+        await _safe_edit_message(update.callback_query, text, reply_markup=reply_markup)
+    elif update.message:
+        await update.message.reply_text(text, reply_markup=reply_markup)
+
+
+async def show_places_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await _edit_or_reply(update, "📍 Места", reply_markup=places_menu_keyboard())
+    return SECTION
+
+
+async def show_moscow_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await _edit_or_reply(update, "📍 Локации в Москве", reply_markup=moscow_menu_keyboard())
+    return SECTION
+
+
+async def show_moscow_list(update: Update, status: str, page: int) -> int:
+    data = storage.load()
+    places = _ensure_places_structure(data)
+    status_key = "visited" if status == "visited" else "active"
+    items = places["moscow"][status_key]
+    title = "✅ Москва · Посетили" if status_key == "visited" else "📍 Москва · Актуальные"
+    await _edit_or_reply(update, title, reply_markup=moscow_list_keyboard(items, status_key, page))
+    return SECTION
+
+
+async def show_moscow_item(update: Update, item_id: str, status: str, page: int) -> int:
+    data = storage.load()
+    places = _ensure_places_structure(data)
+    status_key = "visited" if status == "visited" else "active"
+    item = _find_by_id(places["moscow"][status_key], item_id)
+    if not item:
+        await _edit_or_reply(update, "Место не найдено.", reply_markup=moscow_menu_keyboard())
+        return SECTION
+
+    await _edit_or_reply(update, _place_card_text(item), reply_markup=moscow_item_keyboard(item_id, status_key, page))
+    return SECTION
+
+
+async def show_cities(update: Update, page: int) -> int:
+    data = storage.load()
+    places = _ensure_places_structure(data)
+    await _edit_or_reply(update, "🌍 Города", reply_markup=cities_keyboard(places["cities"], page))
+    return SECTION
+
+
+async def open_city(update: Update, city_id: str) -> int:
+    data = storage.load()
+    places = _ensure_places_structure(data)
+    city = _find_by_id(places["cities"], city_id)
+    if not city:
+        await _edit_or_reply(update, "Город не найден.", reply_markup=places_menu_keyboard())
+        return SECTION
+
+    title = f"🌍 {city.get('name', 'Без названия')}"
+    if city.get("country"):
+        title += f"\nСтрана: {city['country']}"
+    await _edit_or_reply(update, title, reply_markup=city_menu_keyboard(city_id))
+    return SECTION
+
+
+async def show_city_places(update: Update, city_id: str, status: str, page: int) -> int:
+    data = storage.load()
+    places = _ensure_places_structure(data)
+    city = _find_by_id(places["cities"], city_id)
+    if not city:
+        await _edit_or_reply(update, "Город не найден.", reply_markup=places_menu_keyboard())
+        return SECTION
+
+    status_key = "visited" if status == "visited" else "active"
+    city_places = city.get("places", {}).get(status_key, [])
+    label = "Посетили" if status_key == "visited" else "Актуальные"
+    await _edit_or_reply(
+        update,
+        f"📍 {city.get('name', 'Без названия')} · {label}",
+        reply_markup=city_places_keyboard(city_id, city_places, status_key, page),
+    )
+    return SECTION
+
+
+async def show_city_place(update: Update, city_id: str, place_id: str, status: str, page: int) -> int:
+    data = storage.load()
+    places = _ensure_places_structure(data)
+    city = _find_by_id(places["cities"], city_id)
+    if not city:
+        await _edit_or_reply(update, "Город не найден.", reply_markup=places_menu_keyboard())
+        return SECTION
+
+    status_key = "visited" if status == "visited" else "active"
+    item = _find_by_id(city.get("places", {}).get(status_key, []), place_id)
+    if not item:
+        await _edit_or_reply(update, "Место не найдено.", reply_markup=city_menu_keyboard(city_id))
+        return SECTION
+
+    await _edit_or_reply(
+        update,
+        _place_card_text(item, show_visit_comment=True),
+        reply_markup=city_place_item_keyboard(city_id, place_id, status_key, page),
+    )
+    return SECTION
 
 
 async def places_callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not await ensure_access(update):
+        return ConversationHandler.END
+    await remember_current_chat(update)
+
     query = update.callback_query
     await query.answer()
-    parts = query.data.split(":")
-
-    if query.data == "main":
-        return await start(update, context)
+    parts = (query.data or "").split(":")
 
     if query.data == "places:menu":
-        await query.edit_message_text("📍 Места", reply_markup=places_menu_keyboard())
-        return SECTION
+        return await show_places_menu(update, context)
+    if query.data == "places:moscow":
+        return await show_moscow_menu(update, context)
+    if query.data == "places:add_moscow":
+        await _edit_or_reply(update, "Введите название места (обязательно):")
+        return PLACE_ADD_NAME
 
-    if query.data == "places:moscow_menu":
-        await query.edit_message_text("📍 Локации в Москве", reply_markup=places_moscow_menu_keyboard())
-        return SECTION
-
-    if query.data == "places:moscow_add":
-        await query.edit_message_text("Отправь название места в Москве:")
-        return ADDING_MOSCOW_PLACE_TITLE
-
-    if parts[0:2] == ["places", "moscow_list"]:
-        status, page_raw = parts[2], parts[3]
-        page = int(page_raw)
-        data = storage.load()
-        items = [i for i in data["places"]["moscow"] if i.get("status") == status]
-        page_items, current_page, total_pages = _paginate(items, page)
-        rows = [[InlineKeyboardButton(i["title"], callback_data=f"places:moscow_view:{i['id']}:{status}:{current_page}")] for i in page_items]
-        if total_pages > 1:
-            nav = []
-            if current_page > 0:
-                nav.append(InlineKeyboardButton("⬅️", callback_data=f"places:moscow_list:{status}:{current_page-1}"))
-            nav.append(InlineKeyboardButton(f"{current_page+1}/{total_pages}", callback_data="noop"))
-            if current_page < total_pages - 1:
-                nav.append(InlineKeyboardButton("➡️", callback_data=f"places:moscow_list:{status}:{current_page+1}"))
-            rows.append(nav)
-        rows.append([InlineKeyboardButton("➕ Добавить", callback_data="places:moscow_add")])
-        rows.append([InlineKeyboardButton("⬅️ К Москве", callback_data="places:moscow_menu")])
-        rows.append([InlineKeyboardButton("🏠 В меню", callback_data="main")])
-        await query.edit_message_text(f"📍 Москва · {'В планах' if status == 'planned' else 'Посещено'}", reply_markup=InlineKeyboardMarkup(rows))
-        return SECTION
-
-    if parts[0:2] == ["places", "moscow_view"]:
-        item_id, status, page_raw = parts[2], parts[3], parts[4]
-        data = storage.load()
-        item = _find(data["places"]["moscow"], item_id)
-        if not item:
-            return await places_callback_router(update, context)
-        text = f"📍 {item['title']}\nСтатус: {item['status']}"
-        if item.get("link"):
-            text += f"\nСсылка: {item['link']}"
-        if item.get("comment"):
-            text += f"\nКомментарий: {item['comment']}"
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ Отметить посещенным", callback_data=f"places:moscow_visit:{item_id}:{status}:{page_raw}")],
-            [InlineKeyboardButton("🗑️ Удалить", callback_data=f"places:moscow_delete:{item_id}:{status}:{page_raw}")],
-            [InlineKeyboardButton("⬅️ К списку", callback_data=f"places:moscow_list:{status}:{page_raw}")],
-            [InlineKeyboardButton("🏠 В меню", callback_data="main")],
-        ])
-        await query.edit_message_text(text, reply_markup=kb)
-        return SECTION
-
-    if parts[0:2] == ["places", "moscow_visit"]:
+    if parts[:2] == ["places", "moscow"] and len(parts) == 4:
+        return await show_moscow_list(update, parts[2], int(parts[3]))
+    if parts[:2] == ["places", "view_moscow"] and len(parts) == 5:
+        return await show_moscow_item(update, parts[2], parts[3], int(parts[4]))
+    if parts[:2] == ["places", "visit_moscow"] and len(parts) == 4:
         item_id = parts[2]
+        page = int(parts[3])
+
         data = storage.load()
-        item = _find(data["places"]["moscow"], item_id)
+        places = _ensure_places_structure(data)
+        active = places["moscow"]["active"]
+        item = _find_by_id(active, item_id)
         if item:
-            item["status"] = "visited"
+            active[:] = [place for place in active if place.get("id") != item_id]
+            places["moscow"]["visited"].append(item)
             storage.save(data)
-        await query.edit_message_text("Готово ✅", reply_markup=places_moscow_menu_keyboard())
-        return SECTION
 
-    if parts[0:2] == ["places", "moscow_delete"]:
+        return await show_moscow_list(update, "active", page)
+    if parts[:2] == ["places", "delete_moscow"] and len(parts) == 5:
         item_id = parts[2]
+        status = parts[3]
+        page = int(parts[4])
         data = storage.load()
-        data["places"]["moscow"] = [i for i in data["places"]["moscow"] if i.get("id") != item_id]
+        places = _ensure_places_structure(data)
+        bucket = places["moscow"]["visited" if status == "visited" else "active"]
+        bucket[:] = [item for item in bucket if item.get("id") != item_id]
         storage.save(data)
-        await query.edit_message_text("Локация удалена.", reply_markup=places_moscow_menu_keyboard())
-        return SECTION
+        return await show_moscow_list(update, status, page)
 
-    if parts[0:2] == ["places", "cities"]:
-        page = int(parts[2])
-        data = storage.load()
-        cities = data["places"]["cities"]
-        page_items, current_page, total_pages = _paginate(cities, page)
-        rows = [[InlineKeyboardButton(c["title"], callback_data=f"places:city:{c['id']}:0")] for c in page_items]
-        if total_pages > 1:
-            nav = []
-            if current_page > 0:
-                nav.append(InlineKeyboardButton("⬅️", callback_data=f"places:cities:{current_page-1}"))
-            nav.append(InlineKeyboardButton(f"{current_page+1}/{total_pages}", callback_data="noop"))
-            if current_page < total_pages - 1:
-                nav.append(InlineKeyboardButton("➡️", callback_data=f"places:cities:{current_page+1}"))
-            rows.append(nav)
-        rows.append([InlineKeyboardButton("➕ Добавить город", callback_data="places:city_add")])
-        rows.append([InlineKeyboardButton("⬅️ К местам", callback_data="places:menu")])
-        await query.edit_message_text("🌍 Города", reply_markup=InlineKeyboardMarkup(rows))
-        return SECTION
-
-    if query.data == "places:city_add":
-        await query.edit_message_text("Отправь название города:")
-        return ADDING_CITY_TITLE
-
-    if parts[0:2] == ["places", "city"] and len(parts) >= 3:
+    if parts[:2] == ["places", "cities"] and len(parts) == 3:
+        return await show_cities(update, int(parts[2]))
+    if query.data == "places:add_city":
+        await _edit_or_reply(update, "Введите название города (обязательно):")
+        return CITY_ADD_NAME
+    if parts[:2] == ["places", "open_city"] and len(parts) == 3:
+        return await open_city(update, parts[2])
+    if parts[:2] == ["places", "delete_city"] and len(parts) == 3:
         city_id = parts[2]
         data = storage.load()
-        city = _find(data["places"]["cities"], city_id)
-        if not city:
-            await query.edit_message_text("Город не найден.", reply_markup=places_menu_keyboard())
-            return SECTION
-        context.user_data["active_city_id"] = city_id
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📍 В планах", callback_data=f"places:city_places:{city_id}:planned:0")],
-            [InlineKeyboardButton("✅ Посещено", callback_data=f"places:city_places:{city_id}:visited:0")],
-            [InlineKeyboardButton("➕ Добавить место", callback_data=f"places:city_place_add:{city_id}")],
-            [InlineKeyboardButton("🗑️ Удалить город", callback_data=f"places:city_delete:{city_id}")],
-            [InlineKeyboardButton("⬅️ К городам", callback_data="places:cities:0")],
-        ])
-        await query.edit_message_text(f"🌍 {city['title']}", reply_markup=kb)
-        return SECTION
-
-    if parts[0:2] == ["places", "city_delete"]:
-        city_id = parts[2]
-        data = storage.load()
-        data["places"]["cities"] = [c for c in data["places"]["cities"] if c.get("id") != city_id]
+        places = _ensure_places_structure(data)
+        places["cities"] = [city for city in places["cities"] if city.get("id") != city_id]
         storage.save(data)
-        await query.edit_message_text("Город удален.", reply_markup=places_menu_keyboard())
-        return SECTION
+        return await show_cities(update, 0)
 
-    if parts[0:2] == ["places", "city_place_add"]:
-        context.user_data["active_city_id"] = parts[2]
-        await query.edit_message_text("Отправь название места в городе:")
-        return ADDING_CITY_PLACE_TITLE
-
-    if parts[0:2] == ["places", "city_places"]:
-        city_id, status, page_raw = parts[2], parts[3], parts[4]
-        page = int(page_raw)
+    if parts[:2] == ["places", "add_city_place"] and len(parts) == 3:
+        context.user_data["places_city_id"] = parts[2]
+        await _edit_or_reply(update, "Введите название места (обязательно):")
+        return CITY_PLACE_ADD_NAME
+    if parts[:2] == ["places", "city_active"] and len(parts) == 4:
+        return await show_city_places(update, parts[2], "active", int(parts[3]))
+    if parts[:2] == ["places", "city_visited"] and len(parts) == 4:
+        return await show_city_places(update, parts[2], "visited", int(parts[3]))
+    if parts[:2] == ["places", "view_city_place"] and len(parts) == 6:
+        return await show_city_place(update, parts[2], parts[3], parts[4], int(parts[5]))
+    if parts[:2] == ["places", "delete_city_place"] and len(parts) == 6:
+        city_id, place_id, status, page = parts[2], parts[3], parts[4], int(parts[5])
         data = storage.load()
-        city = _find(data["places"]["cities"], city_id)
-        if not city:
-            await query.edit_message_text("Город не найден.", reply_markup=places_menu_keyboard())
-            return SECTION
-        places = [p for p in city.get("places", []) if p.get("status") == status]
-        page_items, current_page, total_pages = _paginate(places, page)
-        rows = [[InlineKeyboardButton(p["title"], callback_data=f"places:city_place_view:{city_id}:{p['id']}:{status}:{current_page}")] for p in page_items]
-        if total_pages > 1:
-            nav = []
-            if current_page > 0:
-                nav.append(InlineKeyboardButton("⬅️", callback_data=f"places:city_places:{city_id}:{status}:{current_page-1}"))
-            nav.append(InlineKeyboardButton(f"{current_page+1}/{total_pages}", callback_data="noop"))
-            if current_page < total_pages - 1:
-                nav.append(InlineKeyboardButton("➡️", callback_data=f"places:city_places:{city_id}:{status}:{current_page+1}"))
-            rows.append(nav)
-        rows.append([InlineKeyboardButton("➕ Добавить место", callback_data=f"places:city_place_add:{city_id}")])
-        rows.append([InlineKeyboardButton("⬅️ К городу", callback_data=f"places:city:{city_id}:0")])
-        await query.edit_message_text(f"📍 Места · {city['title']} · {status}", reply_markup=InlineKeyboardMarkup(rows))
-        return SECTION
-
-    if parts[0:2] == ["places", "city_place_view"]:
-        city_id, place_id, status, page_raw = parts[2], parts[3], parts[4], parts[5]
-        data = storage.load()
-        city = _find(data["places"]["cities"], city_id)
-        place = _find(city.get("places", []) if city else [], place_id)
-        if not place:
-            await query.edit_message_text("Место не найдено.", reply_markup=places_menu_keyboard())
-            return SECTION
-        text = f"📍 {place['title']}\nСтатус: {place['status']}"
-        if place.get("link"):
-            text += f"\nСсылка: {place['link']}"
-        if place.get("comment"):
-            text += f"\nКомментарий: {place['comment']}"
-        if place.get("visited_comment"):
-            text += f"\nКомментарий после посещения: {place['visited_comment']}"
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ Отметить посещенным", callback_data=f"places:city_place_visit:{city_id}:{place_id}:{status}:{page_raw}")],
-            [InlineKeyboardButton("🗑️ Удалить", callback_data=f"places:city_place_delete:{city_id}:{place_id}:{status}:{page_raw}")],
-            [InlineKeyboardButton("⬅️ К списку", callback_data=f"places:city_places:{city_id}:{status}:{page_raw}")],
-        ])
-        await query.edit_message_text(text, reply_markup=kb)
-        return SECTION
-
-    if parts[0:2] == ["places", "city_place_visit"]:
-        context.user_data["visit_city_id"] = parts[2]
-        context.user_data["visit_place_id"] = parts[3]
-        await query.edit_message_text("Добавь комментарий о посещении или -")
-        return ADDING_CITY_PLACE_VISITED_COMMENT
-
-    if parts[0:2] == ["places", "city_place_delete"]:
-        city_id, place_id = parts[2], parts[3]
-        data = storage.load()
-        city = _find(data["places"]["cities"], city_id)
+        places = _ensure_places_structure(data)
+        city = _find_by_id(places["cities"], city_id)
         if city:
-            city["places"] = [p for p in city.get("places", []) if p.get("id") != place_id]
+            status_key = "visited" if status == "visited" else "active"
+            bucket = city.get("places", {}).get(status_key, [])
+            bucket[:] = [item for item in bucket if item.get("id") != place_id]
             storage.save(data)
-        await query.edit_message_text("Место удалено.", reply_markup=places_menu_keyboard())
-        return SECTION
+        return await show_city_places(update, city_id, status, page)
+    if parts[:2] == ["places", "visit_city_place"] and len(parts) == 5:
+        context.user_data["places_visit_city_id"] = parts[2]
+        context.user_data["places_visit_place_id"] = parts[3]
+        context.user_data["places_visit_page"] = int(parts[4])
+        await _edit_or_reply(update, "Комментарий после посещения (или '-' чтобы пропустить):")
+        return CITY_PLACE_VISIT_COMMENT
 
-    await query.answer("Неизвестная команда")
     return SECTION
 
 
-async def add_moscow_place_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    title = (update.message.text or "").strip()
-    if not title:
-        await update.message.reply_text("Название не должно быть пустым. Попробуй еще раз:")
-        return ADDING_MOSCOW_PLACE_TITLE
-    context.user_data["moscow_place_title"] = title
-    await update.message.reply_text("Ссылка на Яндекс Карты или '-' чтобы пропустить")
-    return ADDING_MOSCOW_PLACE_LINK
+async def add_place_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not await ensure_access(update):
+        return ConversationHandler.END
+    await remember_current_chat(update)
+
+    name = (update.message.text or "").strip()
+    if not name:
+        await update.message.reply_text("Название не должно быть пустым. Попробуйте ещё раз:")
+        return PLACE_ADD_NAME
+
+    context.user_data["places_name"] = name
+    await update.message.reply_text("Ссылка на Яндекс Карты (или '-' чтобы пропустить):")
+    return PLACE_ADD_LINK
 
 
-async def add_moscow_place_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def add_place_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not await ensure_access(update):
+        return ConversationHandler.END
+    await remember_current_chat(update)
+
     link = (update.message.text or "").strip()
-    context.user_data["moscow_place_link"] = "" if link == "-" else link
-    await update.message.reply_text("Комментарий или '-' чтобы пропустить")
-    return ADDING_MOSCOW_PLACE_COMMENT
+    context.user_data["places_link"] = None if link in {"", "-"} else link
+    await update.message.reply_text("Комментарий (или '-' чтобы пропустить):")
+    return PLACE_ADD_COMMENT
 
 
-async def add_moscow_place_comment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    comment = (update.message.text or "").strip()
+async def add_place_comment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not await ensure_access(update):
+        return ConversationHandler.END
+    await remember_current_chat(update)
+
+    comment_raw = (update.message.text or "").strip()
+    comment = None if comment_raw in {"", "-"} else comment_raw
+
     data = storage.load()
-    data["places"]["moscow"].append({
-        "id": make_id(),
-        "title": context.user_data.pop("moscow_place_title", "Без названия"),
-        "link": context.user_data.pop("moscow_place_link", ""),
-        "comment": "" if comment == "-" else comment,
-        "status": "planned",
-    })
+    places = _ensure_places_structure(data)
+    places["moscow"]["active"].append(
+        {
+            "id": make_id(),
+            "name": context.user_data.pop("places_name", "Без названия"),
+            "yandex_link": context.user_data.pop("places_link", None),
+            "comment": comment,
+        }
+    )
     storage.save(data)
-    await update.message.reply_text("Локация сохранена.", reply_markup=places_moscow_menu_keyboard())
-    return SECTION
+
+    return await show_moscow_menu(update, context)
 
 
-async def add_city_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    title = (update.message.text or "").strip()
-    if not title:
-        await update.message.reply_text("Название города не должно быть пустым. Попробуй еще раз:")
-        return ADDING_CITY_TITLE
-    context.user_data["city_title"] = title
-    await update.message.reply_text("Страна или '-' чтобы пропустить")
-    return ADDING_CITY_COUNTRY
+async def add_city_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not await ensure_access(update):
+        return ConversationHandler.END
+    await remember_current_chat(update)
+
+    name = (update.message.text or "").strip()
+    if not name:
+        await update.message.reply_text("Название не должно быть пустым. Попробуйте ещё раз:")
+        return CITY_ADD_NAME
+
+    context.user_data["places_city_name"] = name
+    await update.message.reply_text("Страна (или '-' чтобы пропустить):")
+    return CITY_ADD_COUNTRY
 
 
 async def add_city_country(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    country = (update.message.text or "").strip()
+    if not await ensure_access(update):
+        return ConversationHandler.END
+    await remember_current_chat(update)
+
+    country_raw = (update.message.text or "").strip()
+    country = None if country_raw in {"", "-"} else country_raw
+
     data = storage.load()
-    data["places"]["cities"].append({
-        "id": make_id(),
-        "title": context.user_data.pop("city_title", "Без названия"),
-        "country": "" if country == "-" else country,
-        "places": [],
-    })
+    places = _ensure_places_structure(data)
+    places["cities"].append(
+        {
+            "id": make_id(),
+            "name": context.user_data.pop("places_city_name", "Без названия"),
+            "country": country,
+            "places": {
+                "active": [],
+                "visited": [],
+            },
+        }
+    )
     storage.save(data)
-    await update.message.reply_text("Город сохранен.", reply_markup=places_menu_keyboard())
-    return SECTION
+
+    return await show_cities(update, 0)
 
 
-async def add_city_place_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    title = (update.message.text or "").strip()
-    if not title:
-        await update.message.reply_text("Название места не должно быть пустым. Попробуй еще раз:")
-        return ADDING_CITY_PLACE_TITLE
-    context.user_data["city_place_title"] = title
-    await update.message.reply_text("Ссылка на Яндекс Карты или '-' чтобы пропустить")
-    return ADDING_CITY_PLACE_LINK
+async def add_city_place_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not await ensure_access(update):
+        return ConversationHandler.END
+    await remember_current_chat(update)
+
+    name = (update.message.text or "").strip()
+    if not name:
+        await update.message.reply_text("Название не должно быть пустым. Попробуйте ещё раз:")
+        return CITY_PLACE_ADD_NAME
+
+    context.user_data["places_city_place_name"] = name
+    await update.message.reply_text("Ссылка на Яндекс Карты (или '-' чтобы пропустить):")
+    return CITY_PLACE_ADD_LINK
 
 
 async def add_city_place_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not await ensure_access(update):
+        return ConversationHandler.END
+    await remember_current_chat(update)
+
     link = (update.message.text or "").strip()
-    context.user_data["city_place_link"] = "" if link == "-" else link
-    await update.message.reply_text("Комментарий или '-' чтобы пропустить")
-    return ADDING_CITY_PLACE_COMMENT
+    context.user_data["places_city_place_link"] = None if link in {"", "-"} else link
+    await update.message.reply_text("Комментарий (или '-' чтобы пропустить):")
+    return CITY_PLACE_ADD_COMMENT
 
 
 async def add_city_place_comment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    city_id = context.user_data.get("active_city_id")
-    comment = (update.message.text or "").strip()
+    if not await ensure_access(update):
+        return ConversationHandler.END
+    await remember_current_chat(update)
+
+    city_id = context.user_data.get("places_city_id")
+    if not city_id:
+        await update.message.reply_text("Не удалось определить город.")
+        return SECTION
+
+    comment_raw = (update.message.text or "").strip()
+    comment = None if comment_raw in {"", "-"} else comment_raw
+
     data = storage.load()
-    city = _find(data["places"]["cities"], city_id)
+    places = _ensure_places_structure(data)
+    city = _find_by_id(places["cities"], city_id)
     if not city:
-        await update.message.reply_text("Город не найден.", reply_markup=main_menu_keyboard())
-        return MENU
-    city.setdefault("places", []).append({
-        "id": make_id(),
-        "title": context.user_data.pop("city_place_title", "Без названия"),
-        "link": context.user_data.pop("city_place_link", ""),
-        "comment": "" if comment == "-" else comment,
-        "visited_comment": "",
-        "status": "planned",
-    })
+        await update.message.reply_text("Город не найден.")
+        return SECTION
+
+    city.setdefault("places", {}).setdefault("active", []).append(
+        {
+            "id": make_id(),
+            "name": context.user_data.pop("places_city_place_name", "Без названия"),
+            "yandex_link": context.user_data.pop("places_city_place_link", None),
+            "comment": comment,
+        }
+    )
     storage.save(data)
-    await update.message.reply_text("Место сохранено.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ К городу", callback_data=f"places:city:{city_id}:0")]]))
-    return SECTION
+
+    return await open_city(update, city_id)
 
 
-async def add_city_place_visited_comment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    city_id = context.user_data.pop("visit_city_id", "")
-    place_id = context.user_data.pop("visit_place_id", "")
-    comment = (update.message.text or "").strip()
+async def add_city_place_visit_comment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not await ensure_access(update):
+        return ConversationHandler.END
+    await remember_current_chat(update)
+
+    city_id = context.user_data.pop("places_visit_city_id", None)
+    place_id = context.user_data.pop("places_visit_place_id", None)
+    page = context.user_data.pop("places_visit_page", 0)
+
+    if not city_id or not place_id:
+        await update.message.reply_text("Не удалось найти место для обновления.")
+        return SECTION
+
+    comment_raw = (update.message.text or "").strip()
+    visit_comment = None if comment_raw in {"", "-"} else comment_raw
+
     data = storage.load()
-    city = _find(data["places"]["cities"], city_id)
-    place = _find(city.get("places", []) if city else [], place_id)
-    if not place:
-        await update.message.reply_text("Место не найдено.", reply_markup=main_menu_keyboard())
-        return MENU
-    place["status"] = "visited"
-    place["visited_comment"] = "" if comment == "-" else comment
-    storage.save(data)
-    await update.message.reply_text("Отметил как посещенное.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ К городу", callback_data=f"places:city:{city_id}:0")]]))
-    return SECTION
+    places = _ensure_places_structure(data)
+    city = _find_by_id(places["cities"], city_id)
+    if not city:
+        await update.message.reply_text("Город не найден.")
+        return SECTION
+
+    active = city.setdefault("places", {}).setdefault("active", [])
+    item = _find_by_id(active, place_id)
+    if item:
+        active[:] = [place for place in active if place.get("id") != place_id]
+        visited_item = {
+            "id": item.get("id"),
+            "name": item.get("name"),
+            "yandex_link": item.get("yandex_link"),
+            "comment": item.get("comment"),
+            "visit_comment": visit_comment,
+        }
+        city["places"].setdefault("visited", []).append(visited_item)
+        storage.save(data)
+
+    return await show_city_places(update, city_id, "active", page)
