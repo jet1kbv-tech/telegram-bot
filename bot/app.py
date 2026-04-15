@@ -105,6 +105,7 @@ from bot.keyboards.common import item_keyboard, main_menu_keyboard
 from bot.runtime import (
     check_afisha_notifications,
     menu_router,
+    notify_other_user_about_calendar_item,
     notify_other_user_about_wishlist_item,
     safe_edit_message,
     section_router,
@@ -157,6 +158,7 @@ def build_app() -> Application:
     configure_calendar_handlers(
         safe_edit_message=safe_edit_message,
         main_menu_keyboard=main_menu_keyboard,
+        notify_other_user_about_calendar_item=notify_other_user_about_calendar_item,
     )
     configure_text_commands(
         menu_router=menu_router,

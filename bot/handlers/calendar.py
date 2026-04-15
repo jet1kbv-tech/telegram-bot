@@ -31,16 +31,19 @@ from bot.utils import ensure_access, owner_label, paginate_items, remember_curre
 
 _safe_edit_message: Callable[..., Awaitable[None]] | None = None
 _main_menu_keyboard: Callable[[], InlineKeyboardMarkup] | None = None
+_notify_other_user_about_calendar_item: Callable[[ContextTypes.DEFAULT_TYPE, Update, dict[str, Any]], Awaitable[None]] | None = None
 
 
 def configure_calendar_handlers(
     *,
     safe_edit_message: Callable[..., Awaitable[None]],
     main_menu_keyboard: Callable[[], InlineKeyboardMarkup],
+    notify_other_user_about_calendar_item: Callable[[ContextTypes.DEFAULT_TYPE, Update, dict[str, Any]], Awaitable[None]],
 ) -> None:
-    global _safe_edit_message, _main_menu_keyboard
+    global _safe_edit_message, _main_menu_keyboard, _notify_other_user_about_calendar_item
     _safe_edit_message = safe_edit_message
     _main_menu_keyboard = main_menu_keyboard
+    _notify_other_user_about_calendar_item = notify_other_user_about_calendar_item
 
 
 def _require_safe_edit_message() -> Callable[..., Awaitable[None]]:
@@ -53,6 +56,12 @@ def _require_main_menu_keyboard() -> Callable[[], InlineKeyboardMarkup]:
     if _main_menu_keyboard is None:
         raise RuntimeError("Calendar handlers are not configured")
     return _main_menu_keyboard
+
+
+def _require_notify_other_user_about_calendar_item() -> Callable[[ContextTypes.DEFAULT_TYPE, Update, dict[str, Any]], Awaitable[None]]:
+    if _notify_other_user_about_calendar_item is None:
+        raise RuntimeError("Calendar handlers are not configured")
+    return _notify_other_user_about_calendar_item
 
 
 def build_calendar_menu_text() -> str:
@@ -318,6 +327,9 @@ async def add_calendar_event_comment(update: Update, context: ContextTypes.DEFAU
     data.setdefault("calendars", {}).setdefault(owner, []).append(normalized_item)
     data["calendars"][owner] = sort_calendar_events(data["calendars"][owner])
     storage.save(data)
+    if normalized_item.get("source") == "manual":
+        notify_other_user_about_calendar_item = _require_notify_other_user_about_calendar_item()
+        await notify_other_user_about_calendar_item(context, update, normalized_item)
 
     for key in [
         "calendar_owner",
