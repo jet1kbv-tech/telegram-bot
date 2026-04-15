@@ -72,7 +72,7 @@ from bot.states import (
     SECTION,
 )
 
-from main import (
+from bot.runtime import (
     build_item_text,
     check_afisha_notifications,
     item_keyboard,
