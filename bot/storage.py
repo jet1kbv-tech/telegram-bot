@@ -33,6 +33,10 @@ class JsonStorage:
             "leisure": [],
             "afisha": [],
             "backlog": [],
+            "spark": {
+                "active": [],
+                "done": [],
+            },
             "places": {
                 "moscow": {
                     "active": [],
@@ -114,6 +118,7 @@ class JsonStorage:
             if item:
                 data["backlog"].append(item)
 
+        normalize_spark_root(data, raw_data.get("spark"))
         normalize_places_root(data, raw_data.get("places"))
 
         raw_calendars = raw_data.get("calendars") if isinstance(raw_data.get("calendars"), dict) else {}
@@ -468,6 +473,54 @@ def normalize_calendar_event(item: Any, owner: str | None = None) -> dict[str, A
             return None
     return normalized
 
+
+
+
+def normalize_spark_item(item: Any) -> dict[str, Any] | None:
+    if isinstance(item, str):
+        title = item.strip()
+        if not title:
+            return None
+        return {
+            "id": make_id(),
+            "title": title,
+            "description": "",
+        }
+
+    if not isinstance(item, dict):
+        return None
+
+    title = str(item.get("title") or "").strip()
+    if not title:
+        return None
+
+    description = str(item.get("description") or "").strip()
+
+    item_id = str(item.get("id") or "").strip() or make_id()
+    return {
+        "id": item_id,
+        "title": title,
+        "description": description,
+    }
+
+
+def normalize_spark_root(data: dict[str, Any], raw_spark: Any) -> None:
+    spark = {
+        "active": [],
+        "done": [],
+    }
+
+    if isinstance(raw_spark, dict):
+        for bucket in ("active", "done"):
+            raw_bucket = raw_spark.get(bucket, [])
+            if not isinstance(raw_bucket, list):
+                continue
+            for raw_item in raw_bucket:
+                item = normalize_spark_item(raw_item)
+                if item:
+                    spark[bucket].append(item)
+
+    data["spark"] = spark
 
 def normalize_places_root(data: dict[str, Any], raw_places: Any) -> None:
     places_data = data.setdefault("places", {})

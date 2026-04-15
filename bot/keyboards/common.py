@@ -60,6 +60,7 @@ def activity_menu_keyboard() -> InlineKeyboardMarkup:
         [
             [InlineKeyboardButton("🎬 Фильмы", callback_data="menu|films")],
             [InlineKeyboardButton("✨ Досуг", callback_data="menu|leisure")],
+            [InlineKeyboardButton("🔥 Искра", callback_data="spark:menu")],
             [InlineKeyboardButton("📍 В Москве", callback_data="places:moscow")],
             [InlineKeyboardButton("🌍 Города", callback_data="places:cities:0")],
             [InlineKeyboardButton("🏠 В меню", callback_data="menu:main")],
