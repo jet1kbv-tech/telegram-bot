@@ -22,6 +22,8 @@ from bot.handlers.afisha import (
     add_event_time,
     add_event_title,
     configure_afisha_handlers,
+    edit_afisha_date,
+    edit_afisha_time,
 )
 from bot.handlers.backlog import add_backlog_description, add_backlog_title, configure_backlog_handlers
 from bot.handlers.calendar import (
@@ -31,6 +33,8 @@ from bot.handlers.calendar import (
     add_calendar_event_start_time,
     add_calendar_event_title,
     configure_calendar_handlers,
+    edit_calendar_date,
+    edit_calendar_time,
 )
 from bot.handlers.common import back_to_main, cancel, configure_common_handlers, noop, quick_return_to_main_menu, start, whoami
 from bot.handlers.films import (
@@ -70,6 +74,8 @@ from bot.states import (
     ADDING_CALENDAR_EVENT_END_TIME,
     ADDING_CALENDAR_EVENT_START_TIME,
     ADDING_CALENDAR_EVENT_TITLE,
+    EDITING_CALENDAR_DATE,
+    EDITING_CALENDAR_TIME,
     ADDING_EVENT_DATE,
     ADDING_EVENT_END_DATE,
     ADDING_EVENT_END_TIME,
@@ -77,6 +83,8 @@ from bot.states import (
     ADDING_EVENT_PLACE,
     ADDING_EVENT_TIME,
     ADDING_EVENT_TITLE,
+    EDITING_AFISHA_DATE,
+    EDITING_AFISHA_TIME,
     ADDING_FILM_COMMENT,
     ADDING_FILM_SASHA_RATING,
     ADDING_FILM_TITLE,
@@ -209,6 +217,8 @@ def build_app() -> Application:
             ADDING_CALENDAR_EVENT_START_TIME: text_state(add_calendar_event_start_time),
             ADDING_CALENDAR_EVENT_END_TIME: text_state(add_calendar_event_end_time),
             ADDING_CALENDAR_EVENT_COMMENT: text_state(add_calendar_event_comment),
+            EDITING_CALENDAR_DATE: text_state(edit_calendar_date),
+            EDITING_CALENDAR_TIME: text_state(edit_calendar_time),
             ADDING_BACKLOG_TITLE: text_state(add_backlog_title),
             ADDING_BACKLOG_DESCRIPTION: text_state(add_backlog_description),
             ADDING_WISHLIST_TITLE: text_state(add_wishlist_title),
@@ -225,6 +235,8 @@ def build_app() -> Application:
             ADDING_EVENT_END_DATE: text_state(add_event_end_date),
             ADDING_EVENT_END_TIME: text_state(add_event_end_time),
             ADDING_EVENT_LINK: text_state(add_event_link),
+            EDITING_AFISHA_DATE: text_state(edit_afisha_date),
+            EDITING_AFISHA_TIME: text_state(edit_afisha_time),
             PLACE_ADD_NAME: text_state(add_place_name),
             PLACE_ADD_LINK: text_state(add_place_link),
             PLACE_ADD_COMMENT: text_state(add_place_comment),

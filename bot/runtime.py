@@ -55,8 +55,11 @@ from bot.handlers.afisha import (
     add_event_place,
     add_event_time,
     add_event_title,
+    afisha_edit_menu_keyboard,
     apply_afisha_delete,
     apply_afisha_status_update,
+    edit_afisha_date,
+    edit_afisha_time,
     get_actual_afisha_items,
 )
 from bot.handlers.calendar import (
@@ -66,6 +69,10 @@ from bot.handlers.calendar import (
     add_calendar_event_start_time,
     add_calendar_event_title,
     configure_calendar_handlers,
+    edit_calendar_date,
+    edit_calendar_time,
+    handle_calendar_edit_field,
+    handle_calendar_edit_start,
     handle_calendar_delete,
     handle_calendar_delete_confirm,
     show_calendar_menu,
@@ -86,6 +93,8 @@ from bot.states import (
     ADDING_CALENDAR_EVENT_END_TIME,
     ADDING_CALENDAR_EVENT_START_TIME,
     ADDING_CALENDAR_EVENT_TITLE,
+    EDITING_CALENDAR_DATE,
+    EDITING_CALENDAR_TIME,
     ADDING_EVENT_DATE,
     ADDING_EVENT_END_DATE,
     ADDING_EVENT_END_TIME,
@@ -93,6 +102,8 @@ from bot.states import (
     ADDING_EVENT_PLACE,
     ADDING_EVENT_TIME,
     ADDING_EVENT_TITLE,
+    EDITING_AFISHA_DATE,
+    EDITING_AFISHA_TIME,
     ADDING_FILM_COMMENT,
     ADDING_FILM_SASHA_RATING,
     ADDING_FILM_TITLE,
@@ -446,6 +457,14 @@ async def section_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         _, owner, item_id, page_raw = parts
         return await show_calendar_owner_item(update, owner, item_id, int(page_raw))
 
+    if action == "cal_edit":
+        _, owner, item_id, page_raw = parts
+        return await handle_calendar_edit_start(update, owner, item_id, int(page_raw))
+
+    if action == "cal_edit_field":
+        _, owner, item_id, field, page_raw = parts
+        return await handle_calendar_edit_field(update, context, owner, item_id, field, int(page_raw))
+
     if action == "cal_add":
         _, owner = parts
         context.user_data["calendar_owner"] = owner
@@ -505,6 +524,52 @@ async def section_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             return await show_item(update, section, item_id, int(page_raw), status_filter=status_filter)
         _, section, item_id, page_raw = parts
         return await show_item(update, section, item_id, int(page_raw))
+
+    if action == "af_edit":
+        _, item_id, page_raw = parts
+        page = int(page_raw)
+        data = storage.load()
+        item = find_item(data.get("afisha", []), item_id)
+        if not item:
+            await safe_edit_message(
+                query,
+                "Не удалось открыть редактирование: событие не найдено.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ К списку", callback_data=f"list|afisha|{page}")]]),
+            )
+            return SECTION
+        await safe_edit_message(
+            query,
+            f"{build_item_text('afisha', item)}\n\nВыбери, что изменить:",
+            reply_markup=afisha_edit_menu_keyboard(item_id, page),
+        )
+        return SECTION
+
+    if action == "af_edit_field":
+        _, item_id, field, page_raw = parts
+        page = int(page_raw)
+        data = storage.load()
+        item = find_item(data.get("afisha", []), item_id)
+        if not item:
+            await safe_edit_message(
+                query,
+                "Не удалось открыть редактирование: событие не найдено.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ К списку", callback_data=f"list|afisha|{page}")]]),
+            )
+            return SECTION
+        context.user_data["editing_afisha_item_id"] = item_id
+        context.user_data["editing_afisha_page"] = page
+        if field == "date":
+            await safe_edit_message(query, f"{build_item_text('afisha', item)}\n\nОтправь новую дату в формате ГГГГ-ММ-ДД:")
+            return EDITING_AFISHA_DATE
+        if field == "time":
+            await safe_edit_message(query, f"{build_item_text('afisha', item)}\n\nОтправь новое время начала в формате ЧЧ:ММ:")
+            return EDITING_AFISHA_TIME
+        await safe_edit_message(
+            query,
+            "Не удалось понять, какое поле нужно изменить.",
+            reply_markup=afisha_edit_menu_keyboard(item_id, page),
+        )
+        return SECTION
 
     if action == "rate_start":
         _, _, item_id, status_filter, page_raw = parts
@@ -710,6 +775,8 @@ def build_app() -> Application:
             ADDING_CALENDAR_EVENT_START_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_calendar_event_start_time)],
             ADDING_CALENDAR_EVENT_END_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_calendar_event_end_time)],
             ADDING_CALENDAR_EVENT_COMMENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_calendar_event_comment)],
+            EDITING_CALENDAR_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_calendar_date)],
+            EDITING_CALENDAR_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_calendar_time)],
             ADDING_BACKLOG_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_backlog_title)],
             ADDING_BACKLOG_DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_backlog_description)],
             ADDING_WISHLIST_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_wishlist_title)],
@@ -724,6 +791,8 @@ def build_app() -> Application:
             ADDING_EVENT_END_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_end_date)],
             ADDING_EVENT_END_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_end_time)],
             ADDING_EVENT_LINK: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_link)],
+            EDITING_AFISHA_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_afisha_date)],
+            EDITING_AFISHA_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_afisha_time)],
         },
         fallbacks=[CommandHandler("cancel", cancel), CommandHandler("start", start)],
         allow_reentry=True,
