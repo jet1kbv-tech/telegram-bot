@@ -11,7 +11,6 @@ from typing import Any
 from bot.config import (
     AFISHA_STATUSES,
     BACKLOG_STATUSES,
-    DATA_FILE,
     FILM_STATUSES,
     KNOWN_WISHLIST_OWNERS,
     LEISURE_STATUSES,
@@ -19,6 +18,7 @@ from bot.config import (
 )
 
 logger = logging.getLogger(__name__)
+DATA_FILE = Path(os.getenv("DATA_FILE", "data.json"))
 
 
 class JsonStorage:
@@ -58,7 +58,7 @@ class JsonStorage:
                 with self.path.open("r", encoding="utf-8") as file:
                     raw_data = json.load(file)
             except (json.JSONDecodeError, OSError):
-                logger.exception("Не удалось прочитать data.json, использую пустую структуру")
+                logger.exception("Не удалось прочитать %s, использую пустую структуру", self.path)
                 return self.default_data()
 
             return self._normalize_data(raw_data)
