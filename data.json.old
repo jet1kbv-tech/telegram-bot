@@ -747,6 +747,23 @@
       "status": "todo"
     }
   ],
+  "places": {
+    "moscow": {
+      "active": [],
+      "visited": []
+    },
+    "cities": [
+      {
+        "id": "cae8970b",
+        "name": "Коломна",
+        "country": "Россия",
+        "places": {
+          "active": [],
+          "visited": []
+        }
+      }
+    ]
+  },
   "calendars": {
     "vova": [
       {
