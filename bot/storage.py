@@ -450,6 +450,11 @@ def normalize_calendar_event(item: Any, owner: str | None = None) -> dict[str, A
     event_owner = str(item.get("owner") or owner or "")
     if event_owner not in {"vova", "sasha"}:
         return None
+    source_raw = str(item.get("source") or "").strip()
+    source_id_raw = str(item.get("source_id") or "").strip()
+    source = "afisha" if source_raw == "afisha" and source_id_raw else "manual"
+    source_id = source_id_raw if source == "afisha" else ""
+
     normalized = {
         "id": str(item.get("id") or make_id()),
         "owner": event_owner,
@@ -459,6 +464,8 @@ def normalize_calendar_event(item: Any, owner: str | None = None) -> dict[str, A
         "end_time": str(item.get("end_time") or ""),
         "comment": str(item.get("comment") or ""),
         "notified_24h": bool(item.get("notified_24h", False)),
+        "source": source,
+        "source_id": source_id,
     }
     if parse_calendar_event_start_dt(normalized) is None:
         return None

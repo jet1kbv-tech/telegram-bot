@@ -55,6 +55,7 @@ from bot.handlers.afisha import (
     add_event_place,
     add_event_time,
     add_event_title,
+    apply_afisha_delete,
     apply_afisha_status_update,
     get_actual_afisha_items,
 )
@@ -307,6 +308,8 @@ async def check_afisha_notifications(context: ContextTypes.DEFAULT_TYPE) -> None
 
     for owner in ("vova", "sasha"):
         for event in data.get("calendars", {}).get(owner, []):
+            if event.get("source") == "afisha":
+                continue
             event_dt = parse_calendar_event_start_dt(event)
             if not event_dt:
                 continue
@@ -513,7 +516,7 @@ async def section_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if section == "wishlist":
             item["reserved_by"] = get_user_name(update) if new_status == "gifted" else ""
         if section == "afisha":
-            apply_afisha_status_update(item, new_status)
+            apply_afisha_status_update(data, item, new_status)
         storage.save(data)
         await safe_edit_message(query, build_item_text(section, item), reply_markup=item_keyboard(section, item, page, owner, status_filter))
         return SECTION
@@ -566,6 +569,8 @@ async def section_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             return SECTION
 
         delete_item_by_id(data[section], item_id)
+        if section == "afisha":
+            apply_afisha_delete(data, item)
         storage.save(data)
 
         if section == "wishlist" and owner:
