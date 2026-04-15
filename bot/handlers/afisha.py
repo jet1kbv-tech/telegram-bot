@@ -12,10 +12,16 @@ from bot.states import (
     ADDING_EVENT_PLACE,
     ADDING_EVENT_TIME,
     ADDING_EVENT_TITLE,
+    EDITING_AFISHA_DATE,
+    EDITING_AFISHA_TIME,
     SECTION,
 )
-from bot.services.afisha_calendar_sync import project_afisha_to_calendars, remove_afisha_from_calendars
-from bot.storage import make_id, normalize_event, sort_events, storage
+from bot.services.afisha_calendar_sync import (
+    build_afisha_projection_id,
+    project_afisha_to_calendars,
+    remove_afisha_from_calendars,
+)
+from bot.storage import find_item, make_id, normalize_event, sort_events, storage
 from bot.storage import format_event_dt, is_event_actual
 from bot.utils import ensure_access, item_status_label, remember_current_chat
 
@@ -92,6 +98,131 @@ def apply_afisha_status_update(data: dict[str, Any], item: dict[str, Any], new_s
 
 def apply_afisha_delete(data: dict[str, Any], item: dict[str, Any]) -> None:
     remove_afisha_from_calendars(data, str(item.get("id") or ""))
+
+
+def afisha_edit_menu_keyboard(item_id: str, page: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("📅 Изменить дату", callback_data=f"af_edit_field|{item_id}|date|{page}")],
+            [InlineKeyboardButton("🕒 Изменить время", callback_data=f"af_edit_field|{item_id}|time|{page}")],
+            [InlineKeyboardButton("⬅️ К событию", callback_data=f"view|afisha|{item_id}|{page}")],
+            [InlineKeyboardButton("🏠 В меню", callback_data="menu:main")],
+        ]
+    )
+
+
+async def edit_afisha_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not await ensure_access(update):
+        return ConversationHandler.END
+    await remember_current_chat(update)
+    date_raw = (update.message.text or "").strip()
+    try:
+        datetime.strptime(date_raw, "%Y-%m-%d")
+    except ValueError:
+        await update.message.reply_text("Дата должна быть в формате ГГГГ-ММ-ДД. Попробуй ещё раз:")
+        return EDITING_AFISHA_DATE
+
+    item_id = str(context.user_data.get("editing_afisha_item_id") or "")
+    page = int(context.user_data.get("editing_afisha_page") or 0)
+    if not item_id:
+        await update.message.reply_text("Не удалось понять, какое событие редактировать.")
+        return SECTION
+
+    data = storage.load()
+    item = find_item(data.get("afisha", []), item_id)
+    if not item:
+        await update.message.reply_text("Событие не найдено. Возможно, оно уже удалено.")
+        return SECTION
+
+    original_date = str(item.get("date") or "")
+    item["date"] = date_raw
+    normalized_item = normalize_event(item)
+    if normalized_item is None:
+        item["date"] = original_date
+        await update.message.reply_text("Не удалось применить дату: проверь диапазон начала и окончания. Попробуй ещё раз:")
+        return EDITING_AFISHA_DATE
+
+    item.clear()
+    item.update(normalized_item)
+    if original_date != date_raw:
+        item["notified_24h"] = False
+        remove_afisha_from_calendars(data, item_id)
+    project_afisha_to_calendars(data, item)
+    data["afisha"] = sort_events(data.get("afisha", []))
+    if original_date != date_raw:
+        for owner in ("vova", "sasha"):
+            projection_id = build_afisha_projection_id(item_id, owner)
+            projection = find_item(data.get("calendars", {}).get(owner, []), projection_id)
+            if projection:
+                projection["notified_24h"] = False
+    storage.save(data)
+
+    build_item_text = _require_build_item_text()
+    item_keyboard = _require_item_keyboard()
+    await update.message.reply_text(
+        f"Дата обновлена:\n\n{build_item_text('afisha', item)}",
+        reply_markup=item_keyboard("afisha", item, page=page),
+    )
+    context.user_data.pop("editing_afisha_item_id", None)
+    context.user_data.pop("editing_afisha_page", None)
+    return SECTION
+
+
+async def edit_afisha_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not await ensure_access(update):
+        return ConversationHandler.END
+    await remember_current_chat(update)
+    time_raw = (update.message.text or "").strip()
+    try:
+        datetime.strptime(time_raw, "%H:%M")
+    except ValueError:
+        await update.message.reply_text("Время должно быть в формате ЧЧ:ММ. Попробуй ещё раз:")
+        return EDITING_AFISHA_TIME
+
+    item_id = str(context.user_data.get("editing_afisha_item_id") or "")
+    page = int(context.user_data.get("editing_afisha_page") or 0)
+    if not item_id:
+        await update.message.reply_text("Не удалось понять, какое событие редактировать.")
+        return SECTION
+
+    data = storage.load()
+    item = find_item(data.get("afisha", []), item_id)
+    if not item:
+        await update.message.reply_text("Событие не найдено. Возможно, оно уже удалено.")
+        return SECTION
+
+    original_time = str(item.get("time") or "")
+    item["time"] = time_raw
+    normalized_item = normalize_event(item)
+    if normalized_item is None:
+        item["time"] = original_time
+        await update.message.reply_text("Не удалось применить время: проверь диапазон начала и окончания. Попробуй ещё раз:")
+        return EDITING_AFISHA_TIME
+
+    item.clear()
+    item.update(normalized_item)
+    if original_time != time_raw:
+        item["notified_24h"] = False
+        remove_afisha_from_calendars(data, item_id)
+    project_afisha_to_calendars(data, item)
+    data["afisha"] = sort_events(data.get("afisha", []))
+    if original_time != time_raw:
+        for owner in ("vova", "sasha"):
+            projection_id = build_afisha_projection_id(item_id, owner)
+            projection = find_item(data.get("calendars", {}).get(owner, []), projection_id)
+            if projection:
+                projection["notified_24h"] = False
+    storage.save(data)
+
+    build_item_text = _require_build_item_text()
+    item_keyboard = _require_item_keyboard()
+    await update.message.reply_text(
+        f"Время обновлено:\n\n{build_item_text('afisha', item)}",
+        reply_markup=item_keyboard("afisha", item, page=page),
+    )
+    context.user_data.pop("editing_afisha_item_id", None)
+    context.user_data.pop("editing_afisha_page", None)
+    return SECTION
 
 
 async def add_event_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:

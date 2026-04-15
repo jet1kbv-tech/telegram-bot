@@ -226,12 +226,19 @@ def item_keyboard(
     back_callback = build_back_to_list_callback(section, page, owner, status_filter)
 
     return InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton(toggle_text, callback_data=status_callback)],
-            [InlineKeyboardButton("🗑️ Удалить", callback_data=delete_confirm_callback)],
-            [InlineKeyboardButton("⬅️ К списку", callback_data=back_callback)],
-            [InlineKeyboardButton("🏠 В меню", callback_data="menu:main")],
-        ]
+        (
+            [[InlineKeyboardButton(toggle_text, callback_data=status_callback)]]
+            + (
+                [[InlineKeyboardButton("✏️ Редактировать", callback_data=f"af_edit|{item_id}|{page}")]]
+                if section == "afisha"
+                else []
+            )
+            + [
+                [InlineKeyboardButton("🗑️ Удалить", callback_data=delete_confirm_callback)],
+                [InlineKeyboardButton("⬅️ К списку", callback_data=back_callback)],
+                [InlineKeyboardButton("🏠 В меню", callback_data="menu:main")],
+            ]
+        )
     )
 
 
