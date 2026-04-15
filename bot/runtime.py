@@ -372,7 +372,7 @@ async def section_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     parts = query.data.split("|")
     action = parts[0]
 
-    if action == "main":
+    if action in {"main", "menu:main"}:
         return await back_to_main(update, context)
 
     if action == "menu":
@@ -532,7 +532,7 @@ async def section_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         data = storage.load()
         item = find_item(data.get(section, []), item_id)
         if not item:
-            await safe_edit_message(query, "Не удалось найти элемент для удаления.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 В меню", callback_data="main")]]))
+            await safe_edit_message(query, "Не удалось найти элемент для удаления.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 В меню", callback_data="menu:main")]]))
             return SECTION
 
         await safe_edit_message(query, f"{build_item_text(section, item)}\n\nТочно удалить?", reply_markup=delete_confirm_keyboard(section, item_id, page, owner, status_filter))
@@ -557,7 +557,7 @@ async def section_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         data = storage.load()
         item = find_item(data.get(section, []), item_id)
         if not item:
-            await safe_edit_message(query, "Не удалось удалить: элемент не найден.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 В меню", callback_data="main")]]))
+            await safe_edit_message(query, "Не удалось удалить: элемент не найден.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 В меню", callback_data="menu:main")]]))
             return SECTION
 
         delete_item_by_id(data[section], item_id)
@@ -633,13 +633,13 @@ def build_app() -> Application:
         entry_points=[CommandHandler("start", start)],
         states={
             MENU: [
-                CallbackQueryHandler(back_to_main, pattern=r"^main$"),
+                CallbackQueryHandler(back_to_main, pattern=r"^(main|menu:main)$"),
                 CallbackQueryHandler(menu_router, pattern=r"^menu\|(films|wishlist|leisure|afisha|backlog)$"),
                 CallbackQueryHandler(section_router),
             ],
             SECTION: [
                 CallbackQueryHandler(noop, pattern=r"^noop$"),
-                CallbackQueryHandler(back_to_main, pattern=r"^main$"),
+                CallbackQueryHandler(back_to_main, pattern=r"^(main|menu:main)$"),
                 CallbackQueryHandler(menu_router, pattern=r"^menu\|(films|wishlist|leisure|afisha|backlog)$"),
                 CallbackQueryHandler(section_router),
             ],

@@ -4,6 +4,7 @@ from typing import Any
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
+from bot.keyboards.common import main_menu_row
 from bot.utils import paginate_items
 
 
@@ -12,7 +13,7 @@ def places_menu_keyboard() -> InlineKeyboardMarkup:
         [
             [InlineKeyboardButton("📍 Локации в Москве", callback_data="places:moscow")],
             [InlineKeyboardButton("🌍 Города", callback_data="places:cities:0")],
-            [InlineKeyboardButton("⬅️ Назад в меню", callback_data="main")],
+            main_menu_row(),
         ]
     )
 
@@ -24,6 +25,7 @@ def moscow_menu_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton("✅ Посетили", callback_data="places:moscow:visited:0")],
             [InlineKeyboardButton("➕ Добавить", callback_data="places:add_moscow")],
             [InlineKeyboardButton("⬅️ Назад", callback_data="places:menu")],
+            main_menu_row(),
         ]
     )
 
@@ -36,6 +38,7 @@ def city_menu_keyboard(city_id: str) -> InlineKeyboardMarkup:
             [InlineKeyboardButton("➕ Добавить место", callback_data=f"places:add_city_place:{city_id}")],
             [InlineKeyboardButton("🗑️ Удалить город", callback_data=f"places:delete_city:{city_id}")],
             [InlineKeyboardButton("⬅️ К городам", callback_data="places:cities:0")],
+            main_menu_row(),
         ]
     )
 
@@ -64,7 +67,7 @@ def moscow_list_keyboard(items: list[dict[str, Any]], status: str, page: int) ->
 
     rows.append([InlineKeyboardButton("➕ Добавить", callback_data="places:add_moscow")])
     rows.append([InlineKeyboardButton("⬅️ К Москве", callback_data="places:moscow")])
-    rows.append([InlineKeyboardButton("🏠 В меню", callback_data="main")])
+    rows.append(main_menu_row())
     return InlineKeyboardMarkup(rows)
 
 
@@ -76,7 +79,7 @@ def moscow_item_keyboard(item_id: str, status: str, page: int) -> InlineKeyboard
         [
             [InlineKeyboardButton("🗑️ Удалить", callback_data=f"places:delete_moscow:{item_id}:{status}:{page}")],
             [InlineKeyboardButton("⬅️ К списку", callback_data=f"places:moscow:{status}:{page}")],
-            [InlineKeyboardButton("🏠 В меню", callback_data="main")],
+            main_menu_row(),
         ]
     )
     return InlineKeyboardMarkup(rows)
@@ -96,7 +99,7 @@ def cities_keyboard(cities: list[dict[str, Any]], page: int) -> InlineKeyboardMa
 
     rows.append([InlineKeyboardButton("➕ Добавить город", callback_data="places:add_city")])
     rows.append([InlineKeyboardButton("⬅️ К местам", callback_data="places:menu")])
-    rows.append([InlineKeyboardButton("🏠 В меню", callback_data="main")])
+    rows.append(main_menu_row())
     return InlineKeyboardMarkup(rows)
 
 
@@ -114,7 +117,7 @@ def city_places_keyboard(city_id: str, items: list[dict[str, Any]], status: str,
 
     rows.append([InlineKeyboardButton("➕ Добавить место", callback_data=f"places:add_city_place:{city_id}")])
     rows.append([InlineKeyboardButton("⬅️ К городу", callback_data=f"places:open_city:{city_id}")])
-    rows.append([InlineKeyboardButton("🏠 В меню", callback_data="main")])
+    rows.append(main_menu_row())
     return InlineKeyboardMarkup(rows)
 
 
@@ -126,7 +129,7 @@ def city_place_item_keyboard(city_id: str, place_id: str, status: str, page: int
         [
             [InlineKeyboardButton("🗑️ Удалить", callback_data=f"places:delete_city_place:{city_id}:{place_id}:{status}:{page}")],
             [InlineKeyboardButton("⬅️ К списку", callback_data=f"places:city_{status}:{city_id}:{page}")],
-            [InlineKeyboardButton("🏠 В меню", callback_data="main")],
+            main_menu_row(),
         ]
     )
     return InlineKeyboardMarkup(rows)

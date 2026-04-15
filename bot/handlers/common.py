@@ -50,9 +50,25 @@ async def back_to_main(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         return ConversationHandler.END
 
     await remember_current_chat(update)
-    query = update.callback_query
-    await query.answer()
+    if update.callback_query:
+        await update.callback_query.answer()
     return await start(update, context)
+
+
+async def quick_return_to_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not await ensure_access(update):
+        return ConversationHandler.END
+
+    if _main_menu_keyboard is None:
+        raise RuntimeError("Common handlers are not configured.")
+
+    await remember_current_chat(update)
+    context.user_data.clear()
+    if update.message:
+        await update.message.reply_text("Окей, возвращаемся в главное меню.", reply_markup=_main_menu_keyboard())
+    elif update.callback_query:
+        return await back_to_main(update, context)
+    return ConversationHandler.END
 
 
 async def noop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:

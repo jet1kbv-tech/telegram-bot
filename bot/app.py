@@ -32,7 +32,7 @@ from bot.handlers.calendar import (
     add_calendar_event_title,
     configure_calendar_handlers,
 )
-from bot.handlers.common import back_to_main, cancel, configure_common_handlers, noop, start, whoami
+from bot.handlers.common import back_to_main, cancel, configure_common_handlers, noop, quick_return_to_main_menu, start, whoami
 from bot.handlers.films import (
     add_film_comment,
     add_film_sasha_rating,
@@ -108,6 +108,7 @@ from bot.runtime import (
 from bot.ui.common import build_item_text
 
 logger = logging.getLogger(__name__)
+MAIN_MENU_TEXT = "🏠 В меню"
 
 
 async def handle_application_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -158,54 +159,60 @@ def build_app() -> Application:
     else:
         logger.warning("JobQueue недоступна. Для уведомлений за день до события нужен APScheduler в requirements.")
 
+    def text_state(handler):
+        return [
+            MessageHandler(filters.Regex(rf"^{MAIN_MENU_TEXT}$"), quick_return_to_main_menu),
+            MessageHandler(filters.TEXT & ~filters.COMMAND, handler),
+        ]
+
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
             MENU: [
-                CallbackQueryHandler(back_to_main, pattern=r"^main$"),
+                CallbackQueryHandler(back_to_main, pattern=r"^(main|menu:main)$"),
                 CallbackQueryHandler(menu_router, pattern=r"^menu\|(films|wishlist|leisure|afisha|backlog)$"),
                 CallbackQueryHandler(places_callback_router, pattern=r"^places:"),
                 CallbackQueryHandler(section_router),
             ],
             SECTION: [
                 CallbackQueryHandler(noop, pattern=r"^noop$"),
-                CallbackQueryHandler(back_to_main, pattern=r"^main$"),
+                CallbackQueryHandler(back_to_main, pattern=r"^(main|menu:main)$"),
                 CallbackQueryHandler(menu_router, pattern=r"^menu\|(films|wishlist|leisure|afisha|backlog)$"),
                 CallbackQueryHandler(places_callback_router, pattern=r"^places:"),
                 CallbackQueryHandler(section_router),
             ],
-            ADDING_FILM_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_film_title)],
-            ADDING_FILM_COMMENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_film_comment)],
-            ADDING_FILM_SASHA_RATING: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_film_sasha_rating)],
-            ADDING_FILM_VOVA_RATING: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_film_vova_rating)],
-            ADDING_CALENDAR_EVENT_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_calendar_event_title)],
-            ADDING_CALENDAR_EVENT_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_calendar_event_date)],
-            ADDING_CALENDAR_EVENT_START_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_calendar_event_start_time)],
-            ADDING_CALENDAR_EVENT_END_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_calendar_event_end_time)],
-            ADDING_CALENDAR_EVENT_COMMENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_calendar_event_comment)],
-            ADDING_BACKLOG_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_backlog_title)],
-            ADDING_BACKLOG_DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_backlog_description)],
-            ADDING_WISHLIST_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_wishlist_title)],
-            ADDING_WISHLIST_LINK: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_wishlist_link)],
-            ADDING_WISHLIST_COMMENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_wishlist_comment)],
-            ADDING_LEISURE_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_leisure_title)],
-            ADDING_LEISURE_COMMENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_leisure_comment)],
-            ADDING_EVENT_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_title)],
-            ADDING_EVENT_PLACE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_place)],
-            ADDING_EVENT_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_date)],
-            ADDING_EVENT_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_time)],
-            ADDING_EVENT_END_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_end_date)],
-            ADDING_EVENT_END_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_end_time)],
-            ADDING_EVENT_LINK: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_link)],
-            PLACE_ADD_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_place_name)],
-            PLACE_ADD_LINK: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_place_link)],
-            PLACE_ADD_COMMENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_place_comment)],
-            CITY_ADD_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_city_name)],
-            CITY_ADD_COUNTRY: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_city_country)],
-            CITY_PLACE_ADD_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_city_place_name)],
-            CITY_PLACE_ADD_LINK: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_city_place_link)],
-            CITY_PLACE_ADD_COMMENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_city_place_comment)],
-            CITY_PLACE_VISIT_COMMENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_city_place_visit_comment)],
+            ADDING_FILM_TITLE: text_state(add_film_title),
+            ADDING_FILM_COMMENT: text_state(add_film_comment),
+            ADDING_FILM_SASHA_RATING: text_state(add_film_sasha_rating),
+            ADDING_FILM_VOVA_RATING: text_state(add_film_vova_rating),
+            ADDING_CALENDAR_EVENT_TITLE: text_state(add_calendar_event_title),
+            ADDING_CALENDAR_EVENT_DATE: text_state(add_calendar_event_date),
+            ADDING_CALENDAR_EVENT_START_TIME: text_state(add_calendar_event_start_time),
+            ADDING_CALENDAR_EVENT_END_TIME: text_state(add_calendar_event_end_time),
+            ADDING_CALENDAR_EVENT_COMMENT: text_state(add_calendar_event_comment),
+            ADDING_BACKLOG_TITLE: text_state(add_backlog_title),
+            ADDING_BACKLOG_DESCRIPTION: text_state(add_backlog_description),
+            ADDING_WISHLIST_TITLE: text_state(add_wishlist_title),
+            ADDING_WISHLIST_LINK: text_state(add_wishlist_link),
+            ADDING_WISHLIST_COMMENT: text_state(add_wishlist_comment),
+            ADDING_LEISURE_TITLE: text_state(add_leisure_title),
+            ADDING_LEISURE_COMMENT: text_state(add_leisure_comment),
+            ADDING_EVENT_TITLE: text_state(add_event_title),
+            ADDING_EVENT_PLACE: text_state(add_event_place),
+            ADDING_EVENT_DATE: text_state(add_event_date),
+            ADDING_EVENT_TIME: text_state(add_event_time),
+            ADDING_EVENT_END_DATE: text_state(add_event_end_date),
+            ADDING_EVENT_END_TIME: text_state(add_event_end_time),
+            ADDING_EVENT_LINK: text_state(add_event_link),
+            PLACE_ADD_NAME: text_state(add_place_name),
+            PLACE_ADD_LINK: text_state(add_place_link),
+            PLACE_ADD_COMMENT: text_state(add_place_comment),
+            CITY_ADD_NAME: text_state(add_city_name),
+            CITY_ADD_COUNTRY: text_state(add_city_country),
+            CITY_PLACE_ADD_NAME: text_state(add_city_place_name),
+            CITY_PLACE_ADD_LINK: text_state(add_city_place_link),
+            CITY_PLACE_ADD_COMMENT: text_state(add_city_place_comment),
+            CITY_PLACE_VISIT_COMMENT: text_state(add_city_place_visit_comment),
         },
         fallbacks=[CommandHandler("cancel", cancel), CommandHandler("start", start)],
         allow_reentry=True,
