@@ -14,6 +14,7 @@ from bot.states import (
     ADDING_EVENT_TITLE,
     SECTION,
 )
+from bot.services.afisha_calendar_sync import project_afisha_to_calendars, remove_afisha_from_calendars
 from bot.storage import make_id, normalize_event, sort_events, storage
 from bot.storage import format_event_dt, is_event_actual
 from bot.utils import ensure_access, item_status_label, remember_current_chat
@@ -80,9 +81,17 @@ def afisha_empty_list_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def apply_afisha_status_update(item: dict[str, Any], new_status: str) -> None:
+def apply_afisha_status_update(data: dict[str, Any], item: dict[str, Any], new_status: str) -> None:
     if new_status != "active":
         item["notified_24h"] = True
+        remove_afisha_from_calendars(data, str(item.get("id") or ""))
+        return
+
+    project_afisha_to_calendars(data, item)
+
+
+def apply_afisha_delete(data: dict[str, Any], item: dict[str, Any]) -> None:
+    remove_afisha_from_calendars(data, str(item.get("id") or ""))
 
 
 async def add_event_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -222,6 +231,7 @@ async def add_event_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     data = storage.load()
     data["afisha"].append(normalized_item)
     data["afisha"] = sort_events(data["afisha"])
+    project_afisha_to_calendars(data, normalized_item)
     storage.save(data)
 
     for key in ["event_title", "event_place", "event_date", "event_time", "event_end_date", "event_end_time"]:
