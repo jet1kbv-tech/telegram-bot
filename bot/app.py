@@ -54,6 +54,7 @@ from bot.handlers.places import (
     configure_places_handlers,
     places_callback_router,
 )
+from bot.handlers.text_commands import configure_text_commands, quick_text_command_filter, quick_text_command_router
 from bot.handlers.wishlist import (
     add_wishlist_comment,
     add_wishlist_link,
@@ -153,14 +154,22 @@ def build_app() -> Application:
         safe_edit_message=safe_edit_message,
         main_menu_keyboard=main_menu_keyboard,
     )
+    configure_text_commands(
+        menu_router=menu_router,
+        section_router=section_router,
+        places_callback_router=places_callback_router,
+    )
 
     if app.job_queue is not None:
         app.job_queue.run_repeating(check_afisha_notifications, interval=NOTIFICATION_CHECK_INTERVAL, first=30, name="afisha_notifications")
     else:
         logger.warning("JobQueue недоступна. Для уведомлений за день до события нужен APScheduler в requirements.")
 
+    quick_commands_filter = quick_text_command_filter()
+
     def text_state(handler):
         return [
+            MessageHandler(quick_commands_filter, quick_text_command_router),
             MessageHandler(filters.Regex(rf"^{MAIN_MENU_TEXT}$"), quick_return_to_main_menu),
             MessageHandler(filters.TEXT & ~filters.COMMAND, handler),
         ]
@@ -169,12 +178,14 @@ def build_app() -> Application:
         entry_points=[CommandHandler("start", start)],
         states={
             MENU: [
+                MessageHandler(quick_commands_filter, quick_text_command_router),
                 CallbackQueryHandler(back_to_main, pattern=r"^(main|menu:main)$"),
                 CallbackQueryHandler(menu_router, pattern=r"^menu\|(films|wishlist|leisure|afisha|backlog)$"),
                 CallbackQueryHandler(places_callback_router, pattern=r"^places:"),
                 CallbackQueryHandler(section_router),
             ],
             SECTION: [
+                MessageHandler(quick_commands_filter, quick_text_command_router),
                 CallbackQueryHandler(noop, pattern=r"^noop$"),
                 CallbackQueryHandler(back_to_main, pattern=r"^(main|menu:main)$"),
                 CallbackQueryHandler(menu_router, pattern=r"^menu\|(films|wishlist|leisure|afisha|backlog)$"),
