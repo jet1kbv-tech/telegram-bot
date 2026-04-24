@@ -33,6 +33,10 @@ class JsonStorage:
             "leisure": [],
             "afisha": [],
             "backlog": [],
+            "tickets": {
+                "active": [],
+                "used": [],
+            },
             "spark": {
                 "active": [],
                 "done": [],
@@ -118,6 +122,7 @@ class JsonStorage:
             if item:
                 data["backlog"].append(item)
 
+        normalize_tickets_root(data, raw_data.get("tickets"))
         normalize_spark_root(data, raw_data.get("spark"))
         normalize_places_root(data, raw_data.get("places"))
 
@@ -443,6 +448,73 @@ def normalize_backlog_item(item: Any) -> dict[str, Any] | None:
             "status": status,
         }
     return None
+
+
+def normalize_ticket_attachment(item: Any) -> dict[str, Any] | None:
+    if not isinstance(item, dict):
+        return None
+    kind = str(item.get("kind") or "").strip()
+    if kind not in {"document", "photo"}:
+        return None
+    file_id = str(item.get("file_id") or "").strip()
+    if not file_id:
+        return None
+    return {
+        "kind": kind,
+        "file_id": file_id,
+        "file_name": str(item.get("file_name") or ""),
+        "mime_type": str(item.get("mime_type") or ""),
+    }
+
+
+def normalize_ticket_item(item: Any) -> dict[str, Any] | None:
+    if not isinstance(item, dict):
+        return None
+
+    title = str(item.get("title") or "").strip()
+    date_raw = str(item.get("date") or "").strip()
+    time_raw = str(item.get("time") or "").strip()
+    if not title:
+        return None
+    try:
+        datetime.strptime(f"{date_raw} {time_raw}", "%Y-%m-%d %H:%M")
+    except ValueError:
+        return None
+
+    attachments_raw = item.get("attachments") if isinstance(item.get("attachments"), list) else []
+    attachments: list[dict[str, Any]] = []
+    for raw_attachment in attachments_raw:
+        attachment = normalize_ticket_attachment(raw_attachment)
+        if attachment:
+            attachments.append(attachment)
+
+    return {
+        "id": str(item.get("id") or make_id()),
+        "title": title,
+        "date": date_raw,
+        "time": time_raw,
+        "place_route": str(item.get("place_route") or ""),
+        "comment": str(item.get("comment") or ""),
+        "attachments": attachments,
+        "afisha_id": str(item.get("afisha_id") or ""),
+    }
+
+
+def normalize_tickets_root(data: dict[str, Any], raw_tickets: Any) -> None:
+    tickets = {
+        "active": [],
+        "used": [],
+    }
+    if isinstance(raw_tickets, dict):
+        for bucket in ("active", "used"):
+            raw_bucket = raw_tickets.get(bucket, [])
+            if not isinstance(raw_bucket, list):
+                continue
+            for raw_item in raw_bucket:
+                item = normalize_ticket_item(raw_item)
+                if item:
+                    tickets[bucket].append(item)
+    data["tickets"] = tickets
 
 
 def normalize_calendar_event(item: Any, owner: str | None = None) -> dict[str, Any] | None:
