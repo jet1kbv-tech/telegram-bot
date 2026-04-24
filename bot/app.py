@@ -60,6 +60,16 @@ from bot.handlers.places import (
     places_callback_router,
 )
 from bot.handlers.text_commands import configure_text_commands, quick_text_command_filter, quick_text_command_router
+from bot.handlers.tickets import (
+    add_ticket_attachment,
+    add_ticket_comment,
+    add_ticket_date,
+    add_ticket_place_route,
+    add_ticket_time,
+    add_ticket_title,
+    configure_tickets_handlers,
+    tickets_callback_router,
+)
 from bot.handlers.wishlist import (
     add_wishlist_comment,
     add_wishlist_link,
@@ -93,6 +103,12 @@ from bot.states import (
     ADDING_LEISURE_TITLE,
     ADDING_SPARK_DESCRIPTION,
     ADDING_SPARK_TITLE,
+    ADDING_TICKET_ATTACHMENTS,
+    ADDING_TICKET_COMMENT,
+    ADDING_TICKET_DATE,
+    ADDING_TICKET_PLACE_ROUTE,
+    ADDING_TICKET_TIME,
+    ADDING_TICKET_TITLE,
     CITY_ADD_COUNTRY,
     CITY_ADD_NAME,
     CITY_PLACE_ADD_COMMENT,
@@ -173,6 +189,7 @@ def build_app() -> Application:
         section_router=section_router,
         places_callback_router=places_callback_router,
     )
+    configure_tickets_handlers(safe_edit_message=safe_edit_message)
 
     if app.job_queue is not None:
         app.job_queue.run_repeating(check_afisha_notifications, interval=NOTIFICATION_CHECK_INTERVAL, first=30, name="afisha_notifications")
@@ -197,6 +214,7 @@ def build_app() -> Application:
                 CallbackQueryHandler(menu_router, pattern=r"^menu\|(films|wishlist|leisure|afisha|backlog)$"),
                 CallbackQueryHandler(places_callback_router, pattern=r"^places:"),
                 CallbackQueryHandler(spark_callback_router, pattern=r"^spark:"),
+                CallbackQueryHandler(tickets_callback_router, pattern=r"^tickets:"),
                 CallbackQueryHandler(section_router),
             ],
             SECTION: [
@@ -206,6 +224,7 @@ def build_app() -> Application:
                 CallbackQueryHandler(menu_router, pattern=r"^menu\|(films|wishlist|leisure|afisha|backlog)$"),
                 CallbackQueryHandler(places_callback_router, pattern=r"^places:"),
                 CallbackQueryHandler(spark_callback_router, pattern=r"^spark:"),
+                CallbackQueryHandler(tickets_callback_router, pattern=r"^tickets:"),
                 CallbackQueryHandler(section_router),
             ],
             ADDING_FILM_TITLE: text_state(add_film_title),
@@ -228,6 +247,18 @@ def build_app() -> Application:
             ADDING_LEISURE_COMMENT: text_state(add_leisure_comment),
             ADDING_SPARK_TITLE: text_state(add_spark_title),
             ADDING_SPARK_DESCRIPTION: text_state(add_spark_description),
+            ADDING_TICKET_TITLE: text_state(add_ticket_title),
+            ADDING_TICKET_DATE: text_state(add_ticket_date),
+            ADDING_TICKET_TIME: text_state(add_ticket_time),
+            ADDING_TICKET_PLACE_ROUTE: text_state(add_ticket_place_route),
+            ADDING_TICKET_COMMENT: text_state(add_ticket_comment),
+            ADDING_TICKET_ATTACHMENTS: [
+                CallbackQueryHandler(tickets_callback_router, pattern=r"^tickets:"),
+                MessageHandler(quick_commands_filter, quick_text_command_router),
+                MessageHandler(filters.Regex(rf"^{MAIN_MENU_TEXT}$"), quick_return_to_main_menu),
+                MessageHandler(filters.PHOTO | filters.Document.ALL, add_ticket_attachment),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, add_ticket_attachment),
+            ],
             ADDING_EVENT_TITLE: text_state(add_event_title),
             ADDING_EVENT_PLACE: text_state(add_event_place),
             ADDING_EVENT_DATE: text_state(add_event_date),
