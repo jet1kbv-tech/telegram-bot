@@ -75,7 +75,6 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton("🎁 Вишлист", callback_data="menu|wishlist")],
             [InlineKeyboardButton("🗓 Афиша", callback_data="menu|afisha")],
             [InlineKeyboardButton("📅 Календарь", callback_data="calendar_menu")],
-            [InlineKeyboardButton("🎟 Билеты", callback_data="tickets:menu")],
             [InlineKeyboardButton("🧩 Бэклог", callback_data="menu|backlog")],
         ]
     )
