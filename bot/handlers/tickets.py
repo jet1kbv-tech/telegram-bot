@@ -384,7 +384,7 @@ async def show_afisha_tickets_panel(update: Update, afisha_id: str, page: int) -
             lines.append(
                 f"• {ticket.get('date', '')} {ticket.get('time', '')} · {ticket.get('title', 'Без названия')} ({status}, вложений: {len(ticket.get('attachments', []))})"
             )
-    rows = afisha_tickets_panel_keyboard(afisha_id, page).inline_keyboard
+    rows = list(afisha_tickets_panel_keyboard(afisha_id, page).inline_keyboard)
     if linked:
         ticket_rows = [
             [InlineKeyboardButton(f"🎟 {ticket.get('title', 'Без названия')}", callback_data=f"tickets:afisha:view:{ticket.get('id', '')}:{afisha_id}:{page}")]
