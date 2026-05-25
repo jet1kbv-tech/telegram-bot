@@ -86,3 +86,26 @@ def ticket_attachments_done_keyboard(count: int) -> InlineKeyboardMarkup:
             [InlineKeyboardButton("❌ Отмена", callback_data="tickets:menu")],
         ]
     )
+
+
+def afisha_tickets_panel_keyboard(afisha_id: str, page: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("➕ Добавить билет", callback_data=f"tickets:afisha:add:start:{afisha_id}:{page}")],
+            [InlineKeyboardButton("📎 Отправить вложения", callback_data=f"tickets:afisha:send_all:{afisha_id}:{page}")],
+            [InlineKeyboardButton("⬅️ К событию", callback_data=f"view|afisha|{afisha_id}|{page}")],
+            [InlineKeyboardButton("🏠 В меню", callback_data="menu:main")],
+        ]
+    )
+
+
+def afisha_ticket_card_keyboard(ticket_id: str, afisha_id: str, page: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("📎 Отправить вложения", callback_data=f"tickets:afisha:send:{ticket_id}:{afisha_id}:{page}")],
+            [InlineKeyboardButton("🔗 Отвязать", callback_data=f"tickets:afisha:unlink_confirm:{ticket_id}:{afisha_id}:{page}")],
+            [InlineKeyboardButton("🗑️ Удалить билет", callback_data=f"tickets:afisha:delete_confirm:{ticket_id}:{afisha_id}:{page}")],
+            [InlineKeyboardButton("⬅️ К билетам события", callback_data=f"tickets:afisha:panel:{afisha_id}:{page}")],
+            [InlineKeyboardButton("🏠 В меню", callback_data="menu:main")],
+        ]
+    )

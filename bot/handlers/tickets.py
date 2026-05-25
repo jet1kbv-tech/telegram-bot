@@ -8,8 +8,9 @@ from telegram.error import TelegramError
 from telegram.ext import ContextTypes, ConversationHandler
 
 from bot.config import PAGE_SIZE
-from bot.handlers.afisha import apply_afisha_delete, apply_afisha_status_update
 from bot.keyboards.tickets import (
+    afisha_ticket_card_keyboard,
+    afisha_tickets_panel_keyboard,
     ticket_attachments_done_keyboard,
     ticket_card_keyboard,
     ticket_delete_confirm_keyboard,
@@ -17,7 +18,6 @@ from bot.keyboards.tickets import (
     tickets_list_keyboard,
     tickets_menu_keyboard,
 )
-from bot.services.afisha_calendar_sync import project_afisha_to_calendars
 from bot.states import (
     ADDING_TICKET_ATTACHMENTS,
     ADDING_TICKET_COMMENT,
@@ -31,9 +31,7 @@ from bot.storage import (
     delete_item_by_id,
     find_item,
     make_id,
-    normalize_event,
     normalize_tickets_root,
-    sort_events,
     storage,
 )
 from bot.utils import ensure_access, remember_current_chat
@@ -287,28 +285,8 @@ async def finalize_ticket_add(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     data = storage.load()
     tickets = _tickets_root(data)
-
-    afisha_item = normalize_event(
-        {
-            "id": make_id(),
-            "title": title,
-            "place": str(draft.get("place_route") or ""),
-            "date": date_raw,
-            "time": time_raw,
-            "end_date": "",
-            "end_time": "",
-            "link": "",
-            "status": "active",
-            "notified_24h": False,
-            "notified_morning": False,
-        }
-    )
-    if afisha_item is None:
-        await safe_edit_message(query, "Не удалось создать связанное событие Афиши. Проверь дату/время.")
-        return SECTION
-
     ticket_id = make_id()
-    afisha_item["ticket_id"] = ticket_id
+    afisha_id = str(draft.get("afisha_id") or "").strip()
 
     ticket = {
         "id": ticket_id,
@@ -318,16 +296,20 @@ async def finalize_ticket_add(update: Update, context: ContextTypes.DEFAULT_TYPE
         "place_route": str(draft.get("place_route") or ""),
         "comment": str(draft.get("comment") or ""),
         "attachments": list(attachments),
-        "afisha_id": afisha_item["id"],
+        "afisha_id": afisha_id,
     }
     tickets["active"].append(ticket)
-
-    data["afisha"].append(afisha_item)
-    data["afisha"] = sort_events(data.get("afisha", []))
-    project_afisha_to_calendars(data, afisha_item)
     storage.save(data)
 
     context.user_data.pop("ticket_draft", None)
+    afisha_page = int(draft.get("afisha_page") or 0)
+    if afisha_id:
+        await safe_edit_message(
+            query,
+            f"Билет сохранён:\n\n{_format_ticket_text(ticket)}",
+            reply_markup=afisha_ticket_card_keyboard(ticket_id, afisha_id, afisha_page),
+        )
+        return SECTION
     await safe_edit_message(
         query,
         f"Билет сохранён:\n\n{_format_ticket_text(ticket)}",
@@ -350,13 +332,6 @@ async def mark_ticket_used(update: Update, ticket_id: str, page: int) -> int:
     delete_item_by_id(tickets["active"], ticket_id)
     tickets["used"].append(moved_ticket)
 
-    afisha_id = str(moved_ticket.get("afisha_id") or "")
-    if afisha_id:
-        afisha_item = find_item(data.get("afisha", []), afisha_id)
-        if afisha_item:
-            afisha_item["status"] = "done"
-            apply_afisha_status_update(data, afisha_item, "done")
-
     storage.save(data)
     await safe_edit_message(
         query,
@@ -376,16 +351,61 @@ async def delete_ticket(update: Update, ticket_id: str, bucket: str, page: int) 
         await safe_edit_message(query, "Билет не найден.")
         return SECTION
 
-    afisha_id = str(ticket.get("afisha_id") or "")
-    if afisha_id:
-        afisha_item = find_item(data.get("afisha", []), afisha_id)
-        if afisha_item:
-            delete_item_by_id(data["afisha"], afisha_id)
-            apply_afisha_delete(data, afisha_item)
-
     delete_item_by_id(tickets[bucket], ticket_id)
     storage.save(data)
     return await show_tickets_list(update, bucket, page)
+
+
+def _find_tickets_linked_to_afisha(data: dict[str, Any], afisha_id: str) -> list[tuple[str, dict[str, Any]]]:
+    linked: list[tuple[str, dict[str, Any]]] = []
+    tickets = _tickets_root(data)
+    for bucket in ("active", "used"):
+        for ticket in tickets.get(bucket, []):
+            if str(ticket.get("afisha_id") or "") == afisha_id:
+                linked.append((bucket, ticket))
+    return linked
+
+
+async def show_afisha_tickets_panel(update: Update, afisha_id: str, page: int) -> int:
+    query = update.callback_query
+    data = storage.load()
+    afisha_item = find_item(data.get("afisha", []), afisha_id)
+    safe_edit_message = _require_safe_edit_message()
+    if not afisha_item:
+        await safe_edit_message(query, "Событие Афиши не найдено.")
+        return SECTION
+    linked = _find_tickets_linked_to_afisha(data, afisha_id)
+    lines = [f"🎟 Билеты для события: {afisha_item.get('title', 'Без названия')}", ""]
+    if not linked:
+        lines.append("Пока нет привязанных билетов.")
+    else:
+        for bucket, ticket in linked:
+            status = "активный" if bucket == "active" else "использованный"
+            lines.append(
+                f"• {ticket.get('date', '')} {ticket.get('time', '')} · {ticket.get('title', 'Без названия')} ({status}, вложений: {len(ticket.get('attachments', []))})"
+            )
+    rows = afisha_tickets_panel_keyboard(afisha_id, page).inline_keyboard
+    if linked:
+        ticket_rows = [
+            [InlineKeyboardButton(f"🎟 {ticket.get('title', 'Без названия')}", callback_data=f"tickets:afisha:view:{ticket.get('id', '')}:{afisha_id}:{page}")]
+            for _, ticket in linked
+        ]
+        rows = ticket_rows + rows
+    await safe_edit_message(query, "\n".join(lines), reply_markup=InlineKeyboardMarkup(rows))
+    return SECTION
+
+
+async def show_afisha_ticket_card(update: Update, ticket_id: str, afisha_id: str, page: int) -> int:
+    query = update.callback_query
+    data = storage.load()
+    linked = _find_tickets_linked_to_afisha(data, afisha_id)
+    safe_edit_message = _require_safe_edit_message()
+    ticket = next((item for _, item in linked if str(item.get("id") or "") == ticket_id), None)
+    if not ticket:
+        await safe_edit_message(query, "Билет не найден.", reply_markup=afisha_tickets_panel_keyboard(afisha_id, page))
+        return SECTION
+    await safe_edit_message(query, _format_ticket_text(ticket), reply_markup=afisha_ticket_card_keyboard(ticket_id, afisha_id, page))
+    return SECTION
 
 
 async def send_ticket_attachments(update: Update, context: ContextTypes.DEFAULT_TYPE, ticket_id: str, bucket: str, page: int) -> int:
@@ -430,8 +450,117 @@ async def tickets_callback_router(update: Update, context: ContextTypes.DEFAULT_
 
     action = parts[1]
     if action == "menu":
-        context.user_data.pop("ticket_draft", None)
+        draft = context.user_data.pop("ticket_draft", None)
+        draft_afisha_id = str((draft or {}).get("afisha_id") or "").strip()
+        if draft_afisha_id:
+            draft_afisha_page = int((draft or {}).get("afisha_page") or 0)
+            return await show_afisha_tickets_panel(update, draft_afisha_id, draft_afisha_page)
         return await show_tickets_menu(update)
+    if action == "afisha" and len(parts) >= 4:
+        sub_action = parts[2]
+        if sub_action == "panel" and len(parts) == 5:
+            _, _, _, afisha_id, page_raw = parts
+            return await show_afisha_tickets_panel(update, afisha_id, int(page_raw))
+        if sub_action == "view" and len(parts) == 6:
+            _, _, _, ticket_id, afisha_id, page_raw = parts
+            return await show_afisha_ticket_card(update, ticket_id, afisha_id, int(page_raw))
+        if sub_action == "add" and len(parts) == 6 and parts[3] == "start":
+            _, _, _, _, afisha_id, page_raw = parts
+            context.user_data["ticket_draft"] = {"attachments": [], "afisha_id": afisha_id, "afisha_page": int(page_raw)}
+            safe_edit_message = _require_safe_edit_message()
+            await safe_edit_message(query, "Отправь название билета:")
+            return ADDING_TICKET_TITLE
+        if sub_action == "send" and len(parts) == 7:
+            _, _, _, ticket_id, afisha_id, page_raw = parts
+            data = storage.load()
+            linked = _find_tickets_linked_to_afisha(data, afisha_id)
+            ticket = next((item for _, item in linked if str(item.get("id") or "") == ticket_id), None)
+            safe_edit_message = _require_safe_edit_message()
+            if not ticket:
+                await safe_edit_message(query, "Билет не найден.", reply_markup=afisha_tickets_panel_keyboard(afisha_id, int(page_raw)))
+                return SECTION
+            failures = 0
+            for attachment in ticket.get("attachments", []):
+                try:
+                    if attachment.get("kind") == "document":
+                        await context.bot.send_document(chat_id=query.message.chat_id, document=attachment.get("file_id"))
+                    else:
+                        await context.bot.send_photo(chat_id=query.message.chat_id, photo=attachment.get("file_id"))
+                except TelegramError:
+                    failures += 1
+            status_line = "Вложения отправлены." if failures == 0 else f"Отправлено с ошибками: {failures}."
+            await safe_edit_message(query, f"{_format_ticket_text(ticket)}\n\n{status_line}", reply_markup=afisha_ticket_card_keyboard(ticket_id, afisha_id, int(page_raw)))
+            return SECTION
+        if sub_action == "send_all" and len(parts) == 5:
+            _, _, _, afisha_id, page_raw = parts
+            data = storage.load()
+            linked = _find_tickets_linked_to_afisha(data, afisha_id)
+            safe_edit_message = _require_safe_edit_message()
+            sent = 0
+            failures = 0
+            for _, ticket in linked:
+                for attachment in ticket.get("attachments", []):
+                    try:
+                        if attachment.get("kind") == "document":
+                            await context.bot.send_document(chat_id=query.message.chat_id, document=attachment.get("file_id"))
+                        else:
+                            await context.bot.send_photo(chat_id=query.message.chat_id, photo=attachment.get("file_id"))
+                        sent += 1
+                    except TelegramError:
+                        failures += 1
+            await safe_edit_message(
+                query,
+                f"🎟 Билеты события\n\nОтправлено вложений: {sent}\nОшибок: {failures}",
+                reply_markup=afisha_tickets_panel_keyboard(afisha_id, int(page_raw)),
+            )
+            return SECTION
+        if sub_action == "unlink_confirm" and len(parts) == 7:
+            _, _, _, ticket_id, afisha_id, page_raw = parts
+            safe_edit_message = _require_safe_edit_message()
+            await safe_edit_message(
+                query,
+                "Отвязать билет от события Афиши?",
+                reply_markup=InlineKeyboardMarkup(
+                    [
+                        [InlineKeyboardButton("✅ Да, отвязать", callback_data=f"tickets:afisha:unlink:{ticket_id}:{afisha_id}:{page_raw}")],
+                        [InlineKeyboardButton("↩️ Нет, вернуться", callback_data=f"tickets:afisha:view:{ticket_id}:{afisha_id}:{page_raw}")],
+                    ]
+                ),
+            )
+            return SECTION
+        if sub_action == "unlink" and len(parts) == 7:
+            _, _, _, ticket_id, afisha_id, page_raw = parts
+            data = storage.load()
+            tickets = _tickets_root(data)
+            for bucket in ("active", "used"):
+                ticket = find_item(tickets.get(bucket, []), ticket_id)
+                if ticket and str(ticket.get("afisha_id") or "") == afisha_id:
+                    ticket["afisha_id"] = ""
+                    storage.save(data)
+                    break
+            return await show_afisha_tickets_panel(update, afisha_id, int(page_raw))
+        if sub_action == "delete_confirm" and len(parts) == 7:
+            _, _, _, ticket_id, afisha_id, page_raw = parts
+            safe_edit_message = _require_safe_edit_message()
+            await safe_edit_message(
+                query,
+                "Удалить билет полностью?",
+                reply_markup=InlineKeyboardMarkup(
+                    [
+                        [InlineKeyboardButton("✅ Да, удалить", callback_data=f"tickets:afisha:delete:{ticket_id}:{afisha_id}:{page_raw}")],
+                        [InlineKeyboardButton("↩️ Нет, вернуться", callback_data=f"tickets:afisha:view:{ticket_id}:{afisha_id}:{page_raw}")],
+                    ]
+                ),
+            )
+            return SECTION
+        if sub_action == "delete" and len(parts) == 7:
+            _, _, _, ticket_id, afisha_id, page_raw = parts
+            data = storage.load()
+            tickets = _tickets_root(data)
+            delete_item_by_id(tickets.get("active", []), ticket_id)
+            delete_item_by_id(tickets.get("used", []), ticket_id)
+            storage.save(data)
+            return await show_afisha_tickets_panel(update, afisha_id, int(page_raw))
     if action == "list" and len(parts) == 4:
         _, _, bucket, page_raw = parts
         if bucket not in {"active", "used"}:
