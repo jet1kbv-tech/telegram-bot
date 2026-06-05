@@ -45,6 +45,15 @@ from bot.handlers.films import (
     configure_films_handlers,
 )
 from bot.handlers.leisure import add_leisure_comment, add_leisure_title, configure_leisure_handlers
+from bot.handlers.purchases import (
+    add_purchase_comment,
+    add_purchase_link,
+    add_purchase_price,
+    add_purchase_title,
+    edit_purchase_field,
+    configure_purchases_handlers,
+    purchases_callback_router,
+)
 from bot.handlers.spark import add_spark_description, add_spark_title, configure_spark_handlers, spark_callback_router
 from bot.handlers.places import (
     add_city_country,
@@ -79,6 +88,11 @@ from bot.handlers.wishlist import (
 from bot.states import (
     ADDING_BACKLOG_DESCRIPTION,
     ADDING_BACKLOG_TITLE,
+    ADDING_PURCHASE_COMMENT,
+    ADDING_PURCHASE_LINK,
+    ADDING_PURCHASE_PRICE,
+    ADDING_PURCHASE_PRIORITY,
+    ADDING_PURCHASE_TITLE,
     ADDING_CALENDAR_EVENT_COMMENT,
     ADDING_CALENDAR_EVENT_DATE,
     ADDING_CALENDAR_EVENT_END_TIME,
@@ -109,6 +123,7 @@ from bot.states import (
     ADDING_TICKET_PLACE_ROUTE,
     ADDING_TICKET_TIME,
     ADDING_TICKET_TITLE,
+    EDITING_PURCHASE_FIELD,
     CITY_ADD_COUNTRY,
     CITY_ADD_NAME,
     CITY_PLACE_ADD_COMMENT,
@@ -178,6 +193,7 @@ def build_app() -> Application:
     )
     configure_afisha_handlers(build_item_text=build_item_text, item_keyboard=item_keyboard)
     configure_places_handlers(safe_edit_message=safe_edit_message)
+    configure_purchases_handlers(safe_edit_message=safe_edit_message)
 
     configure_calendar_handlers(
         safe_edit_message=safe_edit_message,
@@ -215,6 +231,7 @@ def build_app() -> Application:
                 CallbackQueryHandler(places_callback_router, pattern=r"^places:"),
                 CallbackQueryHandler(spark_callback_router, pattern=r"^spark:"),
                 CallbackQueryHandler(tickets_callback_router, pattern=r"^tickets:"),
+                CallbackQueryHandler(purchases_callback_router, pattern=r"^purchases:"),
                 CallbackQueryHandler(section_router),
             ],
             SECTION: [
@@ -225,6 +242,7 @@ def build_app() -> Application:
                 CallbackQueryHandler(places_callback_router, pattern=r"^places:"),
                 CallbackQueryHandler(spark_callback_router, pattern=r"^spark:"),
                 CallbackQueryHandler(tickets_callback_router, pattern=r"^tickets:"),
+                CallbackQueryHandler(purchases_callback_router, pattern=r"^purchases:"),
                 CallbackQueryHandler(section_router),
             ],
             ADDING_FILM_TITLE: text_state(add_film_title),
@@ -245,6 +263,17 @@ def build_app() -> Application:
             ADDING_WISHLIST_COMMENT: text_state(add_wishlist_comment),
             ADDING_LEISURE_TITLE: text_state(add_leisure_title),
             ADDING_LEISURE_COMMENT: text_state(add_leisure_comment),
+            ADDING_PURCHASE_TITLE: text_state(add_purchase_title),
+            ADDING_PURCHASE_LINK: text_state(add_purchase_link),
+            ADDING_PURCHASE_PRICE: text_state(add_purchase_price),
+            ADDING_PURCHASE_PRIORITY: [
+                MessageHandler(quick_commands_filter, quick_text_command_router),
+                MessageHandler(filters.Regex(rf"^{MAIN_MENU_TEXT}$"), quick_return_to_main_menu),
+                CallbackQueryHandler(back_to_main, pattern=r"^(main|menu:main)$"),
+                CallbackQueryHandler(purchases_callback_router, pattern=r"^purchases:add_priority:"),
+            ],
+            ADDING_PURCHASE_COMMENT: text_state(add_purchase_comment),
+            EDITING_PURCHASE_FIELD: text_state(edit_purchase_field),
             ADDING_SPARK_TITLE: text_state(add_spark_title),
             ADDING_SPARK_DESCRIPTION: text_state(add_spark_description),
             ADDING_TICKET_TITLE: text_state(add_ticket_title),

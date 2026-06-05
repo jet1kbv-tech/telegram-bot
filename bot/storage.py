@@ -17,6 +17,9 @@ from bot.config import (
     WISHLIST_STATUSES,
 )
 
+PURCHASE_BUCKETS = ("planned", "bought")
+PURCHASE_PRIORITIES = {"high", "medium", "low", ""}
+
 logger = logging.getLogger(__name__)
 DATA_FILE = Path(os.getenv("DATA_FILE", "data.json"))
 
@@ -33,6 +36,10 @@ class JsonStorage:
             "leisure": [],
             "afisha": [],
             "backlog": [],
+            "purchases": {
+                "planned": [],
+                "bought": [],
+            },
             "tickets": {
                 "active": [],
                 "used": [],
@@ -122,6 +129,7 @@ class JsonStorage:
             if item:
                 data["backlog"].append(item)
 
+        normalize_purchases_root(data, raw_data.get("purchases"))
         normalize_tickets_root(data, raw_data.get("tickets"))
         normalize_spark_root(data, raw_data.get("spark"))
         normalize_places_root(data, raw_data.get("places"))
@@ -229,6 +237,78 @@ def is_event_actual(item: dict[str, Any], now: datetime | None = None) -> bool:
 
 def sort_events(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(items, key=lambda item: parse_event_dt(item) or datetime.max)
+
+
+def normalize_purchase_price(value: Any) -> int | None:
+    if value in (None, "", "-"):
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"", "-"}:
+            return None
+        for token in ("руб.", "руб", "₽", "р.", "р"):
+            text = text.replace(token, "")
+        text = text.replace(" ", "").replace("\u00a0", "").replace("\u202f", "")
+        if text.isdigit():
+            return int(text)
+    return None
+
+
+def normalize_purchase_priority(value: Any) -> str:
+    priority = str(value or "").strip().lower()
+    if priority in PURCHASE_PRIORITIES:
+        return priority
+    return ""
+
+
+def normalize_purchase_item(item: Any) -> dict[str, Any] | None:
+    if isinstance(item, str):
+        return {
+            "id": make_id(),
+            "title": item.strip() or "Без названия",
+            "link": "",
+            "price": None,
+            "priority": "",
+            "comment": "",
+            "buyer": "",
+            "created_at": "",
+            "bought_at": "",
+        }
+    if not isinstance(item, dict):
+        return None
+
+    return {
+        "id": str(item.get("id") or make_id()),
+        "title": str(item.get("title") or "Без названия"),
+        "link": str(item.get("link") or ""),
+        "price": normalize_purchase_price(item.get("price")),
+        "priority": normalize_purchase_priority(item.get("priority")),
+        "comment": str(item.get("comment") or ""),
+        "buyer": str(item.get("buyer") or ""),
+        "created_at": str(item.get("created_at") or ""),
+        "bought_at": str(item.get("bought_at") or ""),
+    }
+
+
+def normalize_purchases_root(data: dict[str, Any], raw_purchases: Any) -> None:
+    if isinstance(raw_purchases, list):
+        raw_purchases = {"planned": raw_purchases, "bought": []}
+    if not isinstance(raw_purchases, dict):
+        return
+
+    purchases = data.setdefault("purchases", {"planned": [], "bought": []})
+    for bucket in PURCHASE_BUCKETS:
+        raw_items = raw_purchases.get(bucket, [])
+        if not isinstance(raw_items, list):
+            continue
+        for raw_item in raw_items:
+            item = normalize_purchase_item(raw_item)
+            if item:
+                purchases[bucket].append(item)
 
 
 def parse_calendar_event_start_dt(item: dict[str, Any]) -> datetime | None:
