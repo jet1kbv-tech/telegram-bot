@@ -41,6 +41,7 @@ from bot.handlers.films import (
     add_film_comment,
     add_film_title,
     configure_films_handlers,
+    film_metadata_callback_router,
 )
 from bot.handlers.leisure import add_leisure_comment, add_leisure_title, configure_leisure_handlers
 from bot.handlers.purchases import (
@@ -134,6 +135,8 @@ from bot.states import (
     ADDING_WISHLIST_TITLE,
     MENU,
     SECTION,
+    SELECTING_FILM_METADATA,
+    CONFIRMING_FILM_ADD,
 )
 
 from bot.keyboards.common import item_keyboard, main_menu_keyboard
@@ -146,6 +149,7 @@ from bot.runtime import (
     section_router,
 )
 from bot.ui.common import build_item_text
+from bot.services.tmdb_movie_metadata import TmdbMovieMetadataProvider
 
 logger = logging.getLogger(__name__)
 MAIN_MENU_TEXT = "🏠 В меню"
@@ -174,11 +178,13 @@ def build_app() -> Application:
     app = Application.builder().token(token).build()
     configure_common_handlers(main_menu_keyboard=main_menu_keyboard, safe_edit_message=safe_edit_message)
     configure_backlog_handlers(build_item_text=build_item_text, item_keyboard=item_keyboard)
+    tmdb_token = os.getenv("TMDB_API_READ_ACCESS_TOKEN", "").strip()
     configure_films_handlers(
         safe_edit_message=safe_edit_message,
         build_item_text=build_item_text,
         item_keyboard=item_keyboard,
         main_menu_keyboard=main_menu_keyboard,
+        metadata_provider=TmdbMovieMetadataProvider(tmdb_token) if tmdb_token else None,
     )
     configure_leisure_handlers(build_item_text=build_item_text, item_keyboard=item_keyboard)
     configure_spark_handlers(safe_edit_message=safe_edit_message)
@@ -233,6 +239,7 @@ def build_app() -> Application:
             SECTION: [
                 MessageHandler(quick_commands_filter, quick_text_command_router),
                 CallbackQueryHandler(noop, pattern=r"^noop$"),
+                CallbackQueryHandler(film_metadata_callback_router, pattern=r"^filmmeta:"),
                 CallbackQueryHandler(back_to_main, pattern=r"^(main|menu:main)$"),
                 CallbackQueryHandler(menu_router, pattern=r"^menu\|(films|wishlist|leisure|afisha|backlog)$"),
                 CallbackQueryHandler(places_callback_router, pattern=r"^places:"),
@@ -243,6 +250,15 @@ def build_app() -> Application:
             ],
             ADDING_FILM_TITLE: text_state(add_film_title),
             ADDING_FILM_COMMENT: text_state(add_film_comment),
+            SELECTING_FILM_METADATA: [
+                CallbackQueryHandler(back_to_main, pattern=r"^(main|menu:main)$"),
+                CallbackQueryHandler(film_metadata_callback_router, pattern=r"^filmmeta:"),
+            ],
+            CONFIRMING_FILM_ADD: [
+                CallbackQueryHandler(back_to_main, pattern=r"^(main|menu:main)$"),
+                CallbackQueryHandler(menu_router, pattern=r"^menu\|films$"),
+                CallbackQueryHandler(film_metadata_callback_router, pattern=r"^filmmeta:"),
+            ],
             ADDING_CALENDAR_EVENT_TITLE: text_state(add_calendar_event_title),
             ADDING_CALENDAR_EVENT_DATE: text_state(add_calendar_event_date),
             ADDING_CALENDAR_EVENT_START_TIME: text_state(add_calendar_event_start_time),
