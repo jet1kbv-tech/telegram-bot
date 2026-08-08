@@ -52,3 +52,7 @@ MENU, SECTION = range(2)
     ADDING_PURCHASE_COMMENT,
     EDITING_PURCHASE_FIELD,
 ) = range(10, 60)
+
+# Films v2 metadata selection states. Keep the established state numbers above
+# stable because older conversations may still be in flight during deployment.
+SELECTING_FILM_METADATA, CONFIRMING_FILM_ADD = range(60, 62)

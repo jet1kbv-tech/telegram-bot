@@ -7,11 +7,25 @@ from bot.utils import item_status_label, owner_label
 
 def build_item_text(section: str, item: dict[str, Any]) -> str:
     if section == "films":
-        lines = [
-            f"🎬 {item['title']}",
+        lines = [f"🎬 {item['title']}"]
+        original_title = str(item.get("original_title") or "")
+        if original_title and original_title.casefold() != str(item["title"]).casefold():
+            lines.append(original_title)
+        facts = []
+        if item.get("year"):
+            facts.append(str(item["year"]))
+        facts.extend(str(genre) for genre in item.get("genres", []) if genre)
+        if facts:
+            lines.extend(["", " · ".join(facts)])
+        if item.get("external_rating") is not None:
+            lines.append(f"⭐ {item['external_rating']:g}")
+        if item.get("description"):
+            lines.extend(["", str(item["description"])])
+        lines.extend([
+            "",
             f"Статус: {item_status_label(section, item['status'])}",
             f"Добавил: {item.get('added_by', 'unknown')}",
-        ]
+        ])
         if item.get("comment"):
             lines.append(f"Комментарий: {item['comment']}")
         return "\n".join(lines)

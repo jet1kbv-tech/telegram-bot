@@ -392,7 +392,9 @@ def delete_item_by_id(items: list[dict[str, Any]], item_id: str) -> bool:
 
 def normalize_film(item: Any) -> dict[str, Any] | None:
     metadata_defaults = {
+        "metadata_provider": "",
         "external_id": "",
+        "original_title": "",
         "year": None,
         "genres": [],
         "description": "",
@@ -441,7 +443,9 @@ def normalize_film(item: Any) -> dict[str, Any] | None:
             "sasha_rating": sasha_rating,
             "vova_rating": vova_rating,
             "legacy_rating": legacy_rating,
+            "metadata_provider": str(item.get("metadata_provider") or ""),
             "external_id": str(item.get("external_id") or ""),
+            "original_title": str(item.get("original_title") or ""),
             "year": year,
             "genres": genres,
             "description": str(item.get("description") or ""),
