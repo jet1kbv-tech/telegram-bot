@@ -2,7 +2,6 @@ from typing import Any
 
 from bot.config import PAGE_SIZE, SECTION_CONFIG
 from bot.handlers.afisha import build_afisha_item_text
-from bot.storage import format_average_rating
 from bot.utils import item_status_label, owner_label
 
 
@@ -13,16 +12,6 @@ def build_item_text(section: str, item: dict[str, Any]) -> str:
             f"Статус: {item_status_label(section, item['status'])}",
             f"Добавил: {item.get('added_by', 'unknown')}",
         ]
-        if item.get("status") == "watched":
-            if item.get("sasha_rating") is not None:
-                lines.append(f"Оценка Саши: {item['sasha_rating']}/10")
-            if item.get("vova_rating") is not None:
-                lines.append(f"Оценка Вовы: {item['vova_rating']}/10")
-            average = format_average_rating(item)
-            if average is not None:
-                lines.append(f"Средний рейтинг: {average}/10")
-            elif item.get("legacy_rating") is not None:
-                lines.append(f"Рейтинг: {item['legacy_rating']}/10")
         if item.get("comment"):
             lines.append(f"Комментарий: {item['comment']}")
         return "\n".join(lines)

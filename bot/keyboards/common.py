@@ -212,10 +212,7 @@ def item_keyboard(
         status_callback = f"status|wishlist|{item_id}|{toggle_to}|{owner}|{page}"
         delete_confirm_callback = f"delete_confirm|wishlist|{item_id}|{owner}|{page}"
     elif section == "films" and status_filter:
-        if item["status"] == "want" and toggle_to == "watched":
-            status_callback = f"rate_start|films|{item_id}|{status_filter}|{page}"
-        else:
-            status_callback = f"status|films|{item_id}|{toggle_to}|{status_filter}|{page}"
+        status_callback = f"status|films|{item_id}|{toggle_to}|{status_filter}|{page}"
         delete_confirm_callback = f"delete_confirm|films|{item_id}|{status_filter}|{page}"
     elif section == "backlog" and status_filter:
         status_callback = f"status|backlog|{item_id}|{toggle_to}|{status_filter}|{page}"

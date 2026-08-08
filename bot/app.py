@@ -39,9 +39,7 @@ from bot.handlers.calendar import (
 from bot.handlers.common import back_to_main, cancel, configure_common_handlers, noop, quick_return_to_main_menu, start, whoami
 from bot.handlers.films import (
     add_film_comment,
-    add_film_sasha_rating,
     add_film_title,
-    add_film_vova_rating,
     configure_films_handlers,
 )
 from bot.handlers.leisure import add_leisure_comment, add_leisure_title, configure_leisure_handlers
@@ -110,9 +108,7 @@ from bot.states import (
     EDITING_AFISHA_DATE,
     EDITING_AFISHA_TIME,
     ADDING_FILM_COMMENT,
-    ADDING_FILM_SASHA_RATING,
     ADDING_FILM_TITLE,
-    ADDING_FILM_VOVA_RATING,
     ADDING_LEISURE_COMMENT,
     ADDING_LEISURE_TITLE,
     ADDING_SPARK_DESCRIPTION,
@@ -247,8 +243,6 @@ def build_app() -> Application:
             ],
             ADDING_FILM_TITLE: text_state(add_film_title),
             ADDING_FILM_COMMENT: text_state(add_film_comment),
-            ADDING_FILM_SASHA_RATING: text_state(add_film_sasha_rating),
-            ADDING_FILM_VOVA_RATING: text_state(add_film_vova_rating),
             ADDING_CALENDAR_EVENT_TITLE: text_state(add_calendar_event_title),
             ADDING_CALENDAR_EVENT_DATE: text_state(add_calendar_event_date),
             ADDING_CALENDAR_EVENT_START_TIME: text_state(add_calendar_event_start_time),

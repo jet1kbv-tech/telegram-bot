@@ -8,19 +8,31 @@ from telegram.ext import ContextTypes, ConversationHandler
 
 from bot.states import (
     ADDING_FILM_COMMENT,
-    ADDING_FILM_SASHA_RATING,
     ADDING_FILM_TITLE,
-    ADDING_FILM_VOVA_RATING,
-    MENU,
     SECTION,
 )
-from bot.storage import find_item, make_id, normalize_rating, storage
+from bot.storage import make_id, storage
 from bot.utils import ensure_access, get_user_name, remember_current_chat
 
 _safe_edit_message: Callable[..., Any] | None = None
 _build_item_text: Callable[[str, dict[str, Any]], str] | None = None
 _item_keyboard: Callable[..., Any] | None = None
 _main_menu_keyboard: Callable[[], Any] | None = None
+
+FILM_CONVERSATION_KEYS = (
+    "film_title",
+    "film_comment",
+    "film_rating_item_id",
+    "film_rating_page",
+    "film_rating_status_filter",
+    "pending_sasha_rating",
+)
+
+
+def clear_film_conversation_data(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Discard transient Films input while leaving navigation context intact."""
+    for key in FILM_CONVERSATION_KEYS:
+        context.user_data.pop(key, None)
 
 
 def configure_films_handlers(
@@ -102,72 +114,25 @@ async def add_film_comment(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         "sasha_rating": None,
         "vova_rating": None,
         "legacy_rating": None,
+        "external_id": "",
+        "year": None,
+        "genres": [],
+        "description": "",
+        "external_rating": None,
     }
     data = storage.load()
     data["films"].append(item)
     storage.save(data)
 
-    context.user_data.pop("film_title", None)
-    context.user_data.pop("film_comment", None)
+    clear_film_conversation_data(context)
     context.user_data["active_section"] = "films"
 
     await update.message.reply_text(
         f"Фильм сохранён:\n\n{_build_item_text('films', item)}",
-        reply_markup=_item_keyboard("films", item, page=0, status_filter="want"),
-    )
-    return SECTION
-
-
-async def add_film_sasha_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if not await ensure_access(update):
-        return ConversationHandler.END
-    await remember_current_chat(update)
-
-    rating = normalize_rating((update.message.text or "").strip())
-    if rating is None:
-        await update.message.reply_text("Нужно отправить число от 1 до 10. Попробуй ещё раз:")
-        return ADDING_FILM_SASHA_RATING
-
-    context.user_data["pending_sasha_rating"] = rating
-    await update.message.reply_text("Какую оценку Вова ставит фильму? Отправь число от 1 до 10.")
-    return ADDING_FILM_VOVA_RATING
-
-
-async def add_film_vova_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    _ensure_configured()
-    if not await ensure_access(update):
-        return ConversationHandler.END
-    await remember_current_chat(update)
-
-    rating = normalize_rating((update.message.text or "").strip())
-    if rating is None:
-        await update.message.reply_text("Нужно отправить число от 1 до 10. Попробуй ещё раз:")
-        return ADDING_FILM_VOVA_RATING
-
-    item_id = context.user_data.get("film_rating_item_id")
-    page = int(context.user_data.get("film_rating_page", 0))
-    status_filter = str(context.user_data.get("film_rating_status_filter") or "want")
-    sasha_rating = context.user_data.get("pending_sasha_rating")
-
-    data = storage.load()
-    item = find_item(data.get("films", []), item_id)
-    if not item:
-        await update.message.reply_text("Не удалось сохранить оценки: фильм не найден.", reply_markup=_main_menu_keyboard())
-        for key in ["film_rating_item_id", "film_rating_page", "film_rating_status_filter", "pending_sasha_rating"]:
-            context.user_data.pop(key, None)
-        return MENU
-
-    item["sasha_rating"] = sasha_rating
-    item["vova_rating"] = rating
-    item["legacy_rating"] = None
-    item["status"] = "watched"
-    storage.save(data)
-
-    for key in ["film_rating_item_id", "film_rating_page", "film_rating_status_filter", "pending_sasha_rating"]:
-        context.user_data.pop(key, None)
-
-    await update.message.reply_text(
-        f"Фильм перенесён в просмотренные:\n\n{_build_item_text('films', item)}",
-        reply_markup=_item_keyboard("films", item, page=page, status_filter="watched"),
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("➕ Добавить ещё", callback_data="add|films")],
+            [InlineKeyboardButton("🎬 К фильмам", callback_data="menu|films")],
+            [InlineKeyboardButton("🏠 В меню", callback_data="menu:main")],
+        ]),
     )
     return SECTION
