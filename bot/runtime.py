@@ -41,9 +41,8 @@ from bot.handlers.backlog import add_backlog_description, add_backlog_title, con
 from bot.handlers.common import back_to_main, cancel, configure_common_handlers, noop, start, whoami
 from bot.handlers.films import (
     add_film_comment,
-    add_film_sasha_rating,
     add_film_title,
-    add_film_vova_rating,
+    clear_film_conversation_data,
     configure_films_handlers,
     show_random_film,
 )
@@ -107,9 +106,7 @@ from bot.states import (
     EDITING_AFISHA_DATE,
     EDITING_AFISHA_TIME,
     ADDING_FILM_COMMENT,
-    ADDING_FILM_SASHA_RATING,
     ADDING_FILM_TITLE,
-    ADDING_FILM_VOVA_RATING,
     ADDING_LEISURE_COMMENT,
     ADDING_LEISURE_TITLE,
     ADDING_WISHLIST_COMMENT,
@@ -128,7 +125,6 @@ from bot.storage import (
     normalize_event,
     normalize_film,
     normalize_leisure,
-    normalize_rating,
     normalize_wishlist,
     parse_calendar_event_end_dt,
     parse_calendar_event_start_dt,
@@ -516,6 +512,7 @@ async def section_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         section = parts[1]
         context.user_data["active_section"] = section
         if section == "films":
+            clear_film_conversation_data(context)
             await safe_edit_message(query, "Отправь название фильма одним сообщением:")
             return ADDING_FILM_TITLE
         if section == "wishlist":
@@ -598,6 +595,8 @@ async def section_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return SECTION
 
     if action == "rate_start":
+        # Compatibility for buttons sent before Films v2: mark watched without
+        # collecting or modifying the retained legacy personal-rating fields.
         _, _, item_id, status_filter, page_raw = parts
         page = int(page_raw)
 
@@ -606,19 +605,15 @@ async def section_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if not item:
             await safe_edit_message(
                 query,
-                "Не удалось начать выставление оценок: фильм не найден.",
+                "Не удалось обновить статус: фильм не найден.",
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ К списку", callback_data=build_back_to_list_callback("films", page, status_filter=status_filter))]]),
             )
             return SECTION
 
-        context.user_data["film_rating_item_id"] = item_id
-        context.user_data["film_rating_page"] = page
-        context.user_data["film_rating_status_filter"] = status_filter
-
-        await query.message.reply_text(
-            f"Фильм: {item['title']}\n\nКакую оценку Саша ставит фильму? Отправь число от 1 до 10."
-        )
-        return ADDING_FILM_SASHA_RATING
+        item["status"] = "watched"
+        storage.save(data)
+        await safe_edit_message(query, build_item_text("films", item), reply_markup=item_keyboard("films", item, page, status_filter="watched"))
+        return SECTION
 
     if action == "status":
         if parts[1] == "wishlist":
@@ -647,10 +642,6 @@ async def section_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             return SECTION
 
         item["status"] = new_status
-        if section == "films" and new_status == "want":
-            item["sasha_rating"] = None
-            item["vova_rating"] = None
-            item["legacy_rating"] = None
         if section == "wishlist":
             item["reserved_by"] = get_user_name(update) if new_status == "gifted" else ""
         if section == "afisha":
@@ -794,8 +785,6 @@ def build_app() -> Application:
             ],
             ADDING_FILM_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_film_title)],
             ADDING_FILM_COMMENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_film_comment)],
-            ADDING_FILM_SASHA_RATING: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_film_sasha_rating)],
-            ADDING_FILM_VOVA_RATING: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_film_vova_rating)],
             ADDING_CALENDAR_EVENT_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_calendar_event_title)],
             ADDING_CALENDAR_EVENT_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_calendar_event_date)],
             ADDING_CALENDAR_EVENT_START_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_calendar_event_start_time)],

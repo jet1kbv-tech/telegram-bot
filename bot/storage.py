@@ -1,5 +1,6 @@
 import json
 import logging
+import math
 import os
 import tempfile
 import uuid
@@ -390,6 +391,13 @@ def delete_item_by_id(items: list[dict[str, Any]], item_id: str) -> bool:
 
 
 def normalize_film(item: Any) -> dict[str, Any] | None:
+    metadata_defaults = {
+        "external_id": "",
+        "year": None,
+        "genres": [],
+        "description": "",
+        "external_rating": None,
+    }
     if isinstance(item, str):
         return {
             "id": make_id(),
@@ -400,6 +408,7 @@ def normalize_film(item: Any) -> dict[str, Any] | None:
             "sasha_rating": None,
             "vova_rating": None,
             "legacy_rating": None,
+            **metadata_defaults,
         }
     if isinstance(item, dict):
         status = item.get("status", "want")
@@ -411,6 +420,18 @@ def normalize_film(item: Any) -> dict[str, Any] | None:
         old_rating = normalize_rating(item.get("rating"))
         if legacy_rating is None and old_rating is not None and sasha_rating is None and vova_rating is None:
             legacy_rating = old_rating
+        year = item.get("year")
+        if isinstance(year, bool) or not isinstance(year, int):
+            year = None
+        raw_genres = item.get("genres")
+        genres = [genre for genre in raw_genres if isinstance(genre, str)] if isinstance(raw_genres, list) else []
+        external_rating = item.get("external_rating")
+        if isinstance(external_rating, bool) or not isinstance(external_rating, (int, float)):
+            external_rating = None
+        elif external_rating is not None:
+            external_rating = float(external_rating)
+            if not math.isfinite(external_rating):
+                external_rating = None
         return {
             "id": str(item.get("id") or make_id()),
             "title": str(item.get("title") or "Без названия"),
@@ -420,6 +441,14 @@ def normalize_film(item: Any) -> dict[str, Any] | None:
             "sasha_rating": sasha_rating,
             "vova_rating": vova_rating,
             "legacy_rating": legacy_rating,
+            "external_id": str(item.get("external_id") or ""),
+            "year": year,
+            "genres": genres,
+            "description": str(item.get("description") or ""),
+            "external_rating": external_rating,
+            # Preserve the pre-split legacy key verbatim when it exists. The
+            # canonical legacy_rating above keeps current code able to read it.
+            **({"rating": item["rating"]} if "rating" in item else {}),
         }
     return None
 
