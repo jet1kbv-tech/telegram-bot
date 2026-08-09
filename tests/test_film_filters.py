@@ -63,6 +63,16 @@ def test_dynamic_want_counts_normalization_multigenre_and_genreless():
     assert films == before
 
 
+def test_tv_records_participate_in_genres_and_random_candidates():
+    movie = {**film("m", "Movie", genres=["Драма"]), "media_type": "movie"}
+    tv = {**film("t", "Series", genres=["Драма"]), "media_type": "tv"}
+    entries = filters.collect_genres([movie, tv])
+    drama = next(entry for entry in entries if entry.label == "Драма")
+    assert drama.count == 2
+    assert filters.random_candidates([movie, tv]) == [movie, tv]
+    assert filters.random_candidates([movie, tv], drama) == [movie, tv]
+
+
 def test_exact_filtering_and_unicode_identity():
     entry = filters.GenreEntry(filters.genre_identity("Комедия"), "Комедия", 1, "key")
     films = [
@@ -104,12 +114,12 @@ def test_genreless_resolution_does_not_depend_on_provider():
 def test_menu_order_and_new_random_callback():
     markup = section_menu_keyboard("films")
     assert [(row[0].text, row[0].callback_data) for row in markup.inline_keyboard] == [
-        ("➕ Добавить фильм", "add|films"),
+        ("➕ Добавить фильм или сериал", "add|films"),
         ("📋 Хотим посмотреть", "list|films|want|0"),
         ("🎭 По жанрам", "filmfilter:g:b:0"),
         ("🎲 Выбрать случайный", "filmfilter:r"),
         ("✅ Просмотренные", "list|films|watched|0"),
-        ("🔄 Обновить данные фильмов", "filmenrich:open"),
+        ("🔄 Обновить данные", "filmenrich:open"),
         ("🏠 В меню", "menu:main"),
     ]
 

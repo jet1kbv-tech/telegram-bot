@@ -7,7 +7,7 @@ import pytest
 
 from bot.handlers import films
 from bot.keyboards.common import item_keyboard
-from bot.services.movie_metadata import MovieMetadata, MovieSearchResult
+from bot.services.movie_metadata import MediaSearchResults, MovieMetadata, MovieSearchResult
 from bot.states import ADDING_FILM_COMMENT, CONFIRMING_FILM_ADD, SECTION, SELECTING_FILM_METADATA
 from bot.storage import JsonStorage, normalize_film
 from bot.ui.common import build_item_text
@@ -28,11 +28,19 @@ def test_normalize_film_adds_metadata_defaults_and_retains_ratings() -> None:
     assert film["vova_rating"] == 9
     assert film["rating"] == 7
     assert film["external_id"] == ""
+    assert film["media_type"] == ""
     assert film["localized_title"] == ""
     assert film["year"] is None
     assert film["genres"] == []
     assert film["description"] == ""
     assert film["external_rating"] is None
+
+
+def test_historical_tmdb_linked_type_normalization_is_movie_only() -> None:
+    historical = normalize_film({"title": "Old", "metadata_provider": "tmdb", "external_id": "13"})
+    other = normalize_film({"title": "Other", "metadata_provider": "other", "external_id": "13"})
+    assert historical["media_type"] == "movie"
+    assert other["media_type"] == ""
 
 
 def test_normalize_film_validates_optional_metadata() -> None:
@@ -104,11 +112,11 @@ class FakeStorage:
 
 
 class FakeProvider:
-    async def search_movies(self, query):
-        return [MovieSearchResult("tmdb", "13", "Игры разума", "A Beautiful Mind", 2001)]
+    async def search_titles(self, query):
+        return [MovieSearchResult("tmdb", "13", "Игры разума", "A Beautiful Mind", 2001, media_type="movie")]
 
-    async def get_movie_details(self, external_id):
-        return MovieMetadata("tmdb", external_id, "Игры разума", "A Beautiful Mind", 2001, ("Драма",), "Описание", 8.2)
+    async def get_title_details(self, media_type, external_id):
+        return MovieMetadata("tmdb", external_id, "Игры разума", "A Beautiful Mind", 2001, ("Драма",), "Описание", 8.2, media_type)
 
 
 def configure(monkeypatch, store, provider=None):
@@ -164,7 +172,10 @@ def test_provider_creation_requires_save_and_preserves_success_buttons(monkeypat
     created = store.data["films"][0]
     assert created["metadata_provider"] == "tmdb"
     assert created["external_id"] == "13"
+    assert created["media_type"] == "movie"
     assert created["genres"] == ["Драма"]
+    assert created["title"] == "Игры разума"
+    assert created["localized_title"] == "Игры разума"
     markup = safe_edit.await_args.kwargs["reply_markup"]
     assert [(button.text, button.callback_data) for row in markup.inline_keyboard for button in row] == [
         ("➕ Добавить ещё", "add|films"),
@@ -188,9 +199,9 @@ def test_missing_provider_offers_manual_fallback(monkeypatch: pytest.MonkeyPatch
 def test_duplicate_appearing_before_save_is_blocked(monkeypatch: pytest.MonkeyPatch) -> None:
     store = FakeStorage()
     safe_edit = configure(monkeypatch, store)
-    candidate = MovieMetadata("tmdb", "13", "Arrival", year=2016)
+    candidate = MovieMetadata("tmdb", "13", "Arrival", year=2016, media_type="movie")
     context = SimpleNamespace(user_data={films.FILM_DRAFT_KEY: {"query": "Arrival", "results": [], "candidate": candidate, "comment": "", "possible_duplicate_id": ""}})
-    store.data["films"].append({"id": "new", "title": "Arrival", "year": 2016, "metadata_provider": "tmdb", "external_id": "13", "status": "watched"})
+    store.data["films"].append({"id": "new", "title": "Arrival", "year": 2016, "metadata_provider": "tmdb", "media_type": "movie", "external_id": "13", "status": "watched"})
 
     result = asyncio.run(films.film_metadata_callback_router(callback_update("filmmeta:save"), context))
     assert result == CONFIRMING_FILM_ADD
@@ -201,7 +212,7 @@ def test_duplicate_appearing_before_save_is_blocked(monkeypatch: pytest.MonkeyPa
 def test_double_click_and_stale_callback_do_not_append_twice(monkeypatch: pytest.MonkeyPatch) -> None:
     store = FakeStorage()
     safe_edit = configure(monkeypatch, store)
-    candidate = MovieMetadata("tmdb", "13", "Arrival", year=2016)
+    candidate = MovieMetadata("tmdb", "13", "Arrival", year=2016, media_type="movie")
     context = SimpleNamespace(user_data={films.FILM_DRAFT_KEY: {"query": "Arrival", "results": [], "candidate": candidate, "comment": "", "possible_duplicate_id": ""}})
 
     asyncio.run(films.film_metadata_callback_router(callback_update("filmmeta:save"), context))
@@ -217,6 +228,89 @@ def test_stale_result_selection_is_safe(monkeypatch: pytest.MonkeyPatch) -> None
     result = asyncio.run(films.film_metadata_callback_router(callback_update("filmmeta:select:7"), context))
     assert result == SECTION
     assert "устарел" in safe_edit.await_args.args[1]
+
+
+class ResultsProvider:
+    def __init__(self, results, *, complete=True):
+        self.results = MediaSearchResults(results, complete=complete)
+
+    async def search_titles(self, query):
+        return self.results
+
+    async def get_title_details(self, media_type, external_id):
+        selected = next(item for item in self.results if item.external_id == external_id and item.media_type == media_type)
+        return MovieMetadata("tmdb", external_id, selected.title, selected.original_title, selected.year, ("Драма",), "Описание", 8.0, media_type)
+
+
+def search_result(media_type, title, external_id="1", original_title="", year=2000):
+    return MovieSearchResult("tmdb", external_id, title, original_title, year, media_type=media_type)
+
+
+def test_exact_tv_auto_opens_and_persists_typed_primary_title(monkeypatch) -> None:
+    provider = ResultsProvider([search_result("tv", "Властелин колец: Кольца власти", "tv1", year=2022)])
+    store = FakeStorage()
+    configure(monkeypatch, store, provider)
+    message = SimpleNamespace(text="Властелин колец: Кольца власти", reply_text=AsyncMock())
+    context = SimpleNamespace(user_data={})
+    assert asyncio.run(films.add_film_title(SimpleNamespace(message=message), context)) == CONFIRMING_FILM_ADD
+    asyncio.run(films.film_metadata_callback_router(callback_update("filmmeta:save"), context))
+    assert store.data["films"][0]["media_type"] == "tv"
+
+
+def test_user_query_remains_primary_and_localized_title_is_separate(monkeypatch) -> None:
+    provider = ResultsProvider([search_result("movie", "Властелин колец: Братство Кольца", "m1", original_title="The Lord of the Rings")])
+    store = FakeStorage()
+    configure(monkeypatch, store, provider)
+    message = SimpleNamespace(text="Властелин колец 1", reply_text=AsyncMock())
+    context = SimpleNamespace(user_data={})
+    assert asyncio.run(films.add_film_title(SimpleNamespace(message=message), context)) == SELECTING_FILM_METADATA
+    asyncio.run(films.film_metadata_callback_router(callback_update("filmmeta:select:0"), context))
+    asyncio.run(films.film_metadata_callback_router(callback_update("filmmeta:save"), context))
+    created = store.data["films"][0]
+    assert created["title"] == "Властелин колец 1"
+    assert created["localized_title"] == "Властелин колец: Братство Кольца"
+
+
+def test_movie_and_tv_exact_matches_require_selection_and_show_icons(monkeypatch) -> None:
+    provider = ResultsProvider([search_result("movie", "Офис", "m"), search_result("tv", "Офис", "t")])
+    store = FakeStorage()
+    configure(monkeypatch, store, provider)
+    message = SimpleNamespace(text="Офис", reply_text=AsyncMock())
+    context = SimpleNamespace(user_data={})
+    assert asyncio.run(films.add_film_title(SimpleNamespace(message=message), context)) == SELECTING_FILM_METADATA
+    labels = [row[0].text for row in message.reply_text.await_args.kwargs["reply_markup"].inline_keyboard[:2]]
+    assert labels == ["🎬 Офис · 2000", "📺 Офис · 2000"]
+
+
+def test_fuzzy_single_and_incomplete_exact_do_not_auto_open(monkeypatch) -> None:
+    for provider in (
+        ResultsProvider([search_result("movie", "Другой")]),
+        ResultsProvider([search_result("tv", "Офис")], complete=False),
+    ):
+        store = FakeStorage()
+        configure(monkeypatch, store, provider)
+        message = SimpleNamespace(text="Офис", reply_text=AsyncMock())
+        assert asyncio.run(films.add_film_title(SimpleNamespace(message=message), SimpleNamespace(user_data={}))) == SELECTING_FILM_METADATA
+
+
+def test_manual_fallback_persists_unknown_type(monkeypatch) -> None:
+    store = FakeStorage()
+    configure(monkeypatch, store)
+    context = SimpleNamespace(user_data={films.FILM_DRAFT_KEY: {"query": "Неизвестное", "results": [], "candidate": None, "comment": "", "possible_duplicate_id": ""}})
+    asyncio.run(films.film_metadata_callback_router(callback_update("filmmeta:manual"), context))
+    asyncio.run(films.film_metadata_callback_router(callback_update("filmmeta:save"), context))
+    assert store.data["films"][0]["media_type"] == ""
+    assert store.data["films"][0]["localized_title"] == ""
+
+
+def test_cards_show_known_type_and_omit_unknown_type() -> None:
+    base = {"title": "Title", "status": "want", "added_by": "user", "genres": ["Драма"]}
+    movie = build_item_text("films", {**base, "media_type": "movie", "year": 2000})
+    tv = build_item_text("films", {**base, "media_type": "tv", "year": 2001})
+    unknown = build_item_text("films", {**base, "media_type": "", "year": 2002})
+    assert movie.startswith("🎬") and "Фильм · 2000" in movie
+    assert tv.startswith("📺") and "Сериал · 2001" in tv
+    assert "Фильм" not in unknown and "Сериал" not in unknown
 
 
 def test_possible_duplicate_requires_exact_override(monkeypatch: pytest.MonkeyPatch) -> None:

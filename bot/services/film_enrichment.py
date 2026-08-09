@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-from bot.services.film_duplicates import normalize_movie_title
+from bot.services.film_duplicates import effective_media_type, normalize_movie_title
 from bot.services.movie_metadata import MovieMetadata, MovieSearchResult
 
 
@@ -34,6 +34,7 @@ class ApplyResult:
 
 METADATA_FIELDS = (
     "metadata_provider",
+    "media_type",
     "external_id",
     "localized_title",
     "original_title",
@@ -47,9 +48,10 @@ METADATA_FIELDS = (
 def identity_state(film: dict[str, Any]) -> str:
     provider = bool(str(film.get("metadata_provider") or "").strip())
     external_id = bool(str(film.get("external_id") or "").strip())
-    if provider and external_id:
+    media_type = bool(effective_media_type(film))
+    if provider and external_id and media_type:
         return "complete"
-    if provider or external_id:
+    if provider or external_id or media_type:
         return "partial"
     return "missing"
 
@@ -68,7 +70,7 @@ def classify_search_results(film: dict[str, Any], results: list[MovieSearchResul
         known_year = None
 
     useful: list[MovieSearchResult] = []
-    exact: dict[tuple[str, str], MovieSearchResult] = {}
+    exact: dict[tuple[str, str, str], MovieSearchResult] = {}
     for result in results:
         if not isinstance(result, MovieSearchResult):
             continue
@@ -79,10 +81,10 @@ def classify_search_results(film: dict[str, Any], results: list[MovieSearchResul
         }
         year_matches = known_year is None or (result.year is not None and result.year == known_year)
         if matches_title and year_matches:
-            exact.setdefault((result.metadata_provider, result.external_id), result)
+            exact.setdefault((result.metadata_provider, result.media_type, result.external_id), result)
 
     candidates = tuple(exact.values())
-    if len(candidates) == 1:
+    if len(candidates) == 1 and getattr(results, "complete", True):
         return MatchDecision(EnrichmentDisposition.AUTOMATIC, candidates)
     if candidates or useful:
         return MatchDecision(EnrichmentDisposition.AMBIGUOUS, candidates or tuple(useful))
@@ -121,6 +123,7 @@ def apply_metadata_atomic(storage: Any, film_id: str, metadata: MovieMetadata) -
                 continue
             if (
                 str(other.get("metadata_provider") or "") == metadata.metadata_provider
+                and effective_media_type(other) == metadata.media_type
                 and str(other.get("external_id") or "") == metadata.external_id
             ):
                 return ApplyResult(
@@ -131,6 +134,7 @@ def apply_metadata_atomic(storage: Any, film_id: str, metadata: MovieMetadata) -
 
         film.update({
             "metadata_provider": metadata.metadata_provider,
+            "media_type": metadata.media_type,
             "external_id": metadata.external_id,
             "localized_title": metadata.title,
             "original_title": metadata.original_title,

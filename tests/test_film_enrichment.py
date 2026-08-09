@@ -7,15 +7,15 @@ from bot.services.film_enrichment import (
     apply_metadata_atomic,
     classify_search_results,
 )
-from bot.services.movie_metadata import MovieMetadata, MovieMetadataUnavailable, MovieSearchResult
+from bot.services.movie_metadata import MediaSearchResults, MovieMetadata, MovieMetadataUnavailable, MovieSearchResult
 
 
-def result(external_id="1", title="Оно", original_title="It", year=2017):
-    return MovieSearchResult("tmdb", external_id, title, original_title, year)
+def result(external_id="1", title="Оно", original_title="It", year=2017, media_type="movie"):
+    return MovieSearchResult("tmdb", external_id, title, original_title, year, media_type=media_type)
 
 
-def metadata(external_id="1", title="Оно", description="Русское описание", year=2017):
-    return MovieMetadata("tmdb", external_id, title, "It", year, ("Ужасы",), description, 7.2)
+def metadata(external_id="1", title="Оно", description="Русское описание", year=2017, media_type="movie"):
+    return MovieMetadata("tmdb", external_id, title, "It", year, ("Ужасы",), description, 7.2, media_type)
 
 
 def film(**changes):
@@ -23,7 +23,7 @@ def film(**changes):
         "id": "legacy", "title": "Оно", "status": "watched", "added_by": "user",
         "comment": "note", "sasha_rating": 8, "vova_rating": 7, "legacy_rating": 6,
         "rating": 6, "metadata_provider": "", "external_id": "", "localized_title": "",
-        "original_title": "", "year": None, "genres": [], "description": "", "external_rating": None,
+        "media_type": "", "original_title": "", "year": None, "genres": [], "description": "", "external_rating": None,
     }
     value.update(changes)
     return value
@@ -50,6 +50,17 @@ def test_multiple_exact_matches_and_multiple_years_are_ambiguous():
     decision = classify_search_results(film(), [result("1", year=1990), result("2", year=2017)])
     assert decision.disposition is EnrichmentDisposition.AMBIGUOUS
     assert len(decision.candidates) == 2
+
+
+def test_movie_and_tv_exact_matches_are_distinct_and_ambiguous():
+    decision = classify_search_results(film(), [result("1", media_type="movie"), result("1", media_type="tv")])
+    assert decision.disposition is EnrichmentDisposition.AMBIGUOUS
+    assert {item.media_type for item in decision.candidates} == {"movie", "tv"}
+
+
+def test_incomplete_unique_exact_result_is_not_automatic():
+    results = MediaSearchResults([result(media_type="tv")], complete=False)
+    assert classify_search_results(film(), results).disposition is EnrichmentDisposition.AMBIGUOUS
 
 
 def test_known_year_safely_disambiguates():
@@ -105,6 +116,21 @@ def test_external_identity_conflict_is_blocked():
     assert len(store.data["films"]) == 2
 
 
+def test_same_external_id_different_media_type_does_not_conflict():
+    target = film()
+    existing = film(id="existing", metadata_provider="tmdb", media_type="movie", external_id="1")
+    applied = apply_metadata_atomic(Store([target, existing]), "legacy", metadata(media_type="tv"))
+    assert applied.disposition is EnrichmentDisposition.ENRICHED
+    assert target["media_type"] == "tv"
+
+
+def test_tv_metadata_is_persisted_by_enrichment():
+    target = film(title="Во все тяжкие")
+    applied = apply_metadata_atomic(Store([target]), "legacy", metadata(title="Во все тяжкие", media_type="tv"))
+    assert applied.disposition is EnrichmentDisposition.ENRICHED
+    assert target["media_type"] == "tv"
+
+
 def test_deleted_enriched_during_review_and_double_confirmation_are_safe():
     assert apply_metadata_atomic(Store([]), "legacy", metadata()).disposition is EnrichmentDisposition.DELETED
     target = film()
@@ -117,15 +143,15 @@ class Provider:
     def __init__(self, failures=()):
         self.failures = set(failures)
 
-    async def search_movies(self, query):
+    async def search_titles(self, query):
         if query in self.failures:
             raise MovieMetadataUnavailable("timeout")
         if query == "Нет":
             return []
         return [result(external_id=query, title=query, original_title="")]
 
-    async def get_movie_details(self, external_id):
-        return MovieMetadata("tmdb", external_id, external_id, year=None, description="Описание")
+    async def get_title_details(self, media_type, external_id):
+        return MovieMetadata("tmdb", external_id, external_id, year=None, description="Описание", media_type=media_type)
 
 
 def test_provider_failure_does_not_abort_batch_and_counters_are_correct(monkeypatch):

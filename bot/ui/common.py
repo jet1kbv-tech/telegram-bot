@@ -7,7 +7,10 @@ from bot.utils import item_status_label, owner_label
 
 def build_item_text(section: str, item: dict[str, Any]) -> str:
     if section == "films":
-        lines = [f"🎬 {item['title']}"]
+        media_type = str(item.get("media_type") or "")
+        icon = "📺" if media_type == "tv" else "🎬"
+        type_label = {"movie": "Фильм", "tv": "Сериал"}.get(media_type, "")
+        lines = [f"{icon} {item['title']}"]
         localized_title = str(item.get("localized_title") or "")
         if localized_title and localized_title.casefold() != str(item["title"]).casefold():
             lines.append(localized_title)
@@ -15,12 +18,14 @@ def build_item_text(section: str, item: dict[str, Any]) -> str:
         shown_titles = {str(item["title"]).casefold(), localized_title.casefold()}
         if original_title and original_title.casefold() not in shown_titles:
             lines.append(original_title)
-        facts = []
+        facts = [type_label] if type_label else []
         if item.get("year"):
             facts.append(str(item["year"]))
-        facts.extend(str(genre) for genre in item.get("genres", []) if genre)
         if facts:
             lines.extend(["", " · ".join(facts)])
+        genres = [str(genre) for genre in item.get("genres", []) if genre]
+        if genres:
+            lines.append(" · ".join(genres))
         if item.get("external_rating") is not None:
             lines.append(f"⭐ {item['external_rating']:g}")
         if item.get("description"):
