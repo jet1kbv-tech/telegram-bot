@@ -51,3 +51,16 @@ def test_tmdb_missing_fields_and_malformed_payload() -> None:
                 await provider.get_movie_details("1")
 
     asyncio.run(scenario())
+
+
+def test_tmdb_http_failure_is_provider_error() -> None:
+    async def scenario() -> None:
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda request: httpx.Response(429)),
+            base_url="https://api.test",
+        ) as client:
+            provider = TmdbMovieMetadataProvider("secret", client=client)
+            with pytest.raises(MovieMetadataUnavailable):
+                await provider.search_movies("Фильм")
+
+    asyncio.run(scenario())

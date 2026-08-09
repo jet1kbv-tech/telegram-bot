@@ -394,6 +394,7 @@ def normalize_film(item: Any) -> dict[str, Any] | None:
     metadata_defaults = {
         "metadata_provider": "",
         "external_id": "",
+        "localized_title": "",
         "original_title": "",
         "year": None,
         "genres": [],
@@ -445,6 +446,7 @@ def normalize_film(item: Any) -> dict[str, Any] | None:
             "legacy_rating": legacy_rating,
             "metadata_provider": str(item.get("metadata_provider") or ""),
             "external_id": str(item.get("external_id") or ""),
+            "localized_title": str(item.get("localized_title") or ""),
             "original_title": str(item.get("original_title") or ""),
             "year": year,
             "genres": genres,
