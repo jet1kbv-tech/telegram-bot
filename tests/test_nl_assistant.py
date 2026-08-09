@@ -49,7 +49,7 @@ def configured(monkeypatch):
 
 def purchase_intent():
     return ParsedIntent(IntentKind.ADD_PURCHASE, {
-        "title": "Кофемашина", "price_text": "35 тысяч", "priority": "high", "link": None,
+        "title": "кофемашина", "price": 35000, "priority": "high", "link": None,
         "comment": None, "buyer": "current_user",
     })
 
@@ -63,7 +63,9 @@ def test_purchase_has_preview_and_no_mutation_before_confirmation(monkeypatch):
     assert run(nl_assistant.nl_text_handler(upd, ctx)) == MENU
     create.assert_not_called()
     preview = upd.effective_message.reply_text.await_args.args[0]
-    assert "35 000 ₽" in preview and "Высокий" in preview and "Куплю я" in preview
+    assert preview.startswith("🛍 Новая покупка")
+    assert "Название: Кофемашина" in preview and "Стоимость: 35 000 ₽" in preview
+    assert "Приоритет: Высокий" in preview and "Куплю я" in preview
     proposal_id = ctx.user_data["ai_active_proposal_id"]
     cb = update(callback_data=f"ai:c:{proposal_id}")
     assert run(nl_assistant.nl_callback_router(cb, ctx)) == SECTION

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import json
 import time
 from typing import Any
 
@@ -17,8 +18,9 @@ POLZA_CHAT_COMPLETIONS_URL = "https://polza.ai/api/v1/chat/completions"
 SYSTEM_PROMPT = """Ты — классификатор команд Telegram-бота. Верни только JSON по заданной схеме.
 Поддерживаются add_movie_or_tv, add_purchase, add_personal_calendar_event, add_afisha_event, no_action, unsupported.
 Для фильма верни только query: не придумывай метаданные. Для дат сохраняй исходное русское выражение, приложение разрешит дату само.
+Для add_purchase верни title, числовой price в рублях (например, «35 тысяч» = 35000), priority, link, comment и buyer.
 owner личного календаря всегда current_user. Если просят календарь другого человека — unsupported/other_user_calendar.
-Не объясняй ответ и не добавляй поля. Аргументы для выбранного intent должны присутствовать, необязательные значения — null."""
+Не объясняй ответ и не добавляй поля. Верни ровно ветку выбранного intent; все её аргументы должны присутствовать, необязательные значения — null."""
 
 
 class PolzaIntentParser:
@@ -65,9 +67,30 @@ class PolzaIntentParser:
             raise IntentParserInvalidOutput("invalid_provider_response") from exc
         if not isinstance(content, str):
             raise IntentParserInvalidOutput("invalid_provider_content")
-        result = decode_provider_envelope(content)
+        try:
+            result = decode_provider_envelope(content)
+        except IntentParserInvalidOutput as exc:
+            intent, argument_keys = _response_shape(content)
+            logger.warning(
+                "Polza intent decode failed reason=%s intent=%s argument_keys=%s latency_ms=%s",
+                str(exc) or type(exc).__name__, intent, argument_keys, latency_ms,
+            )
+            raise
         logger.info("Polza intent parsed intent=%s latency_ms=%s", result.intent.value, latency_ms)
         return result
 
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"}
+
+
+def _response_shape(content: str) -> tuple[str, list[str]]:
+    """Return non-sensitive structure only; provider/user values are never logged."""
+    try:
+        value = json.loads(content)
+    except (ValueError, TypeError):
+        return "<unavailable>", []
+    if not isinstance(value, dict):
+        return "<invalid>", []
+    intent = value.get("intent")
+    arguments = value.get("arguments")
+    return (intent if isinstance(intent, str) else "<invalid>", sorted(arguments) if isinstance(arguments, dict) else [])

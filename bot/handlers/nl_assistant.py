@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import re
 from datetime import datetime
 from typing import Any, Awaitable, Callable
 
@@ -56,31 +55,10 @@ def _menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[InlineKeyboardButton("🏠 В меню", callback_data="menu:main")]])
 
 
-def _parse_price(value: str | None) -> int | None:
-    if value is None or not value.strip():
-        return None
-    text = value.strip().casefold().replace("ё", "е")
-    multiplier = 1
-    if re.search(r"\b(тыс\.?|тысяч[аи]?|тысячи?)\b", text):
-        multiplier = 1000
-        text = re.sub(r"\b(тыс\.?|тысяч[аи]?|тысячи?)\b", "", text)
-    text = re.sub(r"(руб(?:лей|ля|ль)?\.?|₽|р\.)", "", text)
-    text = text.replace(" ", "").replace("\u00a0", "").replace("\u202f", "").replace(",", ".")
-    try:
-        number = float(text)
-    except ValueError as exc:
-        raise ValueError("invalid_price") from exc
-    result = number * multiplier
-    if result < 0 or result > 1_000_000_000 or not result.is_integer():
-        raise ValueError("invalid_price")
-    return int(result)
-
-
 def _prepare(kind: IntentKind, arguments: dict[str, Any], now: datetime) -> tuple[dict[str, Any], list[str]]:
     args = dict(arguments)
     missing: list[str] = []
     if kind is IntentKind.ADD_PURCHASE:
-        args["price"] = _parse_price(args.pop("price_text", None))
         args["buyer"] = "current_user" if args.get("buyer") == "current_user" else ""
     elif kind in {IntentKind.ADD_PERSONAL_CALENDAR_EVENT, IntentKind.ADD_AFISHA_EVENT}:
         if kind is IntentKind.ADD_PERSONAL_CALENDAR_EVENT:
@@ -229,12 +207,12 @@ def _preview(proposal: ActionProposal) -> str:
     if proposal.intent is IntentKind.ADD_MOVIE_OR_TV:
         return f"🎬 Найти и добавить в фильмы?\n\n{args['query']}"
     if proposal.intent is IntentKind.ADD_PURCHASE:
-        lines = ["🛒 Добавить в покупки?", "", str(args["title"])]
+        lines = ["🛍 Новая покупка", "", f"Название: {str(args['title']).capitalize()}"]
         if args.get("price") is not None:
-            lines.append(f"💰 {args['price']:,} ₽".replace(",", " "))
-        labels = {"high": "🔴 Высокий приоритет", "medium": "🟡 Средний приоритет", "low": "🟢 Низкий приоритет"}
+            lines.append(f"Стоимость: {args['price']:,} ₽".replace(",", " "))
+        labels = {"high": "Высокий", "medium": "Средний", "low": "Низкий"}
         if args.get("priority"):
-            lines.append(labels[args["priority"]])
+            lines.append(f"Приоритет: {labels[args['priority']]}")
         if args.get("buyer") == "current_user":
             lines.append("🙋 Куплю я")
         if args.get("link"):
@@ -290,7 +268,7 @@ async def nl_callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE)
             args = dict(proposal.arguments)
             args["buyer"] = get_user_name(update) if args.get("buyer") == "current_user" else ""
             item = create_purchase(args)
-            text = "Покупка добавлена:\n\n" + _preview(ActionProposal("", proposal.intent, args, "", now, now)).replace("🛒 Добавить в покупки?\n\n", "🛒 ")
+            text = "Покупка добавлена:\n\n" + _preview(ActionProposal("", proposal.intent, args, "", now, now))
         elif proposal.intent is IntentKind.ADD_PERSONAL_CALENDAR_EVENT:
             profile = get_allowed_profile(update) or {}
             owner = str(profile.get("wishlist_owner") or "")
