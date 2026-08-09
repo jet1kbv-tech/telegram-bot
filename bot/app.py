@@ -12,7 +12,9 @@ from telegram.ext import (
     filters,
 )
 
-from bot.config import NOTIFICATION_CHECK_INTERVAL
+from bot.config import AI_INTENT_TIMEOUT_SECONDS, NOTIFICATION_CHECK_INTERVAL
+from bot.handlers.nl_assistant import configure_nl_assistant, nl_callback_router, nl_clarification_handler, nl_text_handler
+from bot.services.polza_intent_parser import PolzaIntentParser
 from bot.handlers.afisha import (
     add_event_date,
     add_event_end_date,
@@ -139,6 +141,7 @@ from bot.states import (
     ADDING_WISHLIST_COMMENT,
     ADDING_WISHLIST_LINK,
     ADDING_WISHLIST_TITLE,
+    AI_CLARIFYING,
     MENU,
     SECTION,
     SELECTING_FILM_METADATA,
@@ -222,12 +225,26 @@ def build_app() -> Application:
     )
     configure_tickets_handlers(safe_edit_message=safe_edit_message)
 
+    polza_key = os.getenv("POLZA_AI_API_KEY", "").strip()
+    polza_model = os.getenv("POLZA_AI_MODEL", "").strip()
+    nl_enabled = bool(polza_key and polza_model)
+    if nl_enabled:
+        configure_nl_assistant(
+            parser=PolzaIntentParser(api_key=polza_key, model=polza_model, timeout_seconds=AI_INTENT_TIMEOUT_SECONDS),
+            notify_calendar=notify_other_user_about_calendar_item,
+        )
+        logger.info("AI/NL assistant enabled with configured Polza model")
+    else:
+        logger.info("AI/NL assistant disabled: POLZA_AI_API_KEY or POLZA_AI_MODEL is missing")
+
     if app.job_queue is not None:
         app.job_queue.run_repeating(check_afisha_notifications, interval=NOTIFICATION_CHECK_INTERVAL, first=30, name="afisha_notifications")
     else:
         logger.warning("JobQueue недоступна. Для уведомлений за день до события нужен APScheduler в requirements.")
 
     quick_commands_filter = quick_text_command_filter()
+    ai_callback_handlers = [CallbackQueryHandler(nl_callback_router, pattern=r"^ai:[cex]:[A-Za-z0-9_-]{8,16}$")] if nl_enabled else []
+    ai_text_handlers = [MessageHandler(filters.TEXT & ~filters.COMMAND, nl_text_handler)] if nl_enabled else []
 
     def text_state(handler):
         return [
@@ -241,6 +258,7 @@ def build_app() -> Application:
         states={
             MENU: [
                 MessageHandler(quick_commands_filter, quick_text_command_router),
+                *ai_callback_handlers,
                 CallbackQueryHandler(back_to_main, pattern=r"^(main|menu:main)$"),
                 CallbackQueryHandler(menu_router, pattern=r"^menu\|(films|wishlist|leisure|afisha|backlog)$"),
                 CallbackQueryHandler(places_callback_router, pattern=r"^places:"),
@@ -248,9 +266,11 @@ def build_app() -> Application:
                 CallbackQueryHandler(tickets_callback_router, pattern=r"^tickets:"),
                 CallbackQueryHandler(purchases_callback_router, pattern=r"^purchases:"),
                 CallbackQueryHandler(section_router),
+                *ai_text_handlers,
             ],
             SECTION: [
                 MessageHandler(quick_commands_filter, quick_text_command_router),
+                *ai_callback_handlers,
                 CallbackQueryHandler(noop, pattern=r"^noop$"),
                 CallbackQueryHandler(film_metadata_callback_router, pattern=r"^filmmeta:"),
                 CallbackQueryHandler(film_enrichment_callback_router, pattern=r"^filmenrich:"),
@@ -262,6 +282,13 @@ def build_app() -> Application:
                 CallbackQueryHandler(tickets_callback_router, pattern=r"^tickets:"),
                 CallbackQueryHandler(purchases_callback_router, pattern=r"^purchases:"),
                 CallbackQueryHandler(section_router),
+                *ai_text_handlers,
+            ],
+            AI_CLARIFYING: [
+                MessageHandler(quick_commands_filter, quick_text_command_router),
+                MessageHandler(filters.Regex(rf"^{MAIN_MENU_TEXT}$"), quick_return_to_main_menu),
+                *ai_callback_handlers,
+                MessageHandler(filters.TEXT & ~filters.COMMAND, nl_clarification_handler),
             ],
             ADDING_FILM_TITLE: text_state(add_film_title),
             ADDING_FILM_COMMENT: text_state(add_film_comment),
