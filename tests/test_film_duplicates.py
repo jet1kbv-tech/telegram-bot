@@ -3,19 +3,19 @@ from bot.services.movie_metadata import MovieMetadata
 
 
 def candidate(**changes) -> MovieMetadata:
-    values = {"metadata_provider": "tmdb", "external_id": "42", "title": "Игры разума", "year": 2001}
+    values = {"metadata_provider": "tmdb", "external_id": "42", "title": "Игры разума", "year": 2001, "media_type": "movie"}
     values.update(changes)
     return MovieMetadata(**values)
 
 
 def film(**changes) -> dict:
-    values = {"id": "existing", "metadata_provider": "tmdb", "external_id": "42", "title": "Игры разума", "year": 2001, "status": "want"}
+    values = {"id": "existing", "metadata_provider": "tmdb", "media_type": "movie", "external_id": "42", "title": "Игры разума", "year": 2001, "status": "want"}
     values.update(changes)
     return values
 
 
-def test_exact_external_identity_is_definitive_including_legacy_provider() -> None:
-    result = find_movie_duplicate(candidate(), [film(metadata_provider="")])
+def test_exact_external_identity_is_definitive() -> None:
+    result = find_movie_duplicate(candidate(), [film()])
     assert result.kind is DuplicateKind.DEFINITIVE
     assert result.reason is DuplicateReason.EXTERNAL_ID
 
@@ -43,3 +43,23 @@ def test_duplicate_scan_does_not_depend_on_status() -> None:
         result = find_movie_duplicate(candidate(), [film(status=status)])
         assert result.kind is DuplicateKind.DEFINITIVE
         assert result.matching_film["status"] == status
+
+
+def test_same_provider_id_different_known_type_is_not_duplicate() -> None:
+    assert find_movie_duplicate(candidate(media_type="tv"), [film()]).kind is DuplicateKind.NONE
+
+
+def test_same_title_year_different_known_type_is_not_duplicate() -> None:
+    value = candidate(external_id="99", media_type="tv")
+    assert find_movie_duplicate(value, [film(external_id="")]).kind is DuplicateKind.NONE
+
+
+def test_unknown_type_title_year_is_only_possible() -> None:
+    existing = film(metadata_provider="", external_id="", media_type="")
+    assert find_movie_duplicate(candidate(external_id="99"), [existing]).kind is DuplicateKind.POSSIBLE
+
+
+def test_historical_tmdb_identity_is_effectively_movie_only() -> None:
+    historical = film(media_type="")
+    assert find_movie_duplicate(candidate(), [historical]).kind is DuplicateKind.DEFINITIVE
+    assert find_movie_duplicate(candidate(media_type="tv"), [historical]).kind is DuplicateKind.NONE

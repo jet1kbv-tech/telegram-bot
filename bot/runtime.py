@@ -514,7 +514,7 @@ async def section_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         context.user_data["active_section"] = section
         if section == "films":
             clear_film_conversation_data(context)
-            await safe_edit_message(query, "Отправь название фильма одним сообщением:")
+            await safe_edit_message(query, "Введите название фильма или сериала:")
             return ADDING_FILM_TITLE
         if section == "wishlist":
             await safe_edit_message(query, "Отправь название подарка или пункта wishlist:\n\nОн автоматически попадёт в твой вишлист.")

@@ -8,7 +8,13 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes, ConversationHandler
 
 from bot.services.film_duplicates import DuplicateKind, DuplicateResult, find_movie_duplicate, normalize_movie_title
-from bot.services.movie_metadata import MovieMetadata, MovieMetadataError, MovieMetadataProvider, MovieSearchResult
+from bot.services.movie_metadata import (
+    MEDIA_TYPE_MOVIE,
+    MediaMetadata,
+    MediaMetadataError,
+    MediaMetadataProvider,
+    MediaSearchResult,
+)
 from bot.states import ADDING_FILM_COMMENT, ADDING_FILM_TITLE, CONFIRMING_FILM_ADD, SECTION, SELECTING_FILM_METADATA
 from bot.storage import make_id, storage
 from bot.utils import ensure_access, get_user_name, item_status_label
@@ -19,7 +25,7 @@ _safe_edit_message: Callable[..., Any] | None = None
 _build_item_text: Callable[[str, dict[str, Any]], str] | None = None
 _item_keyboard: Callable[..., Any] | None = None
 _main_menu_keyboard: Callable[[], Any] | None = None
-_metadata_provider: MovieMetadataProvider | None = None
+_metadata_provider: MediaMetadataProvider | None = None
 
 FILM_DRAFT_KEY = "film_add_draft"
 FILM_CONVERSATION_KEYS = (
@@ -45,7 +51,7 @@ def configure_films_handlers(
     build_item_text: Callable[[str, dict[str, Any]], str],
     item_keyboard: Callable[..., Any],
     main_menu_keyboard: Callable[[], Any],
-    metadata_provider: MovieMetadataProvider | None = None,
+    metadata_provider: MediaMetadataProvider | None = None,
 ) -> None:
     global _safe_edit_message, _build_item_text, _item_keyboard, _main_menu_keyboard, _metadata_provider
     _safe_edit_message = safe_edit_message
@@ -70,7 +76,7 @@ async def show_random_film(update: Update) -> int:
             query,
             "🎲 Непросмотренных фильмов пока нет.",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("➕ Добавить фильм", callback_data="add|films")],
+                [InlineKeyboardButton("➕ Добавить фильм или сериал", callback_data="add|films")],
                 [InlineKeyboardButton("⬅️ Назад к фильмам", callback_data="menu|films")],
             ]),
         )
@@ -101,22 +107,26 @@ async def add_film_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     context.user_data[FILM_DRAFT_KEY] = draft
     if _metadata_provider is None:
         await update.message.reply_text(
-            "🔎 Поиск фильмов сейчас не настроен. Можно добавить фильм только по названию.",
+            "🔎 Поиск фильмов и сериалов сейчас не настроен. Можно добавить запись только по названию.",
             reply_markup=_manual_fallback_keyboard(),
         )
         return SELECTING_FILM_METADATA
 
     try:
-        results = (await _metadata_provider.search_movies(title))[:8]
-    except MovieMetadataError:
+        raw_results = await _metadata_provider.search_titles(title)
+        ordered_results = _ordered_results(title, raw_results)
+        results = ordered_results[:8]
+        search_complete = getattr(raw_results, "complete", True)
+    except MediaMetadataError:
         logger.info("Movie metadata search is unavailable", exc_info=True)
         await update.message.reply_text(
-            "Не удалось связаться с сервисом фильмов. Можно повторить поиск или добавить фильм только по названию.",
+            "Не удалось связаться с сервисом фильмов и сериалов. Можно повторить поиск или добавить запись только по названию.",
             reply_markup=_manual_fallback_keyboard(),
         )
         return SELECTING_FILM_METADATA
 
     draft["results"] = results
+    draft["search_complete"] = search_complete
     if not results:
         await update.message.reply_text(
             "Ничего не найдено. Попробуй другое название или добавь фильм только по названию.",
@@ -124,9 +134,9 @@ async def add_film_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         return SELECTING_FILM_METADATA
 
-    exact_matches = [result for result in results if normalize_movie_title(result.title) == normalize_movie_title(title)]
-    if len(results) == 1 or len(exact_matches) == 1:
-        selected = results.index(exact_matches[0]) if len(exact_matches) == 1 else 0
+    exact_matches = [result for result in ordered_results if _is_exact_result(title, result)]
+    if search_complete and len(exact_matches) == 1:
+        selected = results.index(exact_matches[0])
         return await _select_result(update, context, selected, from_message=True)
 
     await update.message.reply_text("Что именно добавить?", reply_markup=_results_keyboard(results))
@@ -137,7 +147,7 @@ async def add_film_comment(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if not await ensure_access(update):
         return ConversationHandler.END
     draft = context.user_data.get(FILM_DRAFT_KEY)
-    if not isinstance(draft, dict) or not isinstance(draft.get("candidate"), MovieMetadata):
+    if not isinstance(draft, dict) or not isinstance(draft.get("candidate"), MediaMetadata):
         await update.message.reply_text("Поиск устарел. Начни добавление фильма заново.")
         return SECTION
     comment = (update.message.text or "").strip()
@@ -167,18 +177,18 @@ async def film_metadata_callback_router(update: Update, context: ContextTypes.DE
 
     if action == "search_again":
         clear_film_conversation_data(context)
-        await _safe_edit_message(query, "Какой фильм добавить?")
+        await _safe_edit_message(query, "Введите название фильма или сериала:")
         return ADDING_FILM_TITLE
 
     if not isinstance(draft, dict):
         await _safe_edit_message(query, "Поиск устарел. Начни добавление фильма заново.", reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("➕ Добавить фильм", callback_data="add|films")],
+            [InlineKeyboardButton("➕ Добавить фильм или сериал", callback_data="add|films")],
             [InlineKeyboardButton("🏠 В меню", callback_data="menu:main")],
         ]))
         return SECTION
 
     if action == "manual":
-        draft["candidate"] = MovieMetadata.manual(str(draft.get("query") or "Без названия"))
+        draft["candidate"] = MediaMetadata.manual(str(draft.get("query") or "Без названия"))
         draft["possible_duplicate_id"] = ""
         return await _show_candidate(query, draft)
 
@@ -197,7 +207,7 @@ async def film_metadata_callback_router(update: Update, context: ContextTypes.DE
         return SELECTING_FILM_METADATA
 
     candidate = draft.get("candidate")
-    if not isinstance(candidate, MovieMetadata):
+    if not isinstance(candidate, MediaMetadata):
         return await _show_stale(query)
 
     if action == "comment":
@@ -237,7 +247,7 @@ async def film_metadata_callback_router(update: Update, context: ContextTypes.DE
 async def _select_result(update: Update, context: ContextTypes.DEFAULT_TYPE, index: int, *, from_message: bool = False) -> int:
     draft = context.user_data.get(FILM_DRAFT_KEY)
     results = draft.get("results") if isinstance(draft, dict) else None
-    if not isinstance(results, list) or not 0 <= index < len(results) or not isinstance(results[index], MovieSearchResult):
+    if not isinstance(results, list) or not 0 <= index < len(results) or not isinstance(results[index], MediaSearchResult):
         if from_message:
             await update.message.reply_text("Результат поиска устарел. Попробуй поиск снова.")
             return ADDING_FILM_TITLE
@@ -245,8 +255,8 @@ async def _select_result(update: Update, context: ContextTypes.DEFAULT_TYPE, ind
     if _metadata_provider is None:
         return await _provider_failure(update, from_message)
     try:
-        candidate = await _metadata_provider.get_movie_details(results[index].external_id)
-    except MovieMetadataError:
+        candidate = await _metadata_provider.get_title_details(results[index].media_type, results[index].external_id)
+    except MediaMetadataError:
         logger.info("Movie metadata details are unavailable", exc_info=True)
         return await _provider_failure(update, from_message)
     draft["candidate"] = candidate
@@ -280,7 +290,7 @@ async def _show_candidate(target: Any, draft: dict[str, Any], *, edit: bool = Tr
     return CONFIRMING_FILM_ADD
 
 
-async def _save_candidate(update: Update, context: ContextTypes.DEFAULT_TYPE, draft: dict[str, Any], candidate: MovieMetadata) -> int:
+async def _save_candidate(update: Update, context: ContextTypes.DEFAULT_TYPE, draft: dict[str, Any], candidate: MediaMetadata) -> int:
     query = update.callback_query
     acknowledged_id = str(draft.get("possible_duplicate_id") or "")
     added_by = get_user_name(update)
@@ -294,7 +304,7 @@ async def _save_candidate(update: Update, context: ContextTypes.DEFAULT_TYPE, dr
             match_id = str((duplicate.matching_film or {}).get("id") or "")
             if not acknowledged_id or acknowledged_id != match_id:
                 return None, duplicate
-        item = _candidate_to_item(candidate, comment=comment, added_by=added_by)
+        item = _candidate_to_item(candidate, title=str(draft.get("query") or candidate.title), comment=comment, added_by=added_by)
         data.setdefault("films", []).append(item)
         return item, duplicate
 
@@ -308,7 +318,7 @@ async def _save_candidate(update: Update, context: ContextTypes.DEFAULT_TYPE, dr
     context.user_data["active_section"] = "films"
     await _safe_edit_message(
         query,
-        f"Фильм сохранён:\n\n{_build_item_text('films', item)}",
+        f"Сохранено:\n\n{_build_item_text('films', item)}",
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("➕ Добавить ещё", callback_data="add|films")],
             [InlineKeyboardButton("🎬 К фильмам", callback_data="menu|films")],
@@ -318,10 +328,10 @@ async def _save_candidate(update: Update, context: ContextTypes.DEFAULT_TYPE, dr
     return SECTION
 
 
-def _candidate_to_item(candidate: MovieMetadata, *, comment: str, added_by: str) -> dict[str, Any]:
+def _candidate_to_item(candidate: MediaMetadata, *, title: str | None = None, comment: str, added_by: str) -> dict[str, Any]:
     return {
         "id": make_id(),
-        "title": candidate.title,
+        "title": title or candidate.title,
         "status": "want",
         "added_by": added_by,
         "comment": comment,
@@ -329,7 +339,9 @@ def _candidate_to_item(candidate: MovieMetadata, *, comment: str, added_by: str)
         "vova_rating": None,
         "legacy_rating": None,
         "metadata_provider": candidate.metadata_provider,
+        "media_type": candidate.media_type,
         "external_id": candidate.external_id,
+        "localized_title": candidate.title if candidate.external_id else "",
         "original_title": candidate.original_title,
         "year": candidate.year,
         "genres": list(candidate.genres),
@@ -338,11 +350,12 @@ def _candidate_to_item(candidate: MovieMetadata, *, comment: str, added_by: str)
     }
 
 
-def _preview_text(candidate: MovieMetadata, comment: str = "") -> str:
-    lines = [f"🎬 {candidate.title}"]
+def _preview_text(candidate: MediaMetadata, comment: str = "") -> str:
+    icon, type_label = _media_display(candidate.media_type)
+    lines = [f"{icon} {candidate.title}"]
     if candidate.original_title and normalize_movie_title(candidate.original_title) != normalize_movie_title(candidate.title):
         lines.append(candidate.original_title)
-    facts = []
+    facts = [type_label] if type_label else []
     if candidate.year is not None:
         facts.append(str(candidate.year))
     facts.extend(candidate.genres)
@@ -359,10 +372,11 @@ def _preview_text(candidate: MovieMetadata, comment: str = "") -> str:
     return "\n".join(lines)
 
 
-def _results_keyboard(results: list[MovieSearchResult]) -> InlineKeyboardMarkup:
+def _results_keyboard(results: list[MediaSearchResult]) -> InlineKeyboardMarkup:
     rows = []
     for index, result in enumerate(results[:8]):
-        label = f"{result.title} · {result.year}" if result.year else result.title
+        icon, _ = _media_display(result.media_type)
+        label = f"{icon} {result.title} · {result.year}" if result.year else f"{icon} {result.title}"
         rows.append([InlineKeyboardButton(label[:60], callback_data=f"filmmeta:select:{index}")])
     rows.extend([
         [InlineKeyboardButton("🔎 Искать снова", callback_data="filmmeta:search_again")],
@@ -371,6 +385,34 @@ def _results_keyboard(results: list[MovieSearchResult]) -> InlineKeyboardMarkup:
         [InlineKeyboardButton("🏠 В меню", callback_data="menu:main")],
     ])
     return InlineKeyboardMarkup(rows)
+
+
+def _is_exact_result(query: str, result: MediaSearchResult) -> bool:
+    normalized = normalize_movie_title(query)
+    return normalized in {
+        normalize_movie_title(result.title),
+        normalize_movie_title(result.original_title),
+    }
+
+
+def _ordered_results(query: str, results: list[MediaSearchResult]) -> list[MediaSearchResult]:
+    indexed = list(enumerate(results))
+    indexed.sort(key=lambda item: (
+        0 if _is_exact_result(query, item[1]) else 1,
+        item[0],
+        0 if item[1].media_type == MEDIA_TYPE_MOVIE else 1,
+        normalize_movie_title(item[1].title),
+        item[1].external_id,
+    ))
+    return [result for _, result in indexed]
+
+
+def _media_display(media_type: str) -> tuple[str, str]:
+    if media_type == "movie":
+        return "🎬", "Фильм"
+    if media_type == "tv":
+        return "📺", "Сериал"
+    return "🎬", ""
 
 
 def _manual_fallback_keyboard(*, include_results: bool = False) -> InlineKeyboardMarkup:
@@ -442,7 +484,7 @@ async def _show_possible_duplicate(target: Any, duplicate: DuplicateResult, *, e
 
 async def _show_stale(query: Any) -> int:
     await _safe_edit_message(query, "Поиск устарел. Начни добавление фильма заново.", reply_markup=InlineKeyboardMarkup([
-        [InlineKeyboardButton("➕ Добавить фильм", callback_data="add|films")],
+        [InlineKeyboardButton("➕ Добавить фильм или сериал", callback_data="add|films")],
         [InlineKeyboardButton("🏠 В меню", callback_data="menu:main")],
     ]))
     return SECTION

@@ -15,7 +15,7 @@ from bot.services.film_enrichment import (
     identity_state,
     metadata_matches_film,
 )
-from bot.services.movie_metadata import MovieMetadata, MovieMetadataError, MovieMetadataProvider, MovieSearchResult
+from bot.services.movie_metadata import MediaMetadata, MediaMetadataError, MediaMetadataProvider, MediaSearchResult
 from bot.states import (
     FILM_ENRICHMENT_CONFIRMING,
     FILM_ENRICHMENT_MANUAL_QUERY,
@@ -33,7 +33,7 @@ QUEUE_NAMES = ("ambiguous", "unmatched", "conflict", "provider_error")
 MAX_CONSECUTIVE_ERRORS = 3
 
 _safe_edit_message: Callable[..., Any] | None = None
-_metadata_provider: MovieMetadataProvider | None = None
+_metadata_provider: MediaMetadataProvider | None = None
 _batch_running = False
 
 
@@ -49,7 +49,7 @@ class BatchReport:
     deferred: list[str] = field(default_factory=list)
 
 
-def configure_film_enrichment_handlers(*, safe_edit_message: Callable[..., Any], metadata_provider: MovieMetadataProvider | None) -> None:
+def configure_film_enrichment_handlers(*, safe_edit_message: Callable[..., Any], metadata_provider: MediaMetadataProvider | None) -> None:
     global _safe_edit_message, _metadata_provider
     _safe_edit_message = safe_edit_message
     _metadata_provider = metadata_provider
@@ -77,12 +77,12 @@ def _film(film_id: str) -> dict[str, Any] | None:
     return next((item for item in storage.load().get("films", []) if str(item.get("id")) == str(film_id)), None)
 
 
-def _queue_item(film: dict[str, Any], candidates: tuple[MovieSearchResult, ...] = (), **extra: Any) -> dict[str, Any]:
+def _queue_item(film: dict[str, Any], candidates: tuple[MediaSearchResult, ...] = (), **extra: Any) -> dict[str, Any]:
     return {"film_id": str(film.get("id") or ""), "candidates": list(candidates), **extra}
 
 
 async def process_enrichment_batch(
-    provider: MovieMetadataProvider,
+    provider: MediaMetadataProvider,
     *,
     progress: Callable[[BatchReport], Any] | None = None,
     pace_seconds: float = 0.2,
@@ -103,16 +103,17 @@ async def process_enrichment_batch(
             consecutive_errors = 0
         else:
             try:
-                results = await provider.search_movies(str(film.get("title") or ""))
+                results = await provider.search_titles(str(film.get("title") or ""))
                 decision = classify_search_results(film, results)
                 if decision.disposition is EnrichmentDisposition.AUTOMATIC:
                     selected = decision.candidates[0]
-                    metadata = await provider.get_movie_details(selected.external_id)
+                    metadata = await provider.get_title_details(selected.media_type, selected.external_id)
                     current = _film(str(film.get("id") or ""))
                     if current is None:
                         pass
                     elif (
                         metadata.metadata_provider != selected.metadata_provider
+                        or metadata.media_type != selected.media_type
                         or metadata.external_id != selected.external_id
                         or not metadata_matches_film(current, metadata)
                     ):
@@ -128,7 +129,7 @@ async def process_enrichment_batch(
                 else:
                     report.unmatched.append(_queue_item(film))
                 consecutive_errors = 0
-            except MovieMetadataError:
+            except MediaMetadataError:
                 logger.info("Film enrichment provider failure for film %s", film.get("id"), exc_info=True)
                 report.provider_error.append(_queue_item(film))
                 consecutive_errors += 1
@@ -237,13 +238,13 @@ async def film_enrichment_manual_query(update: Update, context: ContextTypes.DEF
         await update.message.reply_text("Запрос не должен быть пустым.")
         return FILM_ENRICHMENT_MANUAL_QUERY
     try:
-        results = await _metadata_provider.search_movies(manual_query)
-    except MovieMetadataError:
+        results = await _metadata_provider.search_titles(manual_query)
+    except MediaMetadataError:
         await update.message.reply_text("Не удалось связаться с TMDB. Повторите позже.")
         return FILM_ENRICHMENT_MANUAL_QUERY
     item["candidates"] = list(results)
     session["manual_query"] = manual_query
-    await update.message.reply_text("Что это за фильм?", reply_markup=_candidate_keyboard(results))
+    await update.message.reply_text("Что это за фильм или сериал?", reply_markup=_candidate_keyboard(results))
     return FILM_ENRICHMENT_SELECTING
 
 
@@ -252,7 +253,7 @@ async def _show_preflight(query: Any) -> int:
     missing = sum(identity_state(item) != "complete" for item in films)
     complete = sum(identity_state(item) == "complete" for item in films)
     text = (
-        "🎬 Обновление данных фильмов\n\n"
+        "🎬 Обновление данных фильмов и сериалов из TMDB\n\n"
         f"Без привязки к TMDB: {missing}\nУже с данными: {complete}\n\n"
         "Будут обновлены только метаданные.\n"
         "Ваши названия, статусы и комментарии останутся без изменений."
@@ -346,10 +347,11 @@ async def _show_review(query: Any, session: dict[str, Any]) -> int:
     return FILM_ENRICHMENT_REVIEW
 
 
-def _candidate_keyboard(results: list[MovieSearchResult]) -> InlineKeyboardMarkup:
+def _candidate_keyboard(results: list[MediaSearchResult]) -> InlineKeyboardMarkup:
     rows = []
     for index, result in enumerate(results[:8]):
-        label = f"{result.title} · {result.year}" if result.year else result.title
+        icon = "📺" if result.media_type == "tv" else "🎬"
+        label = f"{icon} {result.title} · {result.year}" if result.year else f"{icon} {result.title}"
         rows.append([InlineKeyboardButton(label[:60], callback_data=f"filmenrich:pick:{index}")])
     rows.extend([
         [InlineKeyboardButton("🔎 Искать вручную", callback_data="filmenrich:manual")],
@@ -368,11 +370,11 @@ async def _pick_candidate(query: Any, context: ContextTypes.DEFAULT_TYPE, raw_in
         result = item["candidates"][index]
     except (TypeError, ValueError, IndexError, KeyError):
         return await _stale(query)
-    if not isinstance(result, MovieSearchResult) or _metadata_provider is None:
+    if not isinstance(result, MediaSearchResult) or _metadata_provider is None:
         return await _stale(query)
     try:
-        metadata = await _metadata_provider.get_movie_details(result.external_id)
-    except MovieMetadataError:
+        metadata = await _metadata_provider.get_title_details(result.media_type, result.external_id)
+    except MediaMetadataError:
         await _safe_edit_message(query, "🌐 Не удалось загрузить данные TMDB.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ К вариантам", callback_data="filmenrich:back")]]))
         return FILM_ENRICHMENT_REVIEW
     session["candidate"] = metadata
@@ -391,7 +393,7 @@ async def _confirm(query: Any, context: ContextTypes.DEFAULT_TYPE) -> int:
     session = context.user_data.get(SESSION_KEY)
     item = _current_item(session)
     metadata = session.get("candidate") if isinstance(session, dict) else None
-    if item is None or not isinstance(metadata, MovieMetadata):
+    if item is None or not isinstance(metadata, MediaMetadata):
         return await _stale(query)
     result = apply_metadata_atomic(storage, str(item.get("film_id") or ""), metadata)
     if result.disposition is EnrichmentDisposition.ENRICHED:
@@ -404,11 +406,15 @@ async def _confirm(query: Any, context: ContextTypes.DEFAULT_TYPE) -> int:
     return await _stale(query)
 
 
-def _preview(film: dict[str, Any], metadata: MovieMetadata) -> str:
-    lines = [f"🎬 В вашем списке:\n{film['title']}", "", f"Найдено в TMDB:\n🎬 {metadata.title}"]
-    facts = ([str(metadata.year)] if metadata.year else []) + list(metadata.genres)
+def _preview(film: dict[str, Any], metadata: MediaMetadata) -> str:
+    icon = "📺" if metadata.media_type == "tv" else "🎬"
+    type_label = "Сериал" if metadata.media_type == "tv" else "Фильм"
+    lines = [f"🎬 В вашем списке:\n{film['title']}", "", f"Найдено в TMDB:\n{icon} {metadata.title}"]
+    facts = [type_label] + ([str(metadata.year)] if metadata.year else [])
     if facts:
         lines.append(" · ".join(facts))
+    if metadata.genres:
+        lines.append(" · ".join(metadata.genres))
     if metadata.external_rating is not None:
         lines.append(f"⭐ {metadata.external_rating:g}")
     if metadata.description:

@@ -393,6 +393,7 @@ def delete_item_by_id(items: list[dict[str, Any]], item_id: str) -> bool:
 def normalize_film(item: Any) -> dict[str, Any] | None:
     metadata_defaults = {
         "metadata_provider": "",
+        "media_type": "",
         "external_id": "",
         "localized_title": "",
         "original_title": "",
@@ -435,6 +436,15 @@ def normalize_film(item: Any) -> dict[str, Any] | None:
             external_rating = float(external_rating)
             if not math.isfinite(external_rating):
                 external_rating = None
+        metadata_provider = str(item.get("metadata_provider") or "")
+        external_id = str(item.get("external_id") or "")
+        raw_media_type = str(item.get("media_type") or "")
+        if raw_media_type in {"movie", "tv"}:
+            media_type = raw_media_type
+        elif metadata_provider == "tmdb" and external_id:
+            media_type = "movie"
+        else:
+            media_type = ""
         return {
             "id": str(item.get("id") or make_id()),
             "title": str(item.get("title") or "Без названия"),
@@ -444,8 +454,9 @@ def normalize_film(item: Any) -> dict[str, Any] | None:
             "sasha_rating": sasha_rating,
             "vova_rating": vova_rating,
             "legacy_rating": legacy_rating,
-            "metadata_provider": str(item.get("metadata_provider") or ""),
-            "external_id": str(item.get("external_id") or ""),
+            "metadata_provider": metadata_provider,
+            "media_type": media_type,
+            "external_id": external_id,
             "localized_title": str(item.get("localized_title") or ""),
             "original_title": str(item.get("original_title") or ""),
             "year": year,
