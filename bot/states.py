@@ -56,3 +56,11 @@ MENU, SECTION = range(2)
 # Films v2 metadata selection states. Keep the established state numbers above
 # stable because older conversations may still be in flight during deployment.
 SELECTING_FILM_METADATA, CONFIRMING_FILM_ADD = range(60, 62)
+
+# Films v2 legacy metadata enrichment. Never renumber deployed states above.
+(
+    FILM_ENRICHMENT_REVIEW,
+    FILM_ENRICHMENT_MANUAL_QUERY,
+    FILM_ENRICHMENT_SELECTING,
+    FILM_ENRICHMENT_CONFIRMING,
+) = range(62, 66)

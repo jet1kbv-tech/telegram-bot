@@ -8,8 +8,12 @@ from bot.utils import item_status_label, owner_label
 def build_item_text(section: str, item: dict[str, Any]) -> str:
     if section == "films":
         lines = [f"🎬 {item['title']}"]
+        localized_title = str(item.get("localized_title") or "")
+        if localized_title and localized_title.casefold() != str(item["title"]).casefold():
+            lines.append(localized_title)
         original_title = str(item.get("original_title") or "")
-        if original_title and original_title.casefold() != str(item["title"]).casefold():
+        shown_titles = {str(item["title"]).casefold(), localized_title.casefold()}
+        if original_title and original_title.casefold() not in shown_titles:
             lines.append(original_title)
         facts = []
         if item.get("year"):

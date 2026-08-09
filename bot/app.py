@@ -43,6 +43,11 @@ from bot.handlers.films import (
     configure_films_handlers,
     film_metadata_callback_router,
 )
+from bot.handlers.film_enrichment import (
+    configure_film_enrichment_handlers,
+    film_enrichment_callback_router,
+    film_enrichment_manual_query,
+)
 from bot.handlers.leisure import add_leisure_comment, add_leisure_title, configure_leisure_handlers
 from bot.handlers.purchases import (
     add_purchase_comment,
@@ -137,6 +142,10 @@ from bot.states import (
     SECTION,
     SELECTING_FILM_METADATA,
     CONFIRMING_FILM_ADD,
+    FILM_ENRICHMENT_CONFIRMING,
+    FILM_ENRICHMENT_MANUAL_QUERY,
+    FILM_ENRICHMENT_REVIEW,
+    FILM_ENRICHMENT_SELECTING,
 )
 
 from bot.keyboards.common import item_keyboard, main_menu_keyboard
@@ -179,13 +188,15 @@ def build_app() -> Application:
     configure_common_handlers(main_menu_keyboard=main_menu_keyboard, safe_edit_message=safe_edit_message)
     configure_backlog_handlers(build_item_text=build_item_text, item_keyboard=item_keyboard)
     tmdb_token = os.getenv("TMDB_API_READ_ACCESS_TOKEN", "").strip()
+    metadata_provider = TmdbMovieMetadataProvider(tmdb_token) if tmdb_token else None
     configure_films_handlers(
         safe_edit_message=safe_edit_message,
         build_item_text=build_item_text,
         item_keyboard=item_keyboard,
         main_menu_keyboard=main_menu_keyboard,
-        metadata_provider=TmdbMovieMetadataProvider(tmdb_token) if tmdb_token else None,
+        metadata_provider=metadata_provider,
     )
+    configure_film_enrichment_handlers(safe_edit_message=safe_edit_message, metadata_provider=metadata_provider)
     configure_leisure_handlers(build_item_text=build_item_text, item_keyboard=item_keyboard)
     configure_spark_handlers(safe_edit_message=safe_edit_message)
     configure_wishlist_handlers(
@@ -240,6 +251,7 @@ def build_app() -> Application:
                 MessageHandler(quick_commands_filter, quick_text_command_router),
                 CallbackQueryHandler(noop, pattern=r"^noop$"),
                 CallbackQueryHandler(film_metadata_callback_router, pattern=r"^filmmeta:"),
+                CallbackQueryHandler(film_enrichment_callback_router, pattern=r"^filmenrich:"),
                 CallbackQueryHandler(back_to_main, pattern=r"^(main|menu:main)$"),
                 CallbackQueryHandler(menu_router, pattern=r"^menu\|(films|wishlist|leisure|afisha|backlog)$"),
                 CallbackQueryHandler(places_callback_router, pattern=r"^places:"),
@@ -258,6 +270,22 @@ def build_app() -> Application:
                 CallbackQueryHandler(back_to_main, pattern=r"^(main|menu:main)$"),
                 CallbackQueryHandler(menu_router, pattern=r"^menu\|films$"),
                 CallbackQueryHandler(film_metadata_callback_router, pattern=r"^filmmeta:"),
+            ],
+            FILM_ENRICHMENT_REVIEW: [
+                CallbackQueryHandler(back_to_main, pattern=r"^(main|menu:main)$"),
+                CallbackQueryHandler(menu_router, pattern=r"^menu\|films$"),
+                CallbackQueryHandler(film_enrichment_callback_router, pattern=r"^filmenrich:"),
+            ],
+            FILM_ENRICHMENT_MANUAL_QUERY: text_state(film_enrichment_manual_query),
+            FILM_ENRICHMENT_SELECTING: [
+                CallbackQueryHandler(back_to_main, pattern=r"^(main|menu:main)$"),
+                CallbackQueryHandler(menu_router, pattern=r"^menu\|films$"),
+                CallbackQueryHandler(film_enrichment_callback_router, pattern=r"^filmenrich:"),
+            ],
+            FILM_ENRICHMENT_CONFIRMING: [
+                CallbackQueryHandler(back_to_main, pattern=r"^(main|menu:main)$"),
+                CallbackQueryHandler(menu_router, pattern=r"^menu\|films$"),
+                CallbackQueryHandler(film_enrichment_callback_router, pattern=r"^filmenrich:"),
             ],
             ADDING_CALENDAR_EVENT_TITLE: text_state(add_calendar_event_title),
             ADDING_CALENDAR_EVENT_DATE: text_state(add_calendar_event_date),

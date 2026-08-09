@@ -28,6 +28,7 @@ def section_menu_keyboard(section: str) -> InlineKeyboardMarkup:
             [InlineKeyboardButton("🎬 Непросмотренные", callback_data="list|films|want|0")],
             [InlineKeyboardButton("✅ Просмотренные", callback_data="list|films|watched|0")],
             [InlineKeyboardButton("🎲 Случайный фильм", callback_data="random|films")],
+            [InlineKeyboardButton("🔄 Обновить данные фильмов", callback_data="filmenrich:open")],
         ]
     elif section == "wishlist":
         rows = [

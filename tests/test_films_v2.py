@@ -28,6 +28,7 @@ def test_normalize_film_adds_metadata_defaults_and_retains_ratings() -> None:
     assert film["vova_rating"] == 9
     assert film["rating"] == 7
     assert film["external_id"] == ""
+    assert film["localized_title"] == ""
     assert film["year"] is None
     assert film["genres"] == []
     assert film["description"] == ""
