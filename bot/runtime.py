@@ -46,6 +46,7 @@ from bot.handlers.films import (
     configure_films_handlers,
     show_random_film,
 )
+from bot.handlers.film_operations import delete_film, set_film_status
 from bot.handlers.leisure import add_leisure_comment, add_leisure_title, configure_leisure_handlers
 from bot.handlers.afisha import (
     afisha_empty_list_keyboard,
@@ -610,8 +611,8 @@ async def section_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             )
             return SECTION
 
-        item["status"] = "watched"
-        storage.save(data)
+        result = set_film_status(item_id, "watched")
+        item = result.film or item
         await safe_edit_message(query, build_item_text("films", item), reply_markup=item_keyboard("films", item, page, status_filter="watched"))
         return SECTION
 
@@ -641,12 +642,17 @@ async def section_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             )
             return SECTION
 
-        item["status"] = new_status
+        if section == "films":
+            result = set_film_status(item_id, new_status)
+            item = result.film or item
+        else:
+            item["status"] = new_status
         if section == "wishlist":
             item["reserved_by"] = get_user_name(update) if new_status == "gifted" else ""
         if section == "afisha":
             apply_afisha_status_update(data, item, new_status)
-        storage.save(data)
+        if section != "films":
+            storage.save(data)
         await safe_edit_message(query, build_item_text(section, item), reply_markup=item_keyboard(section, item, page, owner, status_filter))
         return SECTION
 
@@ -697,10 +703,15 @@ async def section_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await safe_edit_message(query, "Не удалось удалить: элемент не найден.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 В меню", callback_data="menu:main")]]))
             return SECTION
 
-        delete_item_by_id(data[section], item_id)
+        if section == "films":
+            delete_film(item_id)
+            data = storage.load()
+        else:
+            delete_item_by_id(data[section], item_id)
         if section == "afisha":
             apply_afisha_delete(data, item)
-        storage.save(data)
+        if section != "films":
+            storage.save(data)
 
         if section == "wishlist" and owner:
             items = [it for it in data["wishlist"] if it.get("owner") == owner]

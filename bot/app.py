@@ -48,6 +48,7 @@ from bot.handlers.film_enrichment import (
     film_enrichment_callback_router,
     film_enrichment_manual_query,
 )
+from bot.handlers.film_filters import configure_film_filter_handlers, film_filter_callback_router
 from bot.handlers.leisure import add_leisure_comment, add_leisure_title, configure_leisure_handlers
 from bot.handlers.purchases import (
     add_purchase_comment,
@@ -197,6 +198,7 @@ def build_app() -> Application:
         metadata_provider=metadata_provider,
     )
     configure_film_enrichment_handlers(safe_edit_message=safe_edit_message, metadata_provider=metadata_provider)
+    configure_film_filter_handlers(safe_edit_message=safe_edit_message, build_item_text=build_item_text)
     configure_leisure_handlers(build_item_text=build_item_text, item_keyboard=item_keyboard)
     configure_spark_handlers(safe_edit_message=safe_edit_message)
     configure_wishlist_handlers(
@@ -252,6 +254,7 @@ def build_app() -> Application:
                 CallbackQueryHandler(noop, pattern=r"^noop$"),
                 CallbackQueryHandler(film_metadata_callback_router, pattern=r"^filmmeta:"),
                 CallbackQueryHandler(film_enrichment_callback_router, pattern=r"^filmenrich:"),
+                CallbackQueryHandler(film_filter_callback_router, pattern=r"^filmfilter:"),
                 CallbackQueryHandler(back_to_main, pattern=r"^(main|menu:main)$"),
                 CallbackQueryHandler(menu_router, pattern=r"^menu\|(films|wishlist|leisure|afisha|backlog)$"),
                 CallbackQueryHandler(places_callback_router, pattern=r"^places:"),
