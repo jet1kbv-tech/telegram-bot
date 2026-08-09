@@ -24,10 +24,11 @@ def main_menu_row() -> list[InlineKeyboardButton]:
 def section_menu_keyboard(section: str) -> InlineKeyboardMarkup:
     if section == "films":
         rows = [
-            [InlineKeyboardButton("➕ Добавить", callback_data="add|films")],
-            [InlineKeyboardButton("🎬 Непросмотренные", callback_data="list|films|want|0")],
+            [InlineKeyboardButton("➕ Добавить фильм", callback_data="add|films")],
+            [InlineKeyboardButton("📋 Хотим посмотреть", callback_data="list|films|want|0")],
+            [InlineKeyboardButton("🎭 По жанрам", callback_data="filmfilter:g:b:0")],
+            [InlineKeyboardButton("🎲 Выбрать случайный", callback_data="filmfilter:r")],
             [InlineKeyboardButton("✅ Просмотренные", callback_data="list|films|watched|0")],
-            [InlineKeyboardButton("🎲 Случайный фильм", callback_data="random|films")],
             [InlineKeyboardButton("🔄 Обновить данные фильмов", callback_data="filmenrich:open")],
         ]
     elif section == "wishlist":
