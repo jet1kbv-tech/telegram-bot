@@ -103,10 +103,18 @@ async def add_film_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text("Название фильма не должно быть пустым. Попробуй ещё раз:")
         return ADDING_FILM_TITLE
 
+    return await begin_film_search(update, context, title)
+
+
+async def begin_film_search(update: Update, context: ContextTypes.DEFAULT_TYPE, title: str) -> int:
+    """Start the authoritative Films v2 lookup from native or NL input."""
+    message = getattr(update, "effective_message", None) or getattr(update, "message", None)
+    if message is None:
+        return SECTION
     draft = {"query": title, "results": [], "candidate": None, "comment": "", "possible_duplicate_id": ""}
     context.user_data[FILM_DRAFT_KEY] = draft
     if _metadata_provider is None:
-        await update.message.reply_text(
+        await message.reply_text(
             "🔎 Поиск фильмов и сериалов сейчас не настроен. Можно добавить запись только по названию.",
             reply_markup=_manual_fallback_keyboard(),
         )
@@ -119,7 +127,7 @@ async def add_film_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         search_complete = getattr(raw_results, "complete", True)
     except MediaMetadataError:
         logger.info("Movie metadata search is unavailable", exc_info=True)
-        await update.message.reply_text(
+        await message.reply_text(
             "Не удалось связаться с сервисом фильмов и сериалов. Можно повторить поиск или добавить запись только по названию.",
             reply_markup=_manual_fallback_keyboard(),
         )
@@ -128,7 +136,7 @@ async def add_film_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     draft["results"] = results
     draft["search_complete"] = search_complete
     if not results:
-        await update.message.reply_text(
+        await message.reply_text(
             "Ничего не найдено. Попробуй другое название или добавь фильм только по названию.",
             reply_markup=_manual_fallback_keyboard(),
         )
@@ -139,7 +147,7 @@ async def add_film_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         selected = results.index(exact_matches[0])
         return await _select_result(update, context, selected, from_message=True)
 
-    await update.message.reply_text("Что именно добавить?", reply_markup=_results_keyboard(results))
+    await message.reply_text("Что именно добавить?", reply_markup=_results_keyboard(results))
     return SELECTING_FILM_METADATA
 
 
@@ -249,7 +257,8 @@ async def _select_result(update: Update, context: ContextTypes.DEFAULT_TYPE, ind
     results = draft.get("results") if isinstance(draft, dict) else None
     if not isinstance(results, list) or not 0 <= index < len(results) or not isinstance(results[index], MediaSearchResult):
         if from_message:
-            await update.message.reply_text("Результат поиска устарел. Попробуй поиск снова.")
+            message = getattr(update, "effective_message", None) or update.message
+            await message.reply_text("Результат поиска устарел. Попробуй поиск снова.")
             return ADDING_FILM_TITLE
         return await _show_stale(update.callback_query)
     if _metadata_provider is None:
@@ -261,7 +270,7 @@ async def _select_result(update: Update, context: ContextTypes.DEFAULT_TYPE, ind
         return await _provider_failure(update, from_message)
     draft["candidate"] = candidate
     draft["possible_duplicate_id"] = ""
-    target = update.message if from_message else update.callback_query
+    target = (getattr(update, "effective_message", None) or update.message) if from_message else update.callback_query
     return await _show_candidate(target, draft, edit=not from_message)
 
 
@@ -269,7 +278,8 @@ async def _provider_failure(update: Update, from_message: bool) -> int:
     text = "Не удалось загрузить данные фильма. Выбери другой результат или добавь фильм только по названию."
     keyboard = _manual_fallback_keyboard(include_results=True)
     if from_message:
-        await update.message.reply_text(text, reply_markup=keyboard)
+        message = getattr(update, "effective_message", None) or update.message
+        await message.reply_text(text, reply_markup=keyboard)
     else:
         await _safe_edit_message(update.callback_query, text, reply_markup=keyboard)
     return SELECTING_FILM_METADATA

@@ -21,9 +21,10 @@ from bot.services.afisha_calendar_sync import (
     project_afisha_to_calendars,
     remove_afisha_from_calendars,
 )
-from bot.storage import find_item, make_id, normalize_event, sort_events, storage
+from bot.storage import find_item, normalize_event, sort_events, storage
 from bot.storage import format_event_dt, is_event_actual
 from bot.utils import ensure_access, item_status_label, remember_current_chat
+from bot.services.actions.afisha import create_afisha_event
 
 
 
@@ -345,7 +346,6 @@ async def add_event_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         link = ""
 
     item = {
-        "id": make_id(),
         "title": context.user_data.get("event_title", "Без названия"),
         "place": context.user_data.get("event_place", ""),
         "date": context.user_data.get("event_date", ""),
@@ -353,20 +353,13 @@ async def add_event_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         "end_date": context.user_data.get("event_end_date", ""),
         "end_time": context.user_data.get("event_end_time", ""),
         "link": link,
-        "status": "active",
-        "notified_24h": False,
-        "notified_morning": False,
     }
-    normalized_item = normalize_event(item)
-    if normalized_item is None:
+    try:
+        normalized_item = create_afisha_event(item)
+    except ValueError:
         await update.message.reply_text("Не удалось сохранить событие: проверь дату и время.")
         return SECTION
 
-    data = storage.load()
-    data["afisha"].append(normalized_item)
-    data["afisha"] = sort_events(data["afisha"])
-    project_afisha_to_calendars(data, normalized_item)
-    storage.save(data)
 
     for key in ["event_title", "event_place", "event_date", "event_time", "event_end_date", "event_end_time"]:
         context.user_data.pop(key, None)

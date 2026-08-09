@@ -1,4 +1,4 @@
-MENU, SECTION = range(2)
+MENU, SECTION, AI_CLARIFYING = range(3)
 
 (
     ADDING_FILM_TITLE,

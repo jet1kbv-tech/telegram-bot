@@ -24,12 +24,12 @@ from bot.storage import (
     find_item,
     format_calendar_event_range,
     get_calendar_items,
-    make_id,
     normalize_calendar_event,
     sort_calendar_events,
     storage,
 )
 from bot.utils import ensure_access, owner_label, paginate_items, remember_current_chat
+from bot.services.actions.calendar import create_personal_calendar_event
 
 _safe_edit_message: Callable[..., Awaitable[None]] | None = None
 _main_menu_keyboard: Callable[[], InlineKeyboardMarkup] | None = None
@@ -533,24 +533,18 @@ async def add_calendar_event_comment(update: Update, context: ContextTypes.DEFAU
         return MENU
 
     item = {
-        "id": make_id(),
-        "owner": owner,
         "title": context.user_data.get("calendar_event_title", "Без названия"),
         "date": context.user_data.get("calendar_event_date", ""),
         "start_time": context.user_data.get("calendar_event_start_time", ""),
         "end_time": context.user_data.get("calendar_event_end_time", ""),
         "comment": comment,
-        "notified_24h": False,
     }
-    normalized_item = normalize_calendar_event(item, owner)
-    if normalized_item is None:
+    try:
+        normalized_item = create_personal_calendar_event(item, owner=owner)
+    except ValueError:
         await update.message.reply_text("Не удалось сохранить событие: проверь дату и время.")
         return SECTION
 
-    data = storage.load()
-    data.setdefault("calendars", {}).setdefault(owner, []).append(normalized_item)
-    data["calendars"][owner] = sort_calendar_events(data["calendars"][owner])
-    storage.save(data)
     if normalized_item.get("source") == "manual":
         notify_other_user_about_calendar_item = _require_notify_other_user_about_calendar_item()
         await notify_other_user_about_calendar_item(context, update, normalized_item)

@@ -26,7 +26,8 @@ from bot.states import (
     EDITING_PURCHASE_FIELD,
     SECTION,
 )
-from bot.storage import find_item, make_id, normalize_purchase_item, storage
+from bot.storage import find_item, normalize_purchase_item, storage
+from bot.services.actions.purchases import create_purchase
 from bot.utils import clamp_page, ensure_access, get_user_name, paginate_items, remember_current_chat
 
 _safe_edit_message: Callable[..., Awaitable[None]] | None = None
@@ -270,26 +271,20 @@ async def add_purchase_comment(update: Update, context: ContextTypes.DEFAULT_TYP
         comment = ""
 
     item = {
-        "id": make_id(),
         "title": context.user_data.get("purchase_title", "Без названия"),
         "link": context.user_data.get("purchase_link", ""),
         "price": context.user_data.get("purchase_price"),
         "priority": context.user_data.get("purchase_priority", ""),
         "comment": comment,
         "buyer": "",
-        "created_at": _now_iso(),
-        "bought_at": "",
     }
-    normalized_item = normalize_purchase_item(item)
-    if normalized_item is None:
+    try:
+        normalized_item = create_purchase(item)
+    except ValueError:
         await update.message.reply_text("Не удалось сохранить покупку.")
         _clear_add_context(context)
         return SECTION
 
-    def mutator(data: dict[str, Any]) -> None:
-        _bucket_items(data, PURCHASE_PLANNED).append(normalized_item)
-
-    storage.update(mutator)
     _clear_add_context(context)
     await update.message.reply_text(
         f"Покупка добавлена:\n\n{_purchase_card_text(normalized_item, PURCHASE_PLANNED)}",
