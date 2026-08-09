@@ -19,6 +19,14 @@ def context():
     return IntentContext("actor", datetime(2026, 8, 9, 12, 0), "Europe/Moscow")
 
 
+def test_intent_kind_keeps_string_serialization_on_python_310():
+    intent = IntentKind.ADD_MOVIE_OR_TV
+
+    assert intent.value == "add_movie_or_tv"
+    assert str(intent) == "add_movie_or_tv"
+    assert json.dumps(intent) == '"add_movie_or_tv"'
+
+
 def response_content(content):
     return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
 

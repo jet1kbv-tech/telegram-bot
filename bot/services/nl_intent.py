@@ -2,17 +2,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from enum import StrEnum
+from enum import Enum
 from typing import Any, Protocol, TypeAlias
 
 
-class IntentKind(StrEnum):
+class IntentKind(str, Enum):
     ADD_MOVIE_OR_TV = "add_movie_or_tv"
     ADD_PURCHASE = "add_purchase"
     ADD_PERSONAL_CALENDAR_EVENT = "add_personal_calendar_event"
     ADD_AFISHA_EVENT = "add_afisha_event"
     NO_ACTION = "no_action"
     UNSUPPORTED = "unsupported"
+
+    def __str__(self) -> str:
+        """Return the serialized value when rendered as text."""
+        return self.value
 
 
 @dataclass(frozen=True, slots=True)
