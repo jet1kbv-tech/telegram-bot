@@ -110,18 +110,12 @@ def decode_intent(raw: str | dict[str, Any]) -> ParsedIntent:
     return ParsedIntent(kind, arguments)
 
 
-def _object_schema(kind: IntentKind, properties: dict[str, Any]) -> dict[str, Any]:
+def _arguments_schema(properties: dict[str, Any]) -> dict[str, Any]:
     return {
         "type": "object",
         "additionalProperties": False,
-        "required": ["intent", "arguments"],
-        "properties": {
-            "intent": {"const": kind.value},
-            "arguments": {
-                "type": "object", "additionalProperties": False,
-                "required": list(properties), "properties": properties,
-            },
-        },
+        "required": list(properties),
+        "properties": properties,
     }
 
 
@@ -129,13 +123,13 @@ _BRANCH_PROPERTIES: dict[IntentKind, dict[str, Any]] = {
     IntentKind.ADD_MOVIE_OR_TV: {"query": {"type": "string"}},
     IntentKind.ADD_PURCHASE: {
         "title": {"type": "string"}, "price": {"type": ["integer", "null"], "minimum": 0, "maximum": 1_000_000_000},
-        "priority": {"enum": ["high", "medium", "low", None]}, "link": {"type": ["string", "null"]},
-        "comment": {"type": ["string", "null"]}, "buyer": {"enum": ["current_user", None]},
+        "priority": {"type": ["string", "null"], "enum": ["high", "medium", "low", None]}, "link": {"type": ["string", "null"]},
+        "comment": {"type": ["string", "null"]}, "buyer": {"type": ["string", "null"], "enum": ["current_user", None]},
     },
     IntentKind.ADD_PERSONAL_CALENDAR_EVENT: {
         "title": {"type": "string"}, "date_expression": {"type": ["string", "null"]},
         "time_expression": {"type": ["string", "null"]}, "end_time_expression": {"type": ["string", "null"]},
-        "comment": {"type": ["string", "null"]}, "owner": {"const": "current_user"},
+        "comment": {"type": ["string", "null"]}, "owner": {"type": "string", "enum": ["current_user"]},
     },
     IntentKind.ADD_AFISHA_EVENT: {
         "title": {"type": "string"}, "place": {"type": ["string", "null"]},
@@ -143,26 +137,38 @@ _BRANCH_PROPERTIES: dict[IntentKind, dict[str, Any]] = {
         "end_date_expression": {"type": ["string", "null"]}, "end_time_expression": {"type": ["string", "null"]},
         "link": {"type": ["string", "null"]},
     },
-    IntentKind.UPDATE_PURCHASE: {"target": {"type": "string"}, "title": {"type": ["string", "null"]}, "price": {"type": ["integer", "null"], "minimum": 0, "maximum": 1_000_000_000}, "priority": {"enum": ["high", "medium", "low", "none", None]}, "link": {"type": ["string", "null"]}, "comment": {"type": ["string", "null"]}, "buyer": {"enum": ["current_user", "none", None]}, "status": {"enum": ["planned", "bought", None]}},
+    IntentKind.UPDATE_PURCHASE: {"target": {"type": "string"}, "title": {"type": ["string", "null"]}, "price": {"type": ["integer", "null"], "minimum": 0, "maximum": 1_000_000_000}, "priority": {"type": ["string", "null"], "enum": ["high", "medium", "low", "none", None]}, "link": {"type": ["string", "null"]}, "comment": {"type": ["string", "null"]}, "buyer": {"type": ["string", "null"], "enum": ["current_user", "none", None]}, "status": {"type": ["string", "null"], "enum": ["planned", "bought", None]}},
     IntentKind.DELETE_PURCHASE: {"target": {"type": "string"}},
-    IntentKind.UPDATE_FILM: {"target": {"type": "string"}, "status": {"enum": ["want", "watched", None]}, "comment": {"type": ["string", "null"]}},
+    IntentKind.UPDATE_FILM: {"target": {"type": "string"}, "status": {"type": ["string", "null"], "enum": ["want", "watched", None]}, "comment": {"type": ["string", "null"]}},
     IntentKind.DELETE_FILM: {"target": {"type": "string"}},
     IntentKind.UPDATE_CALENDAR_EVENT: {"target": {"type": "string"}, "title": {"type": ["string", "null"]}, "date_expression": {"type": ["string", "null"]}, "time_expression": {"type": ["string", "null"]}},
     IntentKind.DELETE_CALENDAR_EVENT: {"target": {"type": "string"}},
     IntentKind.UPDATE_AFISHA_EVENT: {"target": {"type": "string"}, "title": {"type": ["string", "null"]}, "date_expression": {"type": ["string", "null"]}, "time_expression": {"type": ["string", "null"]}},
     IntentKind.DELETE_AFISHA_EVENT: {"target": {"type": "string"}},
-    IntentKind.QUERY_PURCHASES: {"status": {"enum": ["planned", "bought", "any"]}, "priority": {"enum": ["high", "medium", "low", "any"]}, "buyer": {"enum": ["current_user", "other_user", "unassigned", "any"]}, "operation": {"enum": ["list", "count", "sum"]}},
-    IntentKind.QUERY_FILMS: {"status": {"enum": ["want", "watched", "any"]}, "media_type": {"enum": ["movie", "tv", "any"]}, "genre": {"type": ["string", "null"]}, "operation": {"enum": ["list", "count", "random"]}},
-    IntentKind.QUERY_CALENDAR: {"date_from": {"type": ["string", "null"]}, "date_to": {"type": ["string", "null"]}, "target": {"type": ["string", "null"]}, "operation": {"enum": ["list", "count", "next"]}},
-    IntentKind.QUERY_AFISHA: {"date_from": {"type": ["string", "null"]}, "date_to": {"type": ["string", "null"]}, "target": {"type": ["string", "null"]}, "operation": {"enum": ["list", "count", "next"]}},
+    IntentKind.QUERY_PURCHASES: {"status": {"type": "string", "enum": ["planned", "bought", "any"]}, "priority": {"type": "string", "enum": ["high", "medium", "low", "any"]}, "buyer": {"type": "string", "enum": ["current_user", "other_user", "unassigned", "any"]}, "operation": {"type": "string", "enum": ["list", "count", "sum"]}},
+    IntentKind.QUERY_FILMS: {"status": {"type": "string", "enum": ["want", "watched", "any"]}, "media_type": {"type": "string", "enum": ["movie", "tv", "any"]}, "genre": {"type": ["string", "null"]}, "operation": {"type": "string", "enum": ["list", "count", "random"]}},
+    IntentKind.QUERY_CALENDAR: {"date_from": {"type": ["string", "null"]}, "date_to": {"type": ["string", "null"]}, "target": {"type": ["string", "null"]}, "operation": {"type": "string", "enum": ["list", "count", "next"]}},
+    IntentKind.QUERY_AFISHA: {"date_from": {"type": ["string", "null"]}, "date_to": {"type": ["string", "null"]}, "target": {"type": ["string", "null"]}, "operation": {"type": "string", "enum": ["list", "count", "next"]}},
     IntentKind.NO_ACTION: {},
-    IntentKind.UNSUPPORTED: {"category": {"enum": sorted(_UNSUPPORTED)}},
+    IntentKind.UNSUPPORTED: {"category": {"type": "string", "enum": sorted(_UNSUPPORTED)}},
 }
 
+# GPT-4o structured outputs require the root schema itself to be an object; the
+# former root-level oneOf was rejected before generation.  Keep discrimination
+# strict at the authoritative decoder boundary while presenting the provider a
+# supported root object with nested argument alternatives.
 INTENT_JSON_SCHEMA: dict[str, Any] = {
     "name": "telegram_bot_intent",
     "strict": True,
-    "schema": {"oneOf": [_object_schema(kind, _BRANCH_PROPERTIES[kind]) for kind in IntentKind]},
+    "schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["intent", "arguments"],
+        "properties": {
+            "intent": {"type": "string", "enum": [kind.value for kind in IntentKind]},
+            "arguments": {"anyOf": [_arguments_schema(_BRANCH_PROPERTIES[kind]) for kind in IntentKind]},
+        },
+    },
 }
 
 
