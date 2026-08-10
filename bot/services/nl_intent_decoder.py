@@ -67,7 +67,9 @@ _PROVIDER_TECHNICAL_DEFAULTS: dict[IntentKind, dict[str, Any]] = {
     IntentKind.QUERY_PURCHASES: {
         "status": "planned", "priority": "any", "buyer": "any", "operation": "list",
     },
-    IntentKind.QUERY_FILMS: {"operation": "list"},
+    IntentKind.QUERY_FILMS: {
+        "status": "want", "media_type": "any", "genre": None, "operation": "list",
+    },
     IntentKind.QUERY_CALENDAR: {"operation": "list"},
     IntentKind.QUERY_AFISHA: {"operation": "list"},
 }

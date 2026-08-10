@@ -28,7 +28,7 @@ from bot.states import (
 )
 from bot.storage import find_item, normalize_purchase_item, storage
 from bot.services.actions.purchases import create_purchase
-from bot.utils import clamp_page, ensure_access, get_user_name, paginate_items, remember_current_chat
+from bot.utils import clamp_page, ensure_access, get_user_name, normalize_entity_title, paginate_items, remember_current_chat
 
 _safe_edit_message: Callable[..., Awaitable[None]] | None = None
 
@@ -228,7 +228,7 @@ async def add_purchase_title(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not title or title == "-":
         await update.message.reply_text("Название покупки не должно быть пустым. Попробуй ещё раз:")
         return ADDING_PURCHASE_TITLE
-    context.user_data["purchase_title"] = title
+    context.user_data["purchase_title"] = normalize_entity_title(title)
     await update.message.reply_text("Отправь ссылку. Если ссылки нет — отправь -")
     return ADDING_PURCHASE_LINK
 
@@ -324,7 +324,7 @@ async def edit_purchase_field(update: Update, context: ContextTypes.DEFAULT_TYPE
     elif field in {"link", "comment"}:
         new_value = "" if raw_value == "-" else raw_value
     else:
-        new_value = raw_value
+        new_value = normalize_entity_title(raw_value)
 
     updated_item: dict[str, Any] | None = None
 

@@ -30,7 +30,7 @@ from bot.states import (
 )
 from bot.storage import make_id, normalize_calendar_event, normalize_event, parse_calendar_event_start_dt, parse_event_dt, storage
 from bot.ui.common import build_item_text
-from bot.utils import ensure_access, get_allowed_profile, get_user_name, get_username
+from bot.utils import ensure_access, get_allowed_profile, get_user_name, get_username, normalize_entity_title
 
 logger = logging.getLogger(__name__)
 
@@ -172,6 +172,14 @@ def _select_candidate(proposal: ActionProposal, candidate: EntityCandidate, acto
 def _prepare(kind: IntentKind, arguments: dict[str, Any], now: datetime) -> tuple[dict[str, Any], list[str]]:
     args = dict(arguments)
     missing: list[str] = []
+    if kind in {
+        IntentKind.ADD_PURCHASE, IntentKind.UPDATE_PURCHASE,
+        IntentKind.ADD_PERSONAL_CALENDAR_EVENT, IntentKind.UPDATE_CALENDAR_EVENT,
+        IntentKind.ADD_AFISHA_EVENT, IntentKind.UPDATE_AFISHA_EVENT,
+    } and isinstance(args.get("title"), str):
+        # Normalize only the proposed storage-visible name. In particular, do
+        # not alter ``target`` before entity resolution or TMDB search queries.
+        args["title"] = normalize_entity_title(args["title"])
     if kind is IntentKind.ADD_PURCHASE:
         args["buyer"] = "current_user" if args.get("buyer") == "current_user" else ""
     elif kind in {IntentKind.ADD_PERSONAL_CALENDAR_EVENT, IntentKind.ADD_AFISHA_EVENT}:
@@ -265,7 +273,12 @@ async def nl_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             active_section=context.user_data.get("active_section"),
         ))
         if parsed.intent is IntentKind.NO_ACTION:
-            await response.discard()
+            await response.reply_text(
+                "Я пока лучше всего умею работать с нашими планами 🙂\n"
+                "Попроси меня добавить, изменить, удалить или найти что-нибудь "
+                "в покупках, фильмах, календаре или Афише.",
+                reply_markup=_menu_keyboard(),
+            )
             return _idle_state(context)
         if parsed.intent is IntentKind.UNSUPPORTED:
             await response.reply_text("С этой командой я пока не умею работать. Могу помочь с покупками, фильмами, календарём и Афишей.", reply_markup=_menu_keyboard())
@@ -500,7 +513,7 @@ def _preview(proposal: ActionProposal) -> str:
     if proposal.intent is IntentKind.ADD_MOVIE_OR_TV:
         return f"🎬 Добавить фильм или сериал\n\n{args['query']}\n\nПока ничего не добавлено."
     if proposal.intent is IntentKind.ADD_PURCHASE:
-        lines = ["➕ Добавить покупку", "", f"Название: {str(args['title']).capitalize()}"]
+        lines = ["➕ Добавить покупку", "", f"Название: {args['title']}"]
         if args.get("price") is not None:
             lines.append(f"Стоимость: {args['price']:,} ₽".replace(",", " "))
         labels = {"high": "Высокий", "medium": "Средний", "low": "Низкий"}

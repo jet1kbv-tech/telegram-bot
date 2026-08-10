@@ -596,6 +596,37 @@ def test_query_purchases_missing_priority_uses_any_filter_default():
 
 
 @pytest.mark.parametrize(("missing", "expected"), [
+    ("status", "want"),
+    ("media_type", "any"),
+    ("genre", None),
+    ("operation", "list"),
+])
+def test_query_films_missing_field_uses_existing_ordinary_query_default(missing, expected):
+    arguments = {**CANONICAL_BY_INTENT["query_films"]}
+    arguments.pop(missing)
+
+    result = decode_provider_envelope(json.dumps(provider_envelope("query_films", arguments)))
+
+    assert result.arguments[missing] == expected
+
+
+@pytest.mark.parametrize(("name", "value"), [
+    ("status", "watched"), ("media_type", "movie"), ("media_type", "tv"),
+    ("operation", "count"), ("operation", "random"),
+])
+def test_query_films_explicit_canonical_values_are_preserved(name, value):
+    arguments = {**CANONICAL_BY_INTENT["query_films"], name: value}
+    result = decode_provider_envelope(json.dumps(provider_envelope("query_films", arguments)))
+    assert result.arguments[name] == value
+
+
+def test_query_films_explicit_invalid_media_type_remains_rejected():
+    arguments = {**CANONICAL_BY_INTENT["query_films"], "media_type": "series"}
+    with pytest.raises(IntentParserInvalidOutput, match="invalid_query_arguments"):
+        decode_provider_envelope(json.dumps(provider_envelope("query_films", arguments)))
+
+
+@pytest.mark.parametrize(("missing", "expected"), [
     ("buyer", "any"),
     ("status", "planned"),
 ])
