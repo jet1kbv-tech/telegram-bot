@@ -23,7 +23,7 @@ from bot.services.afisha_calendar_sync import (
 )
 from bot.storage import find_item, normalize_event, sort_events, storage
 from bot.storage import format_event_dt, is_event_actual
-from bot.utils import ensure_access, item_status_label, remember_current_chat
+from bot.utils import ensure_access, item_status_label, normalize_entity_title, remember_current_chat
 from bot.services.actions.afisha import create_afisha_event
 
 
@@ -236,7 +236,7 @@ async def add_event_title(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if not title:
         await update.message.reply_text("Название события не должно быть пустым. Попробуй ещё раз:")
         return ADDING_EVENT_TITLE
-    context.user_data["event_title"] = title
+    context.user_data["event_title"] = normalize_entity_title(title)
     await update.message.reply_text("Теперь отправь место. Если не нужно, напиши -")
     return ADDING_EVENT_PLACE
 
