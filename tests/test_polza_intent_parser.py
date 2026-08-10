@@ -258,13 +258,15 @@ def test_decode_failure_logs_only_safe_response_shape(caplog):
     run(client.aclose())
     log = caplog.text
     assert "reason=invalid_priority" in log and "intent=add_purchase" in log
-    assert "provider_priority=urgent" in log
+    assert "provider_priority=unknown" in log
     assert "conflicting_fields=[]" in log
     assert secret_value not in log and "super-secret-key" not in log and "private" not in log
 
 
-@pytest.mark.parametrize("priority", ["any", "urgent", "high"])
-def test_priority_rejection_logs_safe_provider_token(priority, caplog):
+@pytest.mark.parametrize(("priority", "diagnostic"), [
+    ("any", "any"), ("urgent", "unknown"), ("high", "high"),
+])
+def test_priority_rejection_logs_safe_provider_category(priority, diagnostic, caplog):
     if priority == "urgent":
         payload = provider_envelope("add_purchase", {
             **CANONICAL_BY_INTENT["add_purchase"], "priority": priority,
@@ -278,7 +280,7 @@ def test_priority_rejection_logs_safe_provider_token(priority, caplog):
     with caplog.at_level(logging.WARNING), pytest.raises(IntentParserInvalidOutput):
         run(PolzaIntentParser(api_key="secret", model="configured/model", client=client).parse("private", context()))
     run(client.aclose())
-    assert f"provider_priority={priority}" in caplog.text
+    assert f"provider_priority={diagnostic}" in caplog.text
 
 
 def test_unsafe_priority_rejection_logs_unknown_and_never_raw_content(caplog):
@@ -317,9 +319,13 @@ def test_priority_diagnostic_categories_are_deterministic():
         "status": "planned", "buyer": "any", "operation": "list",
     }))
     null = json.dumps({"intent": "add_purchase", "arguments": [{"name": "priority", "value": None}]})
+    string_null = json.dumps({
+        "intent": "add_purchase", "arguments": [{"name": "priority", "value": "null"}],
+    })
 
     assert provider_priority_diagnostic(missing, "invalid_priority") == "missing"
-    assert provider_priority_diagnostic(null, "invalid_argument_entry") == "null"
+    assert provider_priority_diagnostic(null, "invalid_argument_entry") == "json_null"
+    assert provider_priority_diagnostic(string_null, "invalid_priority") == "string_null"
 
 
 @pytest.mark.parametrize("status", [401, 403, 429, 500, 503])
@@ -651,6 +657,39 @@ def test_production_shaped_add_purchase_explicit_json_null_priority_is_canonical
     }
 
 
+def test_production_shaped_add_purchase_string_null_priority_is_canonical_none():
+    payload = {
+        "intent": "add_purchase",
+        "arguments": [
+            {"name": "title", "value": "Кофемолка"},
+            {"name": "price", "value": "15000"},
+            {"name": "priority", "value": "null"},
+        ],
+    }
+
+    assert decode_provider_envelope(json.dumps(payload, ensure_ascii=False)).arguments == {
+        "title": "Кофемолка", "price": 15000, "priority": None,
+        "link": None, "comment": None, "buyer": None,
+    }
+
+
+@pytest.mark.parametrize("provider_priority", [None, "null"])
+def test_update_purchase_null_priority_is_canonical_none(provider_priority):
+    payload = provider_envelope("update_purchase", {
+        **CANONICAL_BY_INTENT["update_purchase"], "priority": provider_priority,
+    })
+
+    assert decode_provider_envelope(json.dumps(payload)).arguments["priority"] is None
+
+
+def test_update_purchase_canonical_none_priority_retains_clear_semantics():
+    payload = provider_envelope("update_purchase", {
+        **CANONICAL_BY_INTENT["update_purchase"], "priority": "none",
+    })
+
+    assert decode_provider_envelope(json.dumps(payload)).arguments["priority"] == "none"
+
+
 def test_query_purchase_explicit_json_null_priority_remains_rejected():
     arguments = {**CANONICAL_BY_INTENT["query_purchases"]}
     arguments.pop("priority")
@@ -687,7 +726,7 @@ def test_update_purchase_explicit_valid_priority_is_preserved(priority):
     assert decode_provider_envelope(json.dumps(payload)).arguments["priority"] == priority
 
 
-@pytest.mark.parametrize("priority", ["urgent", "none", "any"])
+@pytest.mark.parametrize("priority", ["none", "any", "urgent", "no priority", "нет"])
 def test_add_purchase_explicit_invalid_priority_remains_rejected(priority):
     payload = provider_envelope("add_purchase", {
         **CANONICAL_BY_INTENT["add_purchase"], "priority": priority,

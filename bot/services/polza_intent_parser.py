@@ -136,7 +136,7 @@ class PolzaIntentParser:
 
 
 _SAFE_ERROR_TOKEN = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
-_SAFE_PROVIDER_PRIORITY = re.compile(r"[A-Za-z0-9_-]{1,40}")
+_CANONICAL_PROVIDER_PRIORITIES = {"high", "medium", "low", "none", "any"}
 _SCHEMA_KEYWORDS = ("oneOf", "anyOf", "additionalProperties", "required", "response_format", "json_schema")
 
 
@@ -162,8 +162,10 @@ def provider_priority_diagnostic(raw: str, reason: str) -> str:
         return "unknown"
     priority = priorities[0]
     if priority is None:
-        return "null"
-    if isinstance(priority, str) and _SAFE_PROVIDER_PRIORITY.fullmatch(priority):
+        return "json_null"
+    if priority == "null":
+        return "string_null"
+    if isinstance(priority, str) and priority in _CANONICAL_PROVIDER_PRIORITIES:
         return priority
     return "unknown"
 
