@@ -10,7 +10,8 @@ from bot.services.nl_intent import (
     IntentContext, IntentKind, IntentParserInvalidOutput, IntentParserTimeout, IntentParserUnavailable,
 )
 from bot.services.polza_intent_parser import (
-    POLZA_CHAT_COMPLETIONS_URL, SYSTEM_PROMPT, PolzaIntentParser, provider_priority_diagnostic,
+    POLZA_CHAT_COMPLETIONS_URL, SYSTEM_PROMPT, PolzaIntentParser, provider_buyer_diagnostic,
+    provider_priority_diagnostic,
 )
 from bot.services.nl_intent_decoder import (
     INTENT_JSON_SCHEMA, decode_intent, decode_provider_envelope, normalize_provider_envelope,
@@ -328,6 +329,20 @@ def test_priority_diagnostic_categories_are_deterministic():
     assert provider_priority_diagnostic(string_null, "invalid_priority") == "string_null"
 
 
+@pytest.mark.parametrize(("buyer", "expected"), [
+    (None, "json_null"), ("null", "string_null"),
+    ("current_user", "current_user"), ("private buyer value", "unknown"),
+])
+def test_buyer_diagnostic_categories_are_safe(buyer, expected):
+    raw = json.dumps({"intent": "add_purchase", "arguments": [{"name": "buyer", "value": buyer}]})
+    assert provider_buyer_diagnostic(raw, "invalid_buyer") == expected
+
+
+def test_buyer_diagnostic_distinguishes_missing_and_never_returns_arbitrary_text():
+    raw = json.dumps({"intent": "add_purchase", "arguments": []})
+    assert provider_buyer_diagnostic(raw, "invalid_buyer") == "missing"
+
+
 @pytest.mark.parametrize("status", [401, 403, 429, 500, 503])
 def test_polza_http_failures_are_mapped(status):
     client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(status)))
@@ -611,6 +626,66 @@ def test_query_purchase_explicit_invalid_filters_remain_rejected(name, value):
     })
     with pytest.raises(IntentParserInvalidOutput, match="invalid_query_arguments"):
         decode_provider_envelope(json.dumps(payload))
+
+
+@pytest.mark.parametrize(("intent", "buyer", "expected"), [
+    ("add_purchase", None, None),
+    ("add_purchase", "null", None),
+    ("add_purchase", "current_user", "current_user"),
+    ("update_purchase", None, None),
+    ("update_purchase", "null", None),
+    ("update_purchase", "current_user", "current_user"),
+    ("update_purchase", "none", "none"),
+])
+def test_mutating_purchase_explicit_buyer_values_are_narrowly_normalized(intent, buyer, expected):
+    arguments = {**CANONICAL_BY_INTENT[intent]}
+    arguments.pop("buyer")
+    payload = provider_envelope(intent, arguments)
+    payload["arguments"].append({"name": "buyer", "value": buyer})
+
+    assert decode_provider_envelope(json.dumps(payload)).arguments["buyer"] == expected
+
+
+@pytest.mark.parametrize("intent", ["add_purchase", "update_purchase"])
+def test_mutating_purchase_omitted_buyer_retains_canonical_none(intent):
+    arguments = {**CANONICAL_BY_INTENT[intent]}
+    arguments.pop("buyer")
+    result = decode_provider_envelope(json.dumps(provider_envelope(intent, arguments)))
+    assert result.arguments["buyer"] is None
+
+
+@pytest.mark.parametrize(("intent", "buyer"), [
+    ("add_purchase", "none"), ("add_purchase", "somebody"),
+    ("update_purchase", "somebody"),
+])
+def test_mutating_purchase_invalid_buyer_values_remain_rejected(intent, buyer):
+    payload = provider_envelope(intent, {**CANONICAL_BY_INTENT[intent], "buyer": buyer})
+    with pytest.raises(IntentParserInvalidOutput, match="invalid_buyer"):
+        decode_provider_envelope(json.dumps(payload))
+
+
+@pytest.mark.parametrize("buyer", [None, "null"])
+def test_query_purchase_null_buyer_values_remain_rejected(buyer):
+    arguments = {**CANONICAL_BY_INTENT["query_purchases"]}
+    arguments.pop("buyer")
+    payload = provider_envelope("query_purchases", arguments)
+    payload["arguments"].append({"name": "buyer", "value": buyer})
+    reason = "invalid_argument_entry" if buyer is None else "invalid_query_arguments"
+    with pytest.raises(IntentParserInvalidOutput, match=reason):
+        decode_provider_envelope(json.dumps(payload))
+
+
+def test_invalid_buyer_log_uses_safe_category_without_exposing_value(caplog):
+    private = "private buyer https://secret.invalid/credential"
+    content = json.dumps(provider_envelope("add_purchase", {
+        **CANONICAL_BY_INTENT["add_purchase"], "buyer": private,
+    }))
+    client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: response_content(content)))
+    with caplog.at_level(logging.WARNING), pytest.raises(IntentParserInvalidOutput, match="invalid_buyer"):
+        run(PolzaIntentParser(api_key="secret", model="configured/model", client=client).parse("private command", context()))
+    run(client.aclose())
+    assert "provider_buyer=unknown" in caplog.text
+    assert private not in caplog.text and "private command" not in caplog.text
 
 
 @pytest.mark.parametrize("priority", ["any", "high"])
