@@ -52,6 +52,18 @@ _PROVIDER_PRICE = re.compile(
 )
 _SAFE_PROVIDER_OPERATION = re.compile(r"[A-Za-z0-9_-]{1,40}")
 
+# Defaults here are part of existing domain behavior, not inferred user data.
+# Every query renderer treats ``list`` as its ordinary operation, while the
+# native purchase flow represents a skipped priority as no priority (``None``
+# at the canonical boundary and an empty string in storage).
+_PROVIDER_TECHNICAL_DEFAULTS: dict[IntentKind, dict[str, Any]] = {
+    IntentKind.ADD_PURCHASE: {"priority": None},
+    IntentKind.QUERY_PURCHASES: {"operation": "list"},
+    IntentKind.QUERY_FILMS: {"operation": "list"},
+    IntentKind.QUERY_CALENDAR: {"operation": "list"},
+    IntentKind.QUERY_AFISHA: {"operation": "list"},
+}
+
 
 def decode_intent(raw: str | dict[str, Any]) -> ParsedIntent:
     """Strictly decode the canonical nested ``{intent, arguments}`` contract."""
@@ -229,6 +241,9 @@ def normalize_provider_envelope(raw: str | dict[str, Any]) -> dict[str, Any]:
 
     arguments: dict[str, Any] = {name: None for name in allowed}
     arguments.update(supplied)
+    for name, default in _PROVIDER_TECHNICAL_DEFAULTS.get(kind, {}).items():
+        if name not in supplied:
+            arguments[name] = default
     if "price" in supplied:
         match = _PROVIDER_PRICE.fullmatch(supplied["price"])
         if match is None:
