@@ -8,6 +8,10 @@ MONTHS = {
     "января": 1, "февраля": 2, "марта": 3, "апреля": 4, "мая": 5, "июня": 6,
     "июля": 7, "августа": 8, "сентября": 9, "октября": 10, "ноября": 11, "декабря": 12,
 }
+MONTH_NAMES = {**MONTHS, "январь": 1, "февраль": 2, "март": 3, "апрель": 4, "май": 5, "июнь": 6,
+               "июль": 7, "август": 8, "сентябрь": 9, "октябрь": 10, "ноябрь": 11, "декабрь": 12,
+               "январе": 1, "феврале": 2, "марте": 3, "апреле": 4, "мае": 5, "июне": 6,
+               "июле": 7, "августе": 8, "сентябре": 9, "октябре": 10, "ноябре": 11, "декабре": 12}
 WEEKDAYS = {
     "понедельник": 0, "понедельника": 0, "понедельнику": 0,
     "вторник": 1, "вторника": 1, "вторнику": 1,
@@ -84,6 +88,32 @@ def resolve_time_expression(expression: str) -> str:
     if "вечера" in text and hour < 12:
         hour += 12
     return f"{hour:02d}:{minute:02d}"
+
+
+def resolve_date_range(expression: str, *, now: datetime, timezone: str) -> tuple[str, str]:
+    """Resolve supported NL ranges using ISO weeks (Monday–Sunday) and Sat–Sun weekends."""
+    local_now = zoned_now(timezone, now)
+    today = local_now.date()
+    text = re.sub(r"\s+", " ", expression.strip().casefold())
+    text = re.sub(r"^(?:на|в)\s+", "", text)
+    if text in {"выходные", "эти выходные", "следующие выходные"}:
+        saturday = today + timedelta(days=(5 - today.weekday()) % 7)
+        if text == "следующие выходные":
+            saturday += timedelta(days=7)
+        return saturday.isoformat(), (saturday + timedelta(days=1)).isoformat()
+    if text in {"эта неделя", "этой неделе", "следующая неделя", "следующей неделе"}:
+        monday = today - timedelta(days=today.weekday())
+        if text.startswith("следующ"):
+            monday += timedelta(days=7)
+        return monday.isoformat(), (monday + timedelta(days=6)).isoformat()
+    if text in MONTH_NAMES:
+        month = MONTH_NAMES[text]
+        year = today.year + (1 if month < today.month else 0)
+        first = date(year, month, 1)
+        following = date(year + (month == 12), month % 12 + 1, 1)
+        return first.isoformat(), (following - timedelta(days=1)).isoformat()
+    single = resolve_date_expression(text, now=local_now, timezone=timezone)
+    return single, single
 
 
 def _next_date(day: int, month: int, today: date) -> date:

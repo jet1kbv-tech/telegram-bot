@@ -31,13 +31,17 @@ _FIELDS: dict[IntentKind, dict[str, tuple[type, ...]]] = {
     IntentKind.DELETE_CALENDAR_EVENT: {"target": (str,)},
     IntentKind.UPDATE_AFISHA_EVENT: {"target": (str,), "title": (str, type(None)), "date_expression": (str, type(None)), "time_expression": (str, type(None))},
     IntentKind.DELETE_AFISHA_EVENT: {"target": (str,)},
+    IntentKind.QUERY_PURCHASES: {"status": (str,), "priority": (str,), "buyer": (str,), "operation": (str,)},
+    IntentKind.QUERY_FILMS: {"status": (str,), "media_type": (str,), "genre": (str, type(None)), "operation": (str,)},
+    IntentKind.QUERY_CALENDAR: {"date_from": (str, type(None)), "date_to": (str, type(None)), "target": (str, type(None)), "operation": (str,)},
+    IntentKind.QUERY_AFISHA: {"date_from": (str, type(None)), "date_to": (str, type(None)), "target": (str, type(None)), "operation": (str,)},
     IntentKind.NO_ACTION: {},
     IntentKind.UNSUPPORTED: {"category": (str,)},
 }
 
 _OPTIONAL_NULL_FIELDS = {
     "price", "priority", "link", "comment", "buyer", "date_expression", "time_expression",
-    "end_time_expression", "place", "end_date_expression", "title", "status",
+    "end_time_expression", "place", "end_date_expression", "title", "status", "genre", "date_from", "date_to", "target",
 }
 _UNSUPPORTED = {"destructive", "other_user_calendar", "bulk", "unsupported_domain", "conversation"}
 
@@ -93,6 +97,14 @@ def decode_intent(raw: str | dict[str, Any]) -> ParsedIntent:
         raise IntentParserInvalidOutput("invalid_status")
     if kind is IntentKind.ADD_PERSONAL_CALENDAR_EVENT and arguments["owner"] != "current_user":
         raise IntentParserInvalidOutput("invalid_owner")
+    if kind is IntentKind.QUERY_PURCHASES:
+        if arguments["status"] not in {"planned", "bought", "any"} or arguments["priority"] not in {"high", "medium", "low", "any"} or arguments["buyer"] not in {"current_user", "other_user", "unassigned", "any"} or arguments["operation"] not in {"list", "count", "sum"}:
+            raise IntentParserInvalidOutput("invalid_query_arguments")
+    if kind is IntentKind.QUERY_FILMS:
+        if arguments["status"] not in {"want", "watched", "any"} or arguments["media_type"] not in {"movie", "tv", "any"} or arguments["operation"] not in {"list", "count", "random"}:
+            raise IntentParserInvalidOutput("invalid_query_arguments")
+    if kind in {IntentKind.QUERY_CALENDAR, IntentKind.QUERY_AFISHA} and arguments["operation"] not in {"list", "count", "next"}:
+        raise IntentParserInvalidOutput("invalid_query_arguments")
     if kind is IntentKind.UNSUPPORTED and arguments["category"] not in _UNSUPPORTED:
         raise IntentParserInvalidOutput("invalid_category")
     return ParsedIntent(kind, arguments)
@@ -139,6 +151,10 @@ _BRANCH_PROPERTIES: dict[IntentKind, dict[str, Any]] = {
     IntentKind.DELETE_CALENDAR_EVENT: {"target": {"type": "string"}},
     IntentKind.UPDATE_AFISHA_EVENT: {"target": {"type": "string"}, "title": {"type": ["string", "null"]}, "date_expression": {"type": ["string", "null"]}, "time_expression": {"type": ["string", "null"]}},
     IntentKind.DELETE_AFISHA_EVENT: {"target": {"type": "string"}},
+    IntentKind.QUERY_PURCHASES: {"status": {"enum": ["planned", "bought", "any"]}, "priority": {"enum": ["high", "medium", "low", "any"]}, "buyer": {"enum": ["current_user", "other_user", "unassigned", "any"]}, "operation": {"enum": ["list", "count", "sum"]}},
+    IntentKind.QUERY_FILMS: {"status": {"enum": ["want", "watched", "any"]}, "media_type": {"enum": ["movie", "tv", "any"]}, "genre": {"type": ["string", "null"]}, "operation": {"enum": ["list", "count", "random"]}},
+    IntentKind.QUERY_CALENDAR: {"date_from": {"type": ["string", "null"]}, "date_to": {"type": ["string", "null"]}, "target": {"type": ["string", "null"]}, "operation": {"enum": ["list", "count", "next"]}},
+    IntentKind.QUERY_AFISHA: {"date_from": {"type": ["string", "null"]}, "date_to": {"type": ["string", "null"]}, "target": {"type": ["string", "null"]}, "operation": {"enum": ["list", "count", "next"]}},
     IntentKind.NO_ACTION: {},
     IntentKind.UNSUPPORTED: {"category": {"enum": sorted(_UNSUPPORTED)}},
 }

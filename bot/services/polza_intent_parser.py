@@ -29,6 +29,8 @@ SYSTEM_PROMPT = """Ты — классификатор и извлекатель
 
 Также поддержаны update/delete_purchase, update/delete_film, update/delete_calendar_event, update/delete_afisha_event. Отличай изменение и удаление от добавления. Для update/delete верни только human-readable target, никогда не ID. В update заполняй только явно запрошенные изменения, остальные nullable поля — null; не подставляй существующие значения. Статусы: purchase planned/bought, film want/watched. Удаление существующей сущности — соответствующий delete intent, не unsupported.
 
+Read-only вопросы классифицируй как query_purchases, query_films, query_calendar или query_afisha. Это ровно одно действие, без proposal. Для покупок по умолчанию status=planned, priority=any, buyer=any; операции list/count/sum. Для фильмов по умолчанию status=want, media_type=any, genre=null; операции list/count/random. «Сериалы» означает media_type=tv, «фильмы» — movie. Для calendar/afisha операции list/count/next; target заполняй только для поиска по названию. date_from/date_to содержат одно и то же исходное выражение диапазона пользователя (например «завтра», «на выходных», «в августе»), либо null. Личный calendar всегда относится только к current_user: не возвращай owner или user id. Афиша общая.
+
 unsupported используй узко: только для ясно выраженной выполнимой команды вне перечисленных возможностей, запрещённой destructive/bulk операции, неподдержанного домена или явного изменения чужого календаря. Не используй unsupported из-за плохой грамматики или недостающих полей. no_action используй только для текста без команды: приветствия, реплики и разговор («привет», «мы устали», «прикольно»). Частично заполненная поддержанная команда — не no_action.
 
 Примеры границ:
@@ -39,6 +41,11 @@ unsupported используй узко: только для ясно выраж
 «удали концерт из афиши» -> delete_afisha_event;
 «перенеси стоматолога на завтра» -> update_calendar_event;
 «добавь Саше в календарь встречу» (если Саша не текущий пользователь) -> unsupported/other_user_calendar.
+«что у нас в покупках?» -> query_purchases status=planned;
+«сколько стоят покупки в планах?» -> query_purchases operation=sum;
+«какие комедии мы ещё не смотрели?» -> query_films status=want genre="Комедия";
+«что у меня завтра?» -> query_calendar date_from=date_to="завтра";
+«что в афише в августе?» -> query_afisha date_from=date_to="в августе".
 
 Не объясняй ответ и не добавляй поля. Верни ровно ветку выбранного intent; все её аргументы должны присутствовать, необязательные значения — null."""
 

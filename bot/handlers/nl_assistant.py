@@ -17,15 +17,19 @@ from bot.services.actions.calendar import create_personal_calendar_event
 from bot.services.actions.purchases import create_purchase
 from bot.services.actions.existing import mutate_existing
 from bot.services.nl_dates import DateExpressionError, resolve_date_expression, resolve_time_expression, zoned_now
+from bot.services.nl_dates import resolve_date_range
 from bot.services.nl_intent import (
     IntentContext, IntentKind, IntentParser, IntentParserError, IntentParserTimeout,
 )
 from bot.services.nl_proposals import ActionProposal, active_proposal, create_proposal, discard_proposal, get_proposal
 from bot.services.nl_entity_resolution import EntityCandidate, resolve_entities
+from bot.services.nl_query_contexts import create_query_context, get_query_context
+from bot.services.queries import choose_random, next_event, query_afisha, query_calendar, query_films, query_purchases
 from bot.states import (
     ADDING_CALENDAR_EVENT_TITLE, ADDING_EVENT_TITLE, ADDING_FILM_TITLE, ADDING_PURCHASE_TITLE, AI_CLARIFYING, MENU, SECTION,
 )
-from bot.storage import make_id, normalize_calendar_event, normalize_event
+from bot.storage import make_id, normalize_calendar_event, normalize_event, parse_calendar_event_start_dt, parse_event_dt, storage
+from bot.ui.common import build_item_text
 from bot.utils import ensure_access, get_allowed_profile, get_user_name, get_username
 
 logger = logging.getLogger(__name__)
@@ -62,6 +66,8 @@ def _mutation_keyboard(proposal: ActionProposal) -> InlineKeyboardMarkup:
 
 
 _MUTATION_KINDS = {kind for kind in IntentKind if kind.name.startswith(("UPDATE_", "DELETE_"))}
+_QUERY_KINDS = {IntentKind.QUERY_PURCHASES, IntentKind.QUERY_FILMS, IntentKind.QUERY_CALENDAR, IntentKind.QUERY_AFISHA}
+_QUERY_PAGE_SIZE = 10
 
 
 def _menu_keyboard() -> InlineKeyboardMarkup:
@@ -138,6 +144,12 @@ def _prepare(kind: IntentKind, arguments: dict[str, Any], now: datetime) -> tupl
                     missing.append("end_date")
             else:
                 args["end_date"] = ""
+    elif kind in {IntentKind.QUERY_CALENDAR, IntentKind.QUERY_AFISHA}:
+        from_expression, to_expression = args.get("date_from"), args.get("date_to")
+        if from_expression or to_expression:
+            start, _ = resolve_date_range(str(from_expression or to_expression), now=now, timezone=BOT_TIMEZONE)
+            _, end = resolve_date_range(str(to_expression or from_expression), now=now, timezone=BOT_TIMEZONE)
+            args["date_from"], args["date_to"] = start, end
     elif kind in {IntentKind.UPDATE_CALENDAR_EVENT, IntentKind.UPDATE_AFISHA_EVENT}:
         for source, target in (("date_expression", "date"), ("time_expression", "start_time" if kind is IntentKind.UPDATE_CALENDAR_EVENT else "time")):
             expression = args.pop(source, None)
@@ -185,6 +197,9 @@ async def nl_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await message.reply_text("Я пока умею добавлять фильмы, покупки и события в твой календарь или Афишу.", reply_markup=_menu_keyboard())
             return _idle_state(context)
         arguments, missing = _prepare(parsed.intent, parsed.arguments, now)
+        if parsed.intent in _QUERY_KINDS:
+            await _answer_query(message, context, parsed.intent, arguments, update, now)
+            return _idle_state(context)
         if parsed.intent in _MUTATION_KINDS:
             update_fields = [key for key, value in arguments.items() if key != "target" and value is not None]
             if parsed.intent.name.startswith("UPDATE_") and not update_fields and not missing:
@@ -236,6 +251,101 @@ async def nl_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return AI_CLARIFYING
     keyboard = _mutation_keyboard(proposal) if proposal.intent in _MUTATION_KINDS else _keyboard(proposal.proposal_id)
     await message.reply_text(_preview(proposal), reply_markup=keyboard)
+    return _idle_state(context)
+
+
+def _query_keyboard(token: str, *, page: int = 0, more: bool = False, random_mode: bool = False) -> InlineKeyboardMarkup:
+    rows = []
+    if more:
+        rows.append([InlineKeyboardButton("Показать ещё", callback_data=f"aiq:{token}:p:{page + 1}")])
+    if random_mode:
+        rows.append([InlineKeyboardButton("🎲 Другой вариант", callback_data=f"aiq:{token}:r")])
+    rows.append([InlineKeyboardButton("🏠 В меню", callback_data="menu:main")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _event_line(item: dict[str, Any], calendar: bool) -> str:
+    stamp = parse_calendar_event_start_dt(item) if calendar else parse_event_dt(item)
+    return f"• {stamp.strftime('%d.%m %H:%M') if stamp else 'Дата не указана'} — {item.get('title') or 'Без названия'}"
+
+
+async def _answer_query(message: Any, context: ContextTypes.DEFAULT_TYPE, kind: IntentKind, args: dict[str, Any],
+                        update: Update, now: datetime, *, page: int = 0, token: str | None = None, edit: bool = False) -> None:
+    data = storage.load()
+    actor_name = get_user_name(update)
+    if kind is IntentKind.QUERY_PURCHASES:
+        result = query_purchases(data, **{key: args[key] for key in ("status", "priority", "buyer")}, actor_name=actor_name)
+    elif kind is IntentKind.QUERY_FILMS:
+        result = query_films(data, **{key: args[key] for key in ("status", "media_type", "genre")})
+    else:
+        common = {key: args.get(key) for key in ("date_from", "date_to", "target")}
+        if kind is IntentKind.QUERY_CALENDAR:
+            profile = get_allowed_profile(update) or {}
+            # Owner is application-derived. No model field can override it.
+            result = query_calendar(data, owner=str(profile.get("wishlist_owner") or ""), now=now, **common)
+        else:
+            result = query_afisha(data, now=now, **common)
+    operation = args["operation"]
+    if token is None and operation in {"list", "random"}:
+        token = create_query_context(context.user_data, intent=kind, arguments=args, actor_key=get_username(update),
+                                     now=now, ttl_seconds=AI_PROPOSAL_TTL_SECONDS).token
+    markup = _menu_keyboard()
+    if operation == "next":
+        parser = parse_calendar_event_start_dt if kind is IntentKind.QUERY_CALENDAR else parse_event_dt
+        item = next_event(result, parser, now)
+        text = _event_line(item, kind is IntentKind.QUERY_CALENDAR) if item else "Будущих подходящих событий не найдено."
+    elif operation == "count":
+        text = f"Всего: {result.total}"
+    elif operation == "sum":
+        text = f"Общая стоимость: {result.amount:,} ₽".replace(",", " ")
+        if result.missing_prices:
+            text += f"\nБез указанной цены: {result.missing_prices}"
+    elif operation == "random":
+        item = choose_random(result)
+        text = "🎲 Сегодня смотрим:\n\n" + build_item_text("films", item) if item else "В списке на просмотр нет подходящих фильмов."
+        markup = _query_keyboard(token, random_mode=bool(item))
+    else:
+        start = page * _QUERY_PAGE_SIZE
+        shown = result.items[start:start + _QUERY_PAGE_SIZE]
+        if not shown:
+            text = {IntentKind.QUERY_PURCHASES: "Подходящих покупок пока нет.", IntentKind.QUERY_FILMS: "В списке нет подходящих фильмов.", IntentKind.QUERY_CALENDAR: "На выбранный период у тебя ничего не запланировано.", IntentKind.QUERY_AFISHA: "На выбранный период в Афише пока ничего нет."}[kind]
+        elif kind is IntentKind.QUERY_PURCHASES:
+            lines = [f"• {item.get('title') or 'Без названия'}" + (f" — {item['price']:,} ₽".replace(",", " ") if item.get("price") is not None else "") for item in shown]
+            text = "🛍 Покупки\n\n" + "\n".join(lines)
+        elif kind is IntentKind.QUERY_FILMS:
+            lines = [f"• {item.get('title') or 'Без названия'}" + (f" ({item['year']})" if item.get("year") else "") for item in shown]
+            text = "🎬 Фильмы и сериалы\n\n" + "\n".join(lines)
+        else:
+            text = ("📅 Мой календарь" if kind is IntentKind.QUERY_CALENDAR else "🗓 Афиша") + "\n\n" + "\n".join(_event_line(item, kind is IntentKind.QUERY_CALENDAR) for item in shown)
+        if shown:
+            text += f"\n\nПоказано {min(start + len(shown), result.total)} из {result.total}"
+        markup = _query_keyboard(token, page=page, more=start + len(shown) < result.total)
+    logger.info("NL query intent=%s operation=%s result_count=%s", kind.value, operation, result.total)
+    if edit:
+        await message.edit_message_text(text, reply_markup=markup)
+    else:
+        await message.reply_text(text, reply_markup=markup)
+
+
+async def nl_query_callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not await ensure_access(update):
+        return ConversationHandler.END
+    query = update.callback_query
+    await query.answer()
+    parts = (query.data or "").split(":")
+    token = parts[1] if len(parts) > 1 else ""
+    now = zoned_now(BOT_TIMEZONE)
+    saved = get_query_context(context.user_data, token, actor_key=get_username(update), now=now)
+    if saved is None:
+        await query.edit_message_text("Этот запрос уже устарел. Задай вопрос ещё раз.", reply_markup=_menu_keyboard())
+        return _idle_state(context)
+    page = 0
+    if len(parts) == 4 and parts[2] == "p":
+        try:
+            page = max(0, int(parts[3]))
+        except ValueError:
+            page = 0
+    await _answer_query(query, context, saved.intent, saved.arguments, update, now, page=page, token=token, edit=True)
     return _idle_state(context)
 
 

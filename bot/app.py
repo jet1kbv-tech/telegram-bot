@@ -13,7 +13,7 @@ from telegram.ext import (
 )
 
 from bot.config import AI_INTENT_TIMEOUT_SECONDS, NOTIFICATION_CHECK_INTERVAL
-from bot.handlers.nl_assistant import configure_nl_assistant, nl_callback_router, nl_clarification_handler, nl_text_handler
+from bot.handlers.nl_assistant import configure_nl_assistant, nl_callback_router, nl_clarification_handler, nl_query_callback_router, nl_text_handler
 from bot.services.polza_intent_parser import PolzaIntentParser
 from bot.handlers.afisha import (
     add_event_date,
@@ -243,7 +243,10 @@ def build_app() -> Application:
         logger.warning("JobQueue недоступна. Для уведомлений за день до события нужен APScheduler в requirements.")
 
     quick_commands_filter = quick_text_command_filter()
-    ai_callback_handlers = [CallbackQueryHandler(nl_callback_router, pattern=r"^ai:(?:[cex]:[A-Za-z0-9_-]{8,16}|r:[A-Za-z0-9_-]{8,16]:\d+)$")] if nl_enabled else []
+    ai_callback_handlers = ([
+        CallbackQueryHandler(nl_query_callback_router, pattern=r"^aiq:[A-Za-z0-9_-]{8,16}:(?:r|p:\d+)$"),
+        CallbackQueryHandler(nl_callback_router, pattern=r"^ai:(?:[cex]:[A-Za-z0-9_-]{8,16}|r:[A-Za-z0-9_-]{8,16}:\d+)$"),
+    ] if nl_enabled else [])
     ai_text_handlers = [MessageHandler(filters.TEXT & ~filters.COMMAND, nl_text_handler)] if nl_enabled else []
 
     def text_state(handler):
