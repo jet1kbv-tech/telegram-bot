@@ -6,6 +6,14 @@ from bot.config import ALLOWED_USERS, PAGE_SIZE, SECTION_CONFIG, WISHLIST_OWNER_
 from bot.storage import storage
 
 
+def normalize_entity_title(value: str) -> str:
+    """Uppercase only the first alphabetic character, preserving all other text."""
+    for index, character in enumerate(value):
+        if character.isalpha():
+            return value[:index] + character.upper() + value[index + 1:]
+    return value
+
+
 def get_username(update: Update) -> str:
     user = update.effective_user
     if not user or not user.username:

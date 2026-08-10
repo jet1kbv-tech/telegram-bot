@@ -94,11 +94,45 @@ def test_controlled_parser_failure_replaces_waiting_message(error, expected):
     assert expected in upd.effective_message.waiting.edit_text.await_args.args[0]
 
 
-def test_no_action_removes_waiting_message():
+def test_no_action_replaces_waiting_message_with_capabilities_and_menu():
     nl_assistant._parser = FakeParser(ParsedIntent(IntentKind.NO_ACTION, {}))
     upd = update(text="привет")
     run(nl_assistant.nl_text_handler(upd, context()))
-    upd.effective_message.waiting.delete.assert_awaited_once()
+    edit = upd.effective_message.waiting.edit_text
+    edit.assert_awaited_once()
+    assert "покупках, фильмах, календаре или Афише" in edit.await_args.args[0]
+    assert edit.await_args.kwargs["reply_markup"].inline_keyboard[0][0].text == "🏠 В меню"
+
+
+def test_no_action_edit_failure_uses_existing_reply_fallback():
+    nl_assistant._parser = FakeParser(ParsedIntent(IntentKind.NO_ACTION, {}))
+    upd = update(text="Почему небо голубое?")
+    upd.effective_message.waiting.edit_text.side_effect = RuntimeError("telegram unavailable")
+
+    run(nl_assistant.nl_text_handler(upd, context()))
+
+    assert len(nl_assistant._parser.calls) == 1
+    assert upd.effective_message.reply_text.await_count == 2
+    assert "работать с нашими планами" in upd.effective_message.reply_text.await_args.args[0]
+
+
+@pytest.mark.parametrize("kind", [
+    IntentKind.ADD_PURCHASE, IntentKind.UPDATE_PURCHASE,
+    IntentKind.ADD_PERSONAL_CALENDAR_EVENT, IntentKind.UPDATE_CALENDAR_EVENT,
+    IntentKind.ADD_AFISHA_EVENT, IntentKind.UPDATE_AFISHA_EVENT,
+])
+def test_storage_visible_nl_titles_uppercase_first_letter_only(kind):
+    args = {"title": "iphone 16 Pro", "target": "старый iPhone", "comment": "не ТРОГАТЬ"}
+    prepared, _ = nl_assistant._prepare(kind, args, nl_assistant.zoned_now("Europe/Moscow"))
+    assert prepared["title"] == "Iphone 16 Pro"
+    assert prepared["target"] == "старый iPhone"
+    assert prepared["comment"] == "не ТРОГАТЬ"
+
+
+def test_title_normalization_preserves_acronym_and_internal_capitalization():
+    assert nl_assistant.normalize_entity_title("VK Stadium") == "VK Stadium"
+    assert nl_assistant.normalize_entity_title("кофемолка") == "Кофемолка"
+    assert nl_assistant.normalize_entity_title("Кофемолка") == "Кофемолка"
 
 
 def test_cancel_and_double_confirm_are_idempotent(monkeypatch):

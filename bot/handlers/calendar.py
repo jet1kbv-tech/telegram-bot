@@ -28,7 +28,7 @@ from bot.storage import (
     sort_calendar_events,
     storage,
 )
-from bot.utils import ensure_access, owner_label, paginate_items, remember_current_chat
+from bot.utils import ensure_access, normalize_entity_title, owner_label, paginate_items, remember_current_chat
 from bot.services.actions.calendar import create_personal_calendar_event
 
 _safe_edit_message: Callable[..., Awaitable[None]] | None = None
@@ -453,7 +453,7 @@ async def add_calendar_event_title(update: Update, context: ContextTypes.DEFAULT
     if not title:
         await update.message.reply_text("Название события не должно быть пустым. Попробуй ещё раз:")
         return ADDING_CALENDAR_EVENT_TITLE
-    context.user_data["calendar_event_title"] = title
+    context.user_data["calendar_event_title"] = normalize_entity_title(title)
     await update.message.reply_text("Теперь отправь дату в формате ГГГГ-ММ-ДД, например 2026-04-05")
     return ADDING_CALENDAR_EVENT_DATE
 
