@@ -18,7 +18,7 @@ POLZA_CHAT_COMPLETIONS_URL = "https://polza.ai/api/v1/chat/completions"
 
 SYSTEM_PROMPT = """Классифицируй русскую команду Telegram-бота и верни только строгий JSON по schema.
 
-Выбери один intent. Intent определяет разрешённые смысловые поля. Только перечисленные для него поля могут быть non-null; КАЖДОЕ прочее поле ОБЯЗАНО быть null. Не угадывай значения посторонних полей лишь потому, что они есть в schema.
+Выбери один intent. arguments — компактный список только явно извлечённых смысловых полей: {"name":"имя","value":"строковое значение"}. Не добавляй отсутствующие или посторонние поля; null-записей нет. Числа также передавай строкой.
 Поля intent:
 add_movie_or_tv=query; add_purchase=title,price,priority,link,comment,buyer; add_personal_calendar_event=title,date_expression,time_expression,end_time_expression,comment,owner; add_afisha_event=title,place,date_expression,time_expression,end_date_expression,end_time_expression,link;
 update_purchase=target,title,price,priority,link,comment,buyer,status; delete_purchase=target; update_film=target,status,comment; delete_film=target; update_calendar_event=target,title,date_expression,time_expression; delete_calendar_event=target; update_afisha_event=target,title,date_expression,time_expression; delete_afisha_event=target;
@@ -30,7 +30,7 @@ Intents: add_personal_calendar_event/add_afisha_event/add_purchase/add_movie_or_
 
 Query defaults: purchases status=planned priority=any buyer=any, operations list/count/sum; films status=want media_type=any genre=null, operations list/count/random (сериалы=tv, фильмы=movie); calendar/afisha operations list/count/next, target только при поиске названия, date_from/date_to повторяют исходный диапазон либо null.
 
-unsupported — только команда вне доменов, destructive/bulk или чужой календарь. no_action используй только для текста без команды. Все поля выбранной ветки обязательны; необязательные значения null. Не объясняй ответ и не добавляй поля.
+unsupported — только команда вне доменов, destructive/bulk или чужой календарь. category: destructive, other_user_calendar, bulk, unsupported_domain или conversation. no_action используй только для текста без команды. Обязательные поля выбранной ветки добавь в arguments; необязательные отсутствующие поля пропусти. Не объясняй ответ и не добавляй поля.
 
 Граничные примеры:
 «добавь стоматолог в календарь 17.08» -> add_personal_calendar_event, title="стоматолог", date_expression="17.08", owner="current_user";
