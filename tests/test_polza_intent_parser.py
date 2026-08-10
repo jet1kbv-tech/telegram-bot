@@ -242,6 +242,17 @@ def test_polza_timeout_is_mapped():
     run(client.aclose())
 
 
+def test_timeout_and_provider_error_logs_exclude_input_and_credentials(caplog):
+    user_text, key = "private dentist title", "polza-super-secret"
+    timeout_client = httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda request: (_ for _ in ()).throw(httpx.ReadTimeout("slow", request=request))))
+    with caplog.at_level(logging.INFO), pytest.raises(IntentParserTimeout):
+        run(PolzaIntentParser(api_key=key, model="configured/model", client=timeout_client).parse(user_text, context()))
+    run(timeout_client.aclose())
+    assert "NL parse timeout" in caplog.text
+    assert user_text not in caplog.text and key not in caplog.text and "Authorization" not in caplog.text
+
+
 @pytest.mark.parametrize("response", [
     httpx.Response(200, text="not json"),
     httpx.Response(200, json={"choices": []}),

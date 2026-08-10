@@ -3,7 +3,9 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from bot.services.nl_intent import IntentKind
 
@@ -21,7 +23,9 @@ def normalize_reference(value: str) -> str:
     return " ".join(value.split())
 
 
-def resolve_entities(data: dict[str, Any], kind: IntentKind, target: str, *, owner: str = "") -> list[EntityCandidate]:
+def resolve_entities(data: dict[str, Any], kind: IntentKind, target: str, *, owner: str = "",
+                     include_past: bool = False, now: datetime | None = None,
+                     timezone: str = "Europe/Moscow") -> list[EntityCandidate]:
     needle = normalize_reference(target)
     candidates: list[EntityCandidate] = []
     if kind in {IntentKind.UPDATE_PURCHASE, IntentKind.DELETE_PURCHASE}:
@@ -37,6 +41,34 @@ def resolve_entities(data: dict[str, Any], kind: IntentKind, target: str, *, own
         for item in items if isinstance(items, list) else []:
             if kind in {IntentKind.UPDATE_CALENDAR_EVENT, IntentKind.DELETE_CALENDAR_EVENT} and item.get("source") != "manual":
                 continue
+            if kind in {IntentKind.UPDATE_CALENDAR_EVENT, IntentKind.DELETE_CALENDAR_EVENT} and not include_past:
+                if _calendar_event_is_past(item, now=now, timezone=timezone):
+                    continue
             if any(normalize_reference(str(item.get(field) or "")) == needle for field in title_fields):
                 candidates.append(EntityCandidate(str(item.get("id") or ""), bucket, dict(item)))
+    if kind in {IntentKind.UPDATE_CALENDAR_EVENT, IntentKind.DELETE_CALENDAR_EVENT}:
+        candidates.sort(key=lambda candidate: _calendar_sort_key(candidate.item))
     return candidates
+
+
+def _calendar_event_is_past(item: dict[str, Any], *, now: datetime | None, timezone: str) -> bool:
+    local_now = now or datetime.now(ZoneInfo(timezone))
+    if local_now.tzinfo is not None:
+        local_now = local_now.astimezone(ZoneInfo(timezone)).replace(tzinfo=None)
+    try:
+        event_date = datetime.strptime(str(item.get("date") or ""), "%Y-%m-%d").date()
+    except ValueError:
+        return False  # Keep partial legacy records editable rather than hiding them.
+    if event_date != local_now.date():
+        return event_date < local_now.date()
+    clock = item.get("end_time") or item.get("start_time")
+    if not clock:
+        return False
+    try:
+        return datetime.strptime(str(clock), "%H:%M").time() < local_now.time()
+    except ValueError:
+        return False
+
+
+def _calendar_sort_key(item: dict[str, Any]) -> tuple[str, str]:
+    return str(item.get("date") or "9999-12-31"), str(item.get("start_time") or "00:00")

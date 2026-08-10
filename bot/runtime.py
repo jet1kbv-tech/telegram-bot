@@ -20,10 +20,9 @@ from telegram.ext import (
     filters,
 )
 
-logging.basicConfig(
-    format="%(asctime)s | %(name)s | %(levelname)s | %(message)s",
-    level=logging.INFO,
-)
+from bot.logging_config import configure_logging
+
+configure_logging()
 logger = logging.getLogger(__name__)
 
 from bot.config import (
