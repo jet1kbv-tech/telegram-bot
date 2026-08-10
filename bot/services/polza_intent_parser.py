@@ -11,7 +11,9 @@ import httpx
 from bot.services.nl_intent import (
     IntentContext, IntentParserInvalidOutput, IntentParserTimeout, IntentParserUnavailable, ParsedIntent,
 )
-from bot.services.nl_intent_decoder import INTENT_JSON_SCHEMA, decode_provider_envelope, provider_rejection_shape
+from bot.services.nl_intent_decoder import (
+    INTENT_JSON_SCHEMA, decode_provider_envelope, provider_rejection_diagnostics, provider_rejection_shape,
+)
 
 logger = logging.getLogger(__name__)
 POLZA_CHAT_COMPLETIONS_URL = "https://polza.ai/api/v1/chat/completions"
@@ -26,9 +28,9 @@ query_purchases=status,priority,buyer,operation; query_films=status,media_type,g
 
 Intents: add_personal_calendar_event/add_afisha_event/add_purchase/add_movie_or_tv; update/delete_purchase, _film, _calendar_event, _afisha_event; read-only query_purchases/query_films/query_calendar/query_afisha; unsupported; no_action. Различай add, update, delete и query как ровно одно действие. Терпи разговорную грамматику, склонения, порядок слов и отсутствие пунктуации. Недостающие значения = null, а не unsupported/no_action. Для update заполняй только явно изменяемые поля; target — название, не ID. Purchase statuses planned/bought; film want/watched.
 
-Личный календарь без явно другого владельца: owner=current_user. Явное изменение чужого календаря: unsupported/other_user_calendar. Query calendar также только current_user и без owner/id; Афиша общая. Отсутствие даты, времени НЕ означает unsupported. Даты/время сохраняй компактно и дословно в *_expression («17.08», «завтра», «в пятницу»), не преобразуй его в ISO. Для фильма/TV извлекай только query. Цена покупки — число рублей («35 тысяч» = 35000).
+Личный календарь без явно другого владельца: owner=current_user. Явное изменение чужого календаря: unsupported/other_user_calendar. Query calendar также только current_user и без owner/id; Афиша общая. Отсутствие даты, времени НЕ означает unsupported. Даты/время сохраняй компактно и дословно в *_expression («17.08», «завтра», «в пятницу»), не преобразуй его в ISO. Для фильма/TV извлекай только query. Цену покупки передавай только цифрами без валюты («35 тысяч» = 35000).
 
-Query defaults: purchases status=planned priority=any buyer=any, operations list/count/sum; films status=want media_type=any genre=null, operations list/count/random (сериалы=tv, фильмы=movie); calendar/afisha operations list/count/next, target только при поиске названия, date_from/date_to повторяют исходный диапазон либо null.
+Query defaults: purchases status=planned priority=any buyer=any, operations list/count/sum; films status=want media_type=any genre=null, operations list/count/random (сериалы=tv, фильмы=movie); calendar/afisha operation строго list/count/next (обычный показ списка = list), target только при поиске названия, date_from/date_to повторяют исходный диапазон либо null.
 
 unsupported — только команда вне доменов, destructive/bulk или чужой календарь. category: destructive, other_user_calendar, bulk, unsupported_domain или conversation. no_action используй только для текста без команды. Обязательные поля выбранной ветки добавь в arguments; необязательные отсутствующие поля пропусти. Не объясняй ответ и не добавляй поля.
 
@@ -117,9 +119,12 @@ class PolzaIntentParser:
             result = decode_provider_envelope(content)
         except IntentParserInvalidOutput as exc:
             intent, conflicting_fields = provider_rejection_shape(content)
+            provider_operation, price_category = provider_rejection_diagnostics(content, str(exc))
             logger.warning(
-                "NL parse normalization_rejection intent=%s reason=%s conflicting_fields=%s latency_ms=%s",
-                intent, str(exc) or type(exc).__name__, conflicting_fields, latency_ms,
+                "NL parse normalization_rejection intent=%s reason=%s conflicting_fields=%s "
+                "provider_operation=%s provider_price_category=%s latency_ms=%s",
+                intent, str(exc) or type(exc).__name__, conflicting_fields,
+                provider_operation, price_category, latency_ms,
             )
             raise
         logger.info("NL parse success outcome=success intent=%s latency_ms=%s", result.intent.value, latency_ms)

@@ -12,6 +12,7 @@ from bot.services.nl_intent import (
 from bot.services.polza_intent_parser import POLZA_CHAT_COMPLETIONS_URL, SYSTEM_PROMPT, PolzaIntentParser
 from bot.services.nl_intent_decoder import (
     INTENT_JSON_SCHEMA, decode_intent, decode_provider_envelope, normalize_provider_envelope,
+    provider_rejection_diagnostics,
 )
 
 
@@ -129,6 +130,9 @@ def test_prompt_prioritizes_supported_partial_commands_and_preserves_dates():
     assert "owner=current_user" in SYSTEM_PROMPT
     assert "17.08" in SYSTEM_PROMPT and "не преобразуй его в ISO" in SYSTEM_PROMPT
     assert "no_action используй только для текста без команды" in SYSTEM_PROMPT
+    assert "calendar/afisha operation строго list/count/next" in SYSTEM_PROMPT
+    assert "обычный показ списка = list" in SYSTEM_PROMPT
+    assert "Цену покупки передавай только цифрами без валюты" in SYSTEM_PROMPT
 
 
 def test_calendar_add_without_date_or_time_keeps_null_slots_for_clarification():
@@ -449,6 +453,103 @@ def test_normalization_rejection_logs_conflicting_names_without_values(caplog):
 def test_production_query_calendar_redundant_current_user_owner_is_safe():
     payload = provider_envelope("query_calendar", CANONICAL_BY_INTENT["query_calendar"], owner="current_user")
     assert decode_provider_envelope(json.dumps(payload)).arguments == CANONICAL_BY_INTENT["query_calendar"]
+
+
+def test_normal_calendar_this_week_uses_canonical_list_operation():
+    payload = provider_envelope("query_calendar", {
+        "date_from": "на этой неделе", "date_to": "на этой неделе",
+        "target": None, "operation": "list",
+    })
+    result = decode_provider_envelope(json.dumps(payload))
+    assert result.arguments["operation"] == "list"
+
+
+@pytest.mark.parametrize("operation", ["show", "get", "all", "list_or_next", "показать"])
+def test_query_calendar_unrecognized_or_ambiguous_operations_remain_rejected(operation):
+    payload = provider_envelope("query_calendar", {
+        **CANONICAL_BY_INTENT["query_calendar"], "operation": operation,
+    })
+    with pytest.raises(IntentParserInvalidOutput, match="invalid_query_arguments"):
+        decode_provider_envelope(json.dumps(payload))
+
+
+def test_query_calendar_missing_operation_remains_rejected():
+    payload = provider_envelope("query_calendar", {
+        "date_from": "на этой неделе", "date_to": "на этой неделе", "target": None,
+    })
+    with pytest.raises(IntentParserInvalidOutput, match="invalid_operation"):
+        decode_provider_envelope(json.dumps(payload))
+
+
+@pytest.mark.parametrize("operation", ["list", "count", "next"])
+def test_every_canonical_query_calendar_operation_is_accepted(operation):
+    payload = provider_envelope("query_calendar", {
+        **CANONICAL_BY_INTENT["query_calendar"], "operation": operation,
+    })
+    assert decode_provider_envelope(json.dumps(payload)).arguments["operation"] == operation
+
+
+@pytest.mark.parametrize(("provider_price", "expected"), [
+    ("35000", 35_000),
+    ("35 000", 35_000),
+    ("35\u00a0000", 35_000),
+    ("35_000", 35_000),
+    ("35000 ₽", 35_000),
+    ("35000 руб", 35_000),
+    ("35000 рублей", 35_000),
+    ("0", 0),
+    ("1000000000", 1_000_000_000),
+])
+def test_provider_purchase_price_accepts_small_explicit_ruble_grammar(provider_price, expected):
+    payload = provider_envelope("add_purchase", {
+        **CANONICAL_BY_INTENT["add_purchase"], "price": provider_price,
+    })
+    assert decode_provider_envelope(json.dumps(payload)).arguments["price"] == expected
+
+
+def test_provider_price_above_maximum_reaches_authoritative_canonical_bounds_check():
+    payload = provider_envelope("add_purchase", {
+        **CANONICAL_BY_INTENT["add_purchase"], "price": "1000000001",
+    })
+    with pytest.raises(IntentParserInvalidOutput, match="invalid_price"):
+        decode_provider_envelope(json.dumps(payload))
+
+
+@pytest.mark.parametrize("provider_price", [
+    "-35000", "35.5", "35-40 тысяч", "$350", "350 евро", "тридцать пять тысяч",
+    "около 35 тысяч", "до 35000", "35к", "35k", "35.5k", "35000 за кофемашину",
+    "35 00", "35_000 ₽ extra",
+])
+def test_provider_purchase_price_rejects_ambiguous_foreign_or_prose_values(provider_price):
+    payload = provider_envelope("add_purchase", {
+        **CANONICAL_BY_INTENT["add_purchase"], "price": provider_price,
+    })
+    with pytest.raises(IntentParserInvalidOutput, match="invalid_provider_price"):
+        decode_provider_envelope(json.dumps(payload))
+
+
+def test_invalid_price_log_uses_only_bounded_representation_category(caplog):
+    private_price = "35000 за секретную кофемашину"
+    content = json.dumps(provider_envelope("add_purchase", {
+        **CANONICAL_BY_INTENT["add_purchase"], "price": private_price,
+    }))
+    client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: response_content(content)))
+    with caplog.at_level(logging.WARNING), pytest.raises(IntentParserInvalidOutput):
+        run(PolzaIntentParser(api_key="secret", model="openai/gpt-4o-mini", client=client).parse("private", context()))
+    run(client.aclose())
+    assert "provider_price_category=contains_spaces" in caplog.text
+    assert private_price not in caplog.text
+
+
+@pytest.mark.parametrize(("operation", "logged"), [
+    ("show", "show"),
+    ("показать личный календарь", "unknown"),
+])
+def test_invalid_operation_diagnostic_logs_only_safe_bounded_token(operation, logged):
+    content = json.dumps(provider_envelope("query_calendar", {
+        **CANONICAL_BY_INTENT["query_calendar"], "operation": operation,
+    }))
+    assert provider_rejection_diagnostics(content, "invalid_operation") == (logged, "unknown")
 
 
 def test_production_update_calendar_redundant_current_user_owner_is_safe():

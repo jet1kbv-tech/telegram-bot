@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from bot.services.nl_intent import IntentKind, IntentParserInvalidOutput, ParsedIntent
@@ -44,6 +45,12 @@ _OPTIONAL_NULL_FIELDS = {
     "end_time_expression", "place", "end_date_expression", "title", "status", "genre", "date_from", "date_to", "target",
 }
 _UNSUPPORTED = {"destructive", "other_user_calendar", "bulk", "unsupported_domain", "conversation"}
+_PROVIDER_PRICE = re.compile(
+    r"(?:[0-9]+|[0-9]{1,3}(?P<separator>[ _\u00a0])[0-9]{3}(?:(?P=separator)[0-9]{3})*)"
+    r"(?:\s*(?:₽|руб\.?|рублей))?",
+    re.IGNORECASE,
+)
+_SAFE_PROVIDER_OPERATION = re.compile(r"[A-Za-z0-9_-]{1,40}")
 
 
 def decode_intent(raw: str | dict[str, Any]) -> ParsedIntent:
@@ -223,9 +230,12 @@ def normalize_provider_envelope(raw: str | dict[str, Any]) -> dict[str, Any]:
     arguments: dict[str, Any] = {name: None for name in allowed}
     arguments.update(supplied)
     if "price" in supplied:
-        if not supplied["price"].isdigit():
+        match = _PROVIDER_PRICE.fullmatch(supplied["price"])
+        if match is None:
             raise IntentParserInvalidOutput("invalid_provider_price")
-        arguments["price"] = int(supplied["price"])
+        numeric = re.sub(r"[ _\u00a0]", "", match.group(0))
+        numeric = re.sub(r"\s*(?:₽|руб\.?|рублей)$", "", numeric, flags=re.IGNORECASE)
+        arguments["price"] = int(numeric)
     # Unsupported is non-mutating.  Collapsing an unfamiliar taxonomy label to
     # the canonical catch-all cannot authorize an action and avoids coupling the
     # provider's wording to internal UI categories.
@@ -256,6 +266,45 @@ def provider_rejection_shape(raw: str) -> tuple[str, list[str]]:
     aliases = {"title"} if kind is IntentKind.ADD_MOVIE_OR_TV else set()
     known = set(allowed) | benign | aliases
     return intent, sorted({name for name in names if isinstance(name, str) and name not in known})
+
+
+def provider_rejection_diagnostics(raw: str, reason: str) -> tuple[str, str]:
+    """Return bounded diagnostics for the two semantic normalization failures."""
+    try:
+        value = json.loads(raw)
+        items = value.get("arguments") if isinstance(value, dict) else None
+    except (json.JSONDecodeError, TypeError):
+        items = None
+    if not isinstance(items, list):
+        return "unknown", "unknown"
+    fields = {
+        item.get("name"): item.get("value")
+        for item in items
+        if isinstance(item, dict) and set(item) == {"name", "value"}
+    }
+    if reason == "invalid_operation":
+        operation = fields.get("operation")
+        if isinstance(operation, str) and _SAFE_PROVIDER_OPERATION.fullmatch(operation):
+            return operation, "unknown"
+    if reason == "invalid_provider_price":
+        price = fields.get("price")
+        if isinstance(price, str):
+            if re.search(r"^[+-]", price):
+                category = "signed"
+            elif re.search(r"\d[.,]\d", price):
+                category = "decimal"
+            elif price.isdigit():
+                category = "digits_only"
+            elif "₽" in price or re.search(r"руб", price, re.IGNORECASE):
+                category = "contains_currency"
+            elif any(character.isspace() for character in price):
+                category = "contains_spaces"
+            elif any(character.isalpha() for character in price):
+                category = "contains_letters"
+            else:
+                category = "other"
+            return "unknown", category
+    return "unknown", "unknown"
 
 
 def decode_provider_envelope(raw: str) -> ParsedIntent:
