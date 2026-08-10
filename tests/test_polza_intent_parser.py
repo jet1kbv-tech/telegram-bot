@@ -9,7 +9,7 @@ import logging
 from bot.services.nl_intent import (
     IntentContext, IntentKind, IntentParserInvalidOutput, IntentParserTimeout, IntentParserUnavailable,
 )
-from bot.services.polza_intent_parser import POLZA_CHAT_COMPLETIONS_URL, PolzaIntentParser
+from bot.services.polza_intent_parser import POLZA_CHAT_COMPLETIONS_URL, SYSTEM_PROMPT, PolzaIntentParser
 from bot.services.nl_intent_decoder import INTENT_JSON_SCHEMA, decode_provider_envelope
 
 
@@ -50,12 +50,86 @@ def test_polza_request_contract_and_model_is_unchanged():
     assert request.headers["Authorization"] == "Bearer secret"
     assert payload["model"] == model
     assert payload["stream"] is False
+    assert payload["temperature"] == 0
     assert payload["response_format"]["type"] == "json_schema"
     assert payload["response_format"]["json_schema"]["strict"] is True
     assert "tools" not in payload and "tool_choice" not in payload
     assert "reasoning" not in payload and "reasoning_effort" not in payload
     assert result.intent is IntentKind.ADD_MOVIE_OR_TV
     assert result.arguments == {"query": "Дюна"}
+
+
+CLASSIFICATION_CASES = [
+    ("Добавь стоматолог в календарь 17.08", "add_personal_calendar_event"),
+    ("Добавь стоматолога в календарь 17.08", "add_personal_calendar_event"),
+    ("Добавь стоматолога в мой календарь 17.08", "add_personal_calendar_event"),
+    ("Добавь в календарь стоматолога 17 августа", "add_personal_calendar_event"),
+    ("Запланируй стоматолога на завтра", "add_personal_calendar_event"),
+    ("Запиши стоматолога в календарь", "add_personal_calendar_event"),
+    ("добавь концерт в афишу 20 сентября", "add_afisha_event"),
+    ("запиши театр в афишу на субботу", "add_afisha_event"),
+    ("добавь кофемашину в покупки", "add_purchase"),
+    ("хочу добавить пылесос в покупки за 40000", "add_purchase"),
+    ("добавь Во все тяжкие в фильмы", "add_movie_or_tv"),
+    ("добавь сериал Офис", "add_movie_or_tv"),
+    ("прикольно", "no_action"),
+    ("отправь письмо директору", "unsupported"),
+    ("добавь Саше в календарь встречу", "unsupported"),
+]
+
+
+def canonical_arguments(intent, phrase):
+    if intent == "add_personal_calendar_event":
+        date = next((value for value in ("17.08", "17 августа", "завтра") if value in phrase), None)
+        return {"title": "стоматолог", "date_expression": date, "time_expression": None,
+                "end_time_expression": None, "comment": None, "owner": "current_user"}
+    if intent == "add_afisha_event":
+        date = "20 сентября" if "20 сентября" in phrase else "на субботу"
+        return {"title": "концерт" if "концерт" in phrase else "театр", "place": None,
+                "date_expression": date, "time_expression": None, "end_date_expression": None,
+                "end_time_expression": None, "link": None}
+    if intent == "add_purchase":
+        return {"title": "пылесос" if "пылесос" in phrase else "кофемашина",
+                "price": 40000 if "40000" in phrase else None, "priority": None,
+                "link": None, "comment": None, "buyer": None}
+    if intent == "add_movie_or_tv":
+        return {"query": "Офис" if "Офис" in phrase else "Во все тяжкие"}
+    if intent == "no_action":
+        return {}
+    return {"category": "other_user_calendar" if "Саше" in phrase else "unsupported_domain"}
+
+
+@pytest.mark.parametrize(("phrase", "expected_intent"), CLASSIFICATION_CASES)
+def test_natural_russian_classification_contract_with_mocked_polza(phrase, expected_intent):
+    """Exercise the strict provider boundary without making a live Polza request."""
+    arguments = canonical_arguments(expected_intent, phrase)
+    client = httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda request: response_content(json.dumps({"intent": expected_intent, "arguments": arguments}))
+    ))
+    result = run(PolzaIntentParser(api_key="secret", model="configured/model", client=client).parse(phrase, context()))
+    run(client.aclose())
+
+    assert result.intent.value == expected_intent
+    assert result.arguments == arguments
+
+
+def test_prompt_prioritizes_supported_partial_commands_and_preserves_dates():
+    assert "Отсутствие даты, времени" in SYSTEM_PROMPT
+    assert "НЕ означает unsupported" in SYSTEM_PROMPT
+    assert "owner=current_user" in SYSTEM_PROMPT
+    assert "17.08" in SYSTEM_PROMPT and "не преобразуй его в ISO" in SYSTEM_PROMPT
+    assert "no_action используй только для текста без команды" in SYSTEM_PROMPT
+
+
+def test_calendar_add_without_date_or_time_keeps_null_slots_for_clarification():
+    arguments = canonical_arguments("add_personal_calendar_event", "Запиши стоматолога в календарь")
+    result = decode_provider_envelope(json.dumps({
+        "intent": "add_personal_calendar_event", "arguments": arguments,
+    }))
+
+    assert result.intent is IntentKind.ADD_PERSONAL_CALENDAR_EVENT
+    assert result.arguments["date_expression"] is None
+    assert result.arguments["time_expression"] is None
 
 
 PURCHASE_PHRASES = [
