@@ -64,7 +64,9 @@ _PURCHASE_PRIORITY_ALIASES = {
 # at the canonical boundary and an empty string in storage).
 _PROVIDER_TECHNICAL_DEFAULTS: dict[IntentKind, dict[str, Any]] = {
     IntentKind.ADD_PURCHASE: {"priority": None},
-    IntentKind.QUERY_PURCHASES: {"priority": "any", "operation": "list"},
+    IntentKind.QUERY_PURCHASES: {
+        "status": "planned", "priority": "any", "buyer": "any", "operation": "list",
+    },
     IntentKind.QUERY_FILMS: {"operation": "list"},
     IntentKind.QUERY_CALENDAR: {"operation": "list"},
     IntentKind.QUERY_AFISHA: {"operation": "list"},
@@ -223,11 +225,11 @@ def normalize_provider_envelope(raw: str | dict[str, Any]) -> dict[str, Any]:
         name, raw_value = item["name"], item["value"]
         if name not in _PROVIDER_FIELD_NAMES:
             raise IntentParserInvalidOutput("invalid_argument_entry")
+        if name in supplied:
+            raise IntentParserInvalidOutput("duplicate_provider_field")
         if raw_value is None and name == "priority" and kind in {
             IntentKind.ADD_PURCHASE, IntentKind.UPDATE_PURCHASE,
         }:
-            if name in supplied:
-                raise IntentParserInvalidOutput("duplicate_provider_field")
             supplied[name] = None
             continue
         if not isinstance(raw_value, str):
@@ -235,8 +237,6 @@ def normalize_provider_envelope(raw: str | dict[str, Any]) -> dict[str, Any]:
         raw_value = raw_value.strip()
         if not raw_value or len(raw_value) > 1000:
             raise IntentParserInvalidOutput(f"invalid_provider_{name}")
-        if name in supplied:
-            raise IntentParserInvalidOutput("duplicate_provider_field")
         supplied[name] = raw_value
 
     # These are narrow, intent-scoped equivalences, not a general policy of

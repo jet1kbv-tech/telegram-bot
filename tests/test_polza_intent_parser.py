@@ -574,6 +574,39 @@ def test_query_purchases_missing_priority_uses_any_filter_default():
     assert result.arguments["priority"] == "any"
 
 
+@pytest.mark.parametrize(("missing", "expected"), [
+    ("buyer", "any"),
+    ("status", "planned"),
+])
+def test_query_purchases_missing_filter_uses_existing_ordinary_query_default(missing, expected):
+    arguments = {**CANONICAL_BY_INTENT["query_purchases"]}
+    arguments.pop(missing)
+
+    result = decode_provider_envelope(json.dumps(provider_envelope("query_purchases", arguments)))
+
+    assert result.arguments[missing] == expected
+
+
+@pytest.mark.parametrize(("name", "value"), [
+    ("buyer", "any"), ("buyer", "current_user"),
+    ("status", "planned"), ("status", "bought"), ("status", "any"),
+])
+def test_query_purchase_explicit_canonical_filters_are_preserved(name, value):
+    payload = provider_envelope("query_purchases", {
+        **CANONICAL_BY_INTENT["query_purchases"], name: value,
+    })
+    assert decode_provider_envelope(json.dumps(payload)).arguments[name] == value
+
+
+@pytest.mark.parametrize(("name", "value"), [("buyer", "everybody"), ("status", "open")])
+def test_query_purchase_explicit_invalid_filters_remain_rejected(name, value):
+    payload = provider_envelope("query_purchases", {
+        **CANONICAL_BY_INTENT["query_purchases"], name: value,
+    })
+    with pytest.raises(IntentParserInvalidOutput, match="invalid_query_arguments"):
+        decode_provider_envelope(json.dumps(payload))
+
+
 @pytest.mark.parametrize("priority", ["any", "high"])
 def test_query_purchase_canonical_priority_is_preserved(priority):
     payload = provider_envelope("query_purchases", {
@@ -602,6 +635,31 @@ def test_mutating_purchase_explicit_null_priority_is_canonical_none(intent):
     assert decode_provider_envelope(json.dumps(payload)).arguments["priority"] is None
 
 
+def test_production_shaped_add_purchase_explicit_json_null_priority_is_canonical_none():
+    payload = {
+        "intent": "add_purchase",
+        "arguments": [
+            {"name": "title", "value": "Кофемолка"},
+            {"name": "price", "value": "15000"},
+            {"name": "priority", "value": None},
+        ],
+    }
+
+    assert decode_provider_envelope(json.dumps(payload, ensure_ascii=False)).arguments == {
+        "title": "Кофемолка", "price": 15000, "priority": None,
+        "link": None, "comment": None, "buyer": None,
+    }
+
+
+def test_query_purchase_explicit_json_null_priority_remains_rejected():
+    arguments = {**CANONICAL_BY_INTENT["query_purchases"]}
+    arguments.pop("priority")
+    payload = provider_envelope("query_purchases", arguments)
+    payload["arguments"].append({"name": "priority", "value": None})
+    with pytest.raises(IntentParserInvalidOutput, match="invalid_argument_entry"):
+        decode_provider_envelope(json.dumps(payload))
+
+
 @pytest.mark.parametrize("intent", ["add_purchase", "update_purchase", "query_purchases"])
 @pytest.mark.parametrize("priority", ["urgent", "срочно", "обычный", "важный"])
 def test_purchase_priority_unknown_explicit_values_remain_rejected(intent, priority):
@@ -617,6 +675,14 @@ def test_purchase_priority_unknown_explicit_values_remain_rejected(intent, prior
 def test_add_purchase_explicit_valid_priority_is_preserved(priority):
     payload = provider_envelope("add_purchase", {
         **CANONICAL_BY_INTENT["add_purchase"], "priority": priority,
+    })
+    assert decode_provider_envelope(json.dumps(payload)).arguments["priority"] == priority
+
+
+@pytest.mark.parametrize("priority", ["high", "medium", "low"])
+def test_update_purchase_explicit_valid_priority_is_preserved(priority):
+    payload = provider_envelope("update_purchase", {
+        **CANONICAL_BY_INTENT["update_purchase"], "priority": priority,
     })
     assert decode_provider_envelope(json.dumps(payload)).arguments["priority"] == priority
 
