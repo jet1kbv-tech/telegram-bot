@@ -52,13 +52,19 @@ _PROVIDER_PRICE = re.compile(
 )
 _SAFE_PROVIDER_OPERATION = re.compile(r"[A-Za-z0-9_-]{1,40}")
 
+_PURCHASE_PRIORITY_ALIASES = {
+    "высокий": "high", "высокая": "high", "высокое": "high",
+    "средний": "medium", "средняя": "medium", "среднее": "medium",
+    "низкий": "low", "низкая": "low", "низкое": "low",
+}
+
 # Defaults here are part of existing domain behavior, not inferred user data.
 # Every query renderer treats ``list`` as its ordinary operation, while the
 # native purchase flow represents a skipped priority as no priority (``None``
 # at the canonical boundary and an empty string in storage).
 _PROVIDER_TECHNICAL_DEFAULTS: dict[IntentKind, dict[str, Any]] = {
     IntentKind.ADD_PURCHASE: {"priority": None},
-    IntentKind.QUERY_PURCHASES: {"operation": "list"},
+    IntentKind.QUERY_PURCHASES: {"priority": "any", "operation": "list"},
     IntentKind.QUERY_FILMS: {"operation": "list"},
     IntentKind.QUERY_CALENDAR: {"operation": "list"},
     IntentKind.QUERY_AFISHA: {"operation": "list"},
@@ -210,12 +216,21 @@ def normalize_provider_envelope(raw: str | dict[str, Any]) -> dict[str, Any]:
     except ValueError as exc:
         raise IntentParserInvalidOutput("unsupported_intent") from exc
     allowed = _FIELDS[kind]
-    supplied: dict[str, str] = {}
+    supplied: dict[str, Any] = {}
     for item in items:
         if not isinstance(item, dict) or set(item) != {"name", "value"}:
             raise IntentParserInvalidOutput("invalid_argument_entry")
         name, raw_value = item["name"], item["value"]
-        if name not in _PROVIDER_FIELD_NAMES or not isinstance(raw_value, str):
+        if name not in _PROVIDER_FIELD_NAMES:
+            raise IntentParserInvalidOutput("invalid_argument_entry")
+        if raw_value is None and name == "priority" and kind in {
+            IntentKind.ADD_PURCHASE, IntentKind.UPDATE_PURCHASE,
+        }:
+            if name in supplied:
+                raise IntentParserInvalidOutput("duplicate_provider_field")
+            supplied[name] = None
+            continue
+        if not isinstance(raw_value, str):
             raise IntentParserInvalidOutput("invalid_argument_entry")
         raw_value = raw_value.strip()
         if not raw_value or len(raw_value) > 1000:
@@ -244,6 +259,11 @@ def normalize_provider_envelope(raw: str | dict[str, Any]) -> dict[str, Any]:
     for name, default in _PROVIDER_TECHNICAL_DEFAULTS.get(kind, {}).items():
         if name not in supplied:
             arguments[name] = default
+    if "priority" in supplied and isinstance(supplied["priority"], str) and kind in {
+        IntentKind.ADD_PURCHASE, IntentKind.UPDATE_PURCHASE, IntentKind.QUERY_PURCHASES,
+    }:
+        priority = supplied["priority"].casefold()
+        arguments["priority"] = _PURCHASE_PRIORITY_ALIASES.get(priority, priority)
     if "price" in supplied:
         match = _PROVIDER_PRICE.fullmatch(supplied["price"])
         if match is None:

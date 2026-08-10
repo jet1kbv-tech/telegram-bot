@@ -296,21 +296,20 @@ def test_unsafe_priority_rejection_logs_unknown_and_never_raw_content(caplog):
     assert "super-secret-key" not in caplog.text and "private command" not in caplog.text
 
 
-@pytest.mark.parametrize(("content", "category"), [
-    (json.dumps(provider_envelope("query_purchases", {
+@pytest.mark.parametrize("content", [
+    json.dumps(provider_envelope("query_purchases", {
         "status": "planned", "buyer": "any", "operation": "list",
-    })), "missing"),
-    (json.dumps({
-        "intent": "add_purchase", "arguments": [{"name": "priority", "value": None}],
-    }), "null"),
+    })),
+    json.dumps({"intent": "add_purchase", "arguments": [
+        {"name": "title", "value": "Чайник"}, {"name": "priority", "value": None},
+    ]}),
 ])
-def test_missing_and_null_provider_priority_log_fixed_safe_categories(content, category, caplog):
+def test_missing_query_and_null_mutation_priorities_no_longer_log_rejections(content, caplog):
     client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: response_content(content)))
-    with caplog.at_level(logging.WARNING), pytest.raises(IntentParserInvalidOutput):
+    with caplog.at_level(logging.WARNING):
         run(PolzaIntentParser(api_key="secret", model="configured/model", client=client).parse("private", context()))
     run(client.aclose())
-
-    assert f"provider_priority={category}" in caplog.text
+    assert "normalization_rejection" not in caplog.text
 
 
 def test_priority_diagnostic_categories_are_deterministic():
@@ -566,6 +565,52 @@ def test_add_purchase_missing_priority_uses_native_no_priority_default():
 
     assert result.arguments["priority"] is None
     assert result.arguments["title"] == "Чайник"
+
+
+def test_query_purchases_missing_priority_uses_any_filter_default():
+    arguments = {**CANONICAL_BY_INTENT["query_purchases"]}
+    arguments.pop("priority")
+    result = decode_provider_envelope(json.dumps(provider_envelope("query_purchases", arguments)))
+    assert result.arguments["priority"] == "any"
+
+
+@pytest.mark.parametrize("priority", ["any", "high"])
+def test_query_purchase_canonical_priority_is_preserved(priority):
+    payload = provider_envelope("query_purchases", {
+        **CANONICAL_BY_INTENT["query_purchases"], "priority": priority,
+    })
+    assert decode_provider_envelope(json.dumps(payload)).arguments["priority"] == priority
+
+
+@pytest.mark.parametrize(("priority", "expected"), [
+    (" высокий ", "high"), ("ВЫСОКАЯ", "high"), ("высокое", "high"),
+    ("средний", "medium"), ("средняя", "medium"), ("среднее", "medium"),
+    ("низкий", "low"), ("низкая", "low"), ("низкое", "low"),
+])
+@pytest.mark.parametrize("intent", ["add_purchase", "update_purchase", "query_purchases"])
+def test_purchase_priority_exact_russian_aliases_are_intent_scoped(intent, priority, expected):
+    payload = provider_envelope(intent, {
+        **CANONICAL_BY_INTENT[intent], "priority": priority,
+    })
+    assert decode_provider_envelope(json.dumps(payload)).arguments["priority"] == expected
+
+
+@pytest.mark.parametrize("intent", ["add_purchase", "update_purchase"])
+def test_mutating_purchase_explicit_null_priority_is_canonical_none(intent):
+    payload = provider_envelope(intent, CANONICAL_BY_INTENT[intent])
+    payload["arguments"].append({"name": "priority", "value": None})
+    assert decode_provider_envelope(json.dumps(payload)).arguments["priority"] is None
+
+
+@pytest.mark.parametrize("intent", ["add_purchase", "update_purchase", "query_purchases"])
+@pytest.mark.parametrize("priority", ["urgent", "срочно", "обычный", "важный"])
+def test_purchase_priority_unknown_explicit_values_remain_rejected(intent, priority):
+    payload = provider_envelope(intent, {
+        **CANONICAL_BY_INTENT[intent], "priority": priority,
+    })
+    reason = "invalid_query_arguments" if intent == "query_purchases" else "invalid_priority"
+    with pytest.raises(IntentParserInvalidOutput, match=reason):
+        decode_provider_envelope(json.dumps(payload))
 
 
 @pytest.mark.parametrize("priority", ["high", "medium", "low"])
