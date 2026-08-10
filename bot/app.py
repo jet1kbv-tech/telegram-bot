@@ -243,7 +243,7 @@ def build_app() -> Application:
         logger.warning("JobQueue недоступна. Для уведомлений за день до события нужен APScheduler в requirements.")
 
     quick_commands_filter = quick_text_command_filter()
-    ai_callback_handlers = [CallbackQueryHandler(nl_callback_router, pattern=r"^ai:[cex]:[A-Za-z0-9_-]{8,16}$")] if nl_enabled else []
+    ai_callback_handlers = [CallbackQueryHandler(nl_callback_router, pattern=r"^ai:(?:[cex]:[A-Za-z0-9_-]{8,16}|r:[A-Za-z0-9_-]{8,16]:\d+)$")] if nl_enabled else []
     ai_text_handlers = [MessageHandler(filters.TEXT & ~filters.COMMAND, nl_text_handler)] if nl_enabled else []
 
     def text_state(handler):

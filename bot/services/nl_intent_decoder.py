@@ -23,13 +23,21 @@ _FIELDS: dict[IntentKind, dict[str, tuple[type, ...]]] = {
         "time_expression": (str, type(None)), "end_date_expression": (str, type(None)),
         "end_time_expression": (str, type(None)), "link": (str, type(None)),
     },
+    IntentKind.UPDATE_PURCHASE: {"target": (str,), "title": (str, type(None)), "price": (int, type(None)), "priority": (str, type(None)), "link": (str, type(None)), "comment": (str, type(None)), "buyer": (str, type(None)), "status": (str, type(None))},
+    IntentKind.DELETE_PURCHASE: {"target": (str,)},
+    IntentKind.UPDATE_FILM: {"target": (str,), "status": (str, type(None)), "comment": (str, type(None))},
+    IntentKind.DELETE_FILM: {"target": (str,)},
+    IntentKind.UPDATE_CALENDAR_EVENT: {"target": (str,), "title": (str, type(None)), "date_expression": (str, type(None)), "time_expression": (str, type(None))},
+    IntentKind.DELETE_CALENDAR_EVENT: {"target": (str,)},
+    IntentKind.UPDATE_AFISHA_EVENT: {"target": (str,), "title": (str, type(None)), "date_expression": (str, type(None)), "time_expression": (str, type(None))},
+    IntentKind.DELETE_AFISHA_EVENT: {"target": (str,)},
     IntentKind.NO_ACTION: {},
     IntentKind.UNSUPPORTED: {"category": (str,)},
 }
 
 _OPTIONAL_NULL_FIELDS = {
     "price", "priority", "link", "comment", "buyer", "date_expression", "time_expression",
-    "end_time_expression", "place", "end_date_expression",
+    "end_time_expression", "place", "end_date_expression", "title", "status",
 }
 _UNSUPPORTED = {"destructive", "other_user_calendar", "bulk", "unsupported_domain", "conversation"}
 
@@ -72,6 +80,17 @@ def decode_intent(raw: str | dict[str, Any]) -> ParsedIntent:
             raise IntentParserInvalidOutput("invalid_priority")
         if arguments["buyer"] not in {None, "current_user"}:
             raise IntentParserInvalidOutput("invalid_buyer")
+    if kind is IntentKind.UPDATE_PURCHASE:
+        if arguments["price"] is not None and not 0 <= arguments["price"] <= 1_000_000_000:
+            raise IntentParserInvalidOutput("invalid_price")
+        if arguments["priority"] not in {None, "high", "medium", "low", "none"}:
+            raise IntentParserInvalidOutput("invalid_priority")
+        if arguments["buyer"] not in {None, "current_user", "none"}:
+            raise IntentParserInvalidOutput("invalid_buyer")
+        if arguments["status"] not in {None, "planned", "bought"}:
+            raise IntentParserInvalidOutput("invalid_status")
+    if kind is IntentKind.UPDATE_FILM and arguments["status"] not in {None, "want", "watched"}:
+        raise IntentParserInvalidOutput("invalid_status")
     if kind is IntentKind.ADD_PERSONAL_CALENDAR_EVENT and arguments["owner"] != "current_user":
         raise IntentParserInvalidOutput("invalid_owner")
     if kind is IntentKind.UNSUPPORTED and arguments["category"] not in _UNSUPPORTED:
@@ -112,6 +131,14 @@ _BRANCH_PROPERTIES: dict[IntentKind, dict[str, Any]] = {
         "end_date_expression": {"type": ["string", "null"]}, "end_time_expression": {"type": ["string", "null"]},
         "link": {"type": ["string", "null"]},
     },
+    IntentKind.UPDATE_PURCHASE: {"target": {"type": "string"}, "title": {"type": ["string", "null"]}, "price": {"type": ["integer", "null"], "minimum": 0, "maximum": 1_000_000_000}, "priority": {"enum": ["high", "medium", "low", "none", None]}, "link": {"type": ["string", "null"]}, "comment": {"type": ["string", "null"]}, "buyer": {"enum": ["current_user", "none", None]}, "status": {"enum": ["planned", "bought", None]}},
+    IntentKind.DELETE_PURCHASE: {"target": {"type": "string"}},
+    IntentKind.UPDATE_FILM: {"target": {"type": "string"}, "status": {"enum": ["want", "watched", None]}, "comment": {"type": ["string", "null"]}},
+    IntentKind.DELETE_FILM: {"target": {"type": "string"}},
+    IntentKind.UPDATE_CALENDAR_EVENT: {"target": {"type": "string"}, "title": {"type": ["string", "null"]}, "date_expression": {"type": ["string", "null"]}, "time_expression": {"type": ["string", "null"]}},
+    IntentKind.DELETE_CALENDAR_EVENT: {"target": {"type": "string"}},
+    IntentKind.UPDATE_AFISHA_EVENT: {"target": {"type": "string"}, "title": {"type": ["string", "null"]}, "date_expression": {"type": ["string", "null"]}, "time_expression": {"type": ["string", "null"]}},
+    IntentKind.DELETE_AFISHA_EVENT: {"target": {"type": "string"}},
     IntentKind.NO_ACTION: {},
     IntentKind.UNSUPPORTED: {"category": {"enum": sorted(_UNSUPPORTED)}},
 }
