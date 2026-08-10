@@ -36,10 +36,10 @@ def response_content(content):
 
 
 def provider_envelope(intent, arguments, **irrelevant):
-    fields = {name: None for name in INTENT_JSON_SCHEMA["schema"]["properties"]["arguments"]["properties"]}
+    fields = {name: None for name in INTENT_JSON_SCHEMA["schema"]["properties"] if name != "intent"}
     fields.update(arguments)
     fields.update(irrelevant)
-    return {"intent": intent, "arguments": fields}
+    return {"intent": intent, **fields}
 
 
 def test_polza_request_contract_uses_configured_model():
@@ -210,11 +210,10 @@ def test_purchase_unknown_missing_and_wrong_typed_fields_remain_rejected(payload
 
 def test_schema_discriminates_every_intent_and_matches_decoder_contract():
     schema = INTENT_JSON_SCHEMA["schema"]
-    arguments = schema["properties"]["arguments"]
     assert set(schema["properties"]["intent"]["enum"]) == {kind.value for kind in IntentKind}
     assert len(IntentKind) == 18
-    assert arguments["additionalProperties"] is False
-    assert set(arguments["required"]) == set(arguments["properties"])
+    assert "arguments" not in schema["properties"]
+    assert set(schema["required"]) == set(schema["properties"])
     assert "price_text" not in json.dumps(INTENT_JSON_SCHEMA)
 
 
@@ -227,10 +226,7 @@ def test_gpt4o_provider_schema_has_supported_root_and_no_discriminator_oneof_or_
     assert set(schema["required"]) == set(schema["properties"])
     assert '"oneOf"' not in serialized
     assert '"const"' not in serialized
-    arguments = schema["properties"]["arguments"]
-    assert arguments["type"] == "object"
-    assert arguments["additionalProperties"] is False
-    assert set(arguments["required"]) == set(arguments["properties"])
+    assert "arguments" not in schema["properties"]
     assert '"anyOf"' not in serialized
 
 
@@ -255,7 +251,7 @@ def test_decode_failure_logs_only_safe_response_shape(caplog):
     run(client.aclose())
     log = caplog.text
     assert "reason=invalid_provider_priority" in log and "intent=add_purchase" in log
-    assert "argument_keys=['buyer', 'category', 'comment'" in log
+    assert "conflicting_fields=[]" in log
     assert secret_value not in log and "super-secret-key" not in log and "private" not in log
 
 
@@ -390,11 +386,11 @@ def test_irrelevant_nulls_are_stripped_but_relevant_nulls_are_preserved():
 def test_provider_contract_rejects_missing_unknown_and_wrong_typed_fields(mutation):
     payload = provider_envelope("add_purchase", CANONICAL_BY_INTENT["add_purchase"])
     if mutation == "missing":
-        payload["arguments"].pop("place")
+        payload.pop("place")
     elif mutation == "unknown":
-        payload["arguments"]["danger"] = None
+        payload["danger"] = None
     else:
-        payload["arguments"]["price"] = "35000"
+        payload["price"] = "35000"
     with pytest.raises(IntentParserInvalidOutput):
         normalize_provider_envelope(payload)
 
@@ -405,3 +401,49 @@ def test_canonical_decoder_remains_authoritative_and_rejects_direct_mismatch():
             "title": "Врач", "date_expression": None, "time_expression": None,
             "end_time_expression": None, "comment": None, "owner": "current_user",
         }})
+
+PRODUCTION_LEAKAGE_REGRESSIONS = {
+    "delete_calendar_event": CANONICAL_BY_INTENT["delete_calendar_event"],
+    "query_calendar": CANONICAL_BY_INTENT["query_calendar"],
+    "update_calendar_event": CANONICAL_BY_INTENT["update_calendar_event"],
+    "add_purchase": CANONICAL_BY_INTENT["add_purchase"],
+    "add_movie_or_tv": CANONICAL_BY_INTENT["add_movie_or_tv"],
+}
+
+
+@pytest.mark.parametrize(("intent", "arguments"), PRODUCTION_LEAKAGE_REGRESSIONS.items())
+def test_production_failures_flat_slots_normalize_without_irrelevant_values(intent, arguments):
+    """The five production failures must cross the flat provider adapter exactly."""
+    assert normalize_provider_envelope(provider_envelope(intent, arguments)) == {
+        "intent": intent, "arguments": arguments,
+    }
+
+
+@pytest.mark.parametrize("intent", [
+    "add_afisha_event", "add_personal_calendar_event", "query_afisha",
+])
+def test_production_successes_remain_supported_by_flat_contract(intent):
+    arguments = CANONICAL_BY_INTENT[intent]
+    assert decode_provider_envelope(json.dumps(provider_envelope(intent, arguments))).arguments == arguments
+
+
+def test_genuine_cross_domain_price_conflict_is_not_silently_discarded():
+    payload = provider_envelope(
+        "add_afisha_event", CANONICAL_BY_INTENT["add_afisha_event"], price=35000,
+    )
+    with pytest.raises(IntentParserInvalidOutput, match="irrelevant_non_null_field"):
+        normalize_provider_envelope(payload)
+
+
+def test_normalization_rejection_logs_conflicting_names_without_values(caplog):
+    content = json.dumps(provider_envelope(
+        "add_afisha_event", CANONICAL_BY_INTENT["add_afisha_event"], price=35000,
+    ))
+    client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: response_content(content)))
+    with caplog.at_level(logging.WARNING), pytest.raises(IntentParserInvalidOutput):
+        run(PolzaIntentParser(api_key="secret", model="openai/gpt-4o-mini", client=client).parse("private", context()))
+    run(client.aclose())
+    assert "intent=add_afisha_event" in caplog.text
+    assert "reason=irrelevant_non_null_field" in caplog.text
+    assert "conflicting_fields=['price']" in caplog.text
+    assert "35000" not in caplog.text and "private" not in caplog.text
