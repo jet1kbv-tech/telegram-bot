@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from bot.handlers import nl_assistant
-from bot.services.nl_intent import IntentKind, IntentParserTimeout, IntentParserUnavailable, ParsedIntent
+from bot.services.nl_intent import IntentKind, IntentParserInvalidOutput, IntentParserTimeout, IntentParserUnavailable, ParsedIntent
 from bot.states import ADDING_CALENDAR_EVENT_TITLE, ADDING_EVENT_TITLE, ADDING_PURCHASE_TITLE, AI_CLARIFYING, MENU, SECTION
 
 
@@ -72,7 +72,7 @@ def test_purchase_has_preview_and_no_mutation_before_confirmation(monkeypatch):
     assert run(nl_assistant.nl_text_handler(upd, ctx)) == MENU
     create.assert_not_called()
     preview = upd.effective_message.waiting.edit_text.await_args.args[0]
-    assert preview.startswith("🛍 Новая покупка")
+    assert preview.startswith("➕ Добавить покупку")
     assert "Название: Кофемашина" in preview and "Стоимость: 35 000 ₽" in preview
     assert "Приоритет: Высокий" in preview and "Куплю я" in preview
     proposal_id = ctx.user_data["ai_active_proposal_id"]
@@ -82,8 +82,9 @@ def test_purchase_has_preview_and_no_mutation_before_confirmation(monkeypatch):
 
 
 @pytest.mark.parametrize(("error", "expected"), [
-    (IntentParserTimeout("timeout"), "вовремя"),
-    (IntentParserUnavailable("down"), "Не понял"),
+    (IntentParserTimeout("timeout"), "слишком много времени"),
+    (IntentParserUnavailable("down"), "Сейчас не получается"),
+    (IntentParserInvalidOutput("bad"), "надёжно разобрать"),
 ])
 def test_controlled_parser_failure_replaces_waiting_message(error, expected):
     nl_assistant._parser = FailingParser(error)
@@ -126,11 +127,12 @@ def test_calendar_clarification_continues_same_proposal(monkeypatch):
     ctx, first = context(), update()
     assert run(nl_assistant.nl_text_handler(first, ctx)) == AI_CLARIFYING
     proposal_id = ctx.user_data["ai_active_proposal_id"]
-    assert first.effective_message.waiting.edit_text.await_args.args[0] == "На какую дату?"
+    assert first.effective_message.waiting.edit_text.await_args.args[0] == "На какую дату поставить событие?"
+    assert first.effective_message.waiting.edit_text.await_args.kwargs["reply_markup"].inline_keyboard[0][0].text == "❌ Отменить"
     answer = update(text="завтра")
     assert run(nl_assistant.nl_clarification_handler(answer, ctx)) == MENU
     assert ctx.user_data["ai_active_proposal_id"] == proposal_id
-    assert "2026-" in answer.effective_message.reply_text.await_args.args[0]
+    assert "11.08.2026" in answer.effective_message.reply_text.await_args.args[0]
     run(nl_assistant.nl_callback_router(update(callback_data=f"ai:c:{proposal_id}"), ctx))
     create.assert_called_once()
 
@@ -184,3 +186,92 @@ def test_edit_hands_off_to_native_form(intent, expected_state):
     proposal_id = ctx.user_data["ai_active_proposal_id"]
     state = run(nl_assistant.nl_callback_router(update(callback_data=f"ai:e:{proposal_id}"), ctx))
     assert state == expected_state
+
+
+def test_proposal_copy_hides_empty_fields_and_humanizes_changes():
+    now = nl_assistant.zoned_now(nl_assistant.BOT_TIMEZONE)
+    purchase = nl_assistant.create_proposal({}, intent=IntentKind.ADD_PURCHASE, arguments={
+        "title": "чайник", "price": None, "priority": "low", "buyer": "", "link": None, "comment": None,
+    }, actor_key="vova", now=now, ttl_seconds=60)
+    text = nl_assistant._preview(purchase)
+    assert text.startswith("➕ Добавить покупку")
+    assert "Стоимость" not in text and "None" not in text and "null" not in text
+    assert "Приоритет: Низкий" in text and "Пока ничего не добавлено" in text
+
+    update_proposal = SimpleNamespace(intent=IntentKind.UPDATE_PURCHASE, arguments={
+        "_selected": {"title": "Чайник", "priority": "medium", "price": 1000},
+        "_changes": {"priority": "high", "price": 2500},
+    })
+    changed = nl_assistant._preview(update_proposal)
+    assert "Приоритет: средний → высокий" in changed
+    assert "Стоимость: 1 000 ₽ → 2 500 ₽" in changed
+    assert "Пока ничего не изменено" in changed
+
+
+def test_delete_preview_names_target_and_is_explicitly_pending():
+    proposal = SimpleNamespace(intent=IntentKind.DELETE_CALENDAR_EVENT, arguments={
+        "_selected": {"title": "Стоматолог", "date": "2026-08-12", "start_time": "18:00"}, "_changes": {},
+    })
+    text = nl_assistant._preview(proposal)
+    assert text.startswith("🗑 Удалить")
+    assert "Стоматолог" in text and "12.08.2026 в 18:00" in text
+    assert "Пока ничего не удалено" in text
+
+
+def test_waiting_edit_failure_falls_back_to_single_reply():
+    nl_assistant._parser = FakeParser(purchase_intent())
+    upd = update()
+    upd.effective_message.waiting.edit_text.side_effect = RuntimeError("telegram edit failed")
+    run(nl_assistant.nl_text_handler(upd, context()))
+    assert upd.effective_message.reply_text.await_count == 2
+    assert upd.effective_message.reply_text.await_args_list[-1].args[0].startswith("➕ Добавить покупку")
+
+
+def test_clarification_prompts_never_expose_internal_names():
+    prompts = [nl_assistant._clarification_prompt(field) for field in ("date", "time", "title", "price", "target", "place")]
+    assert all(field not in prompt for field, prompt in zip(("date", "time", "title", "price", "target", "place"), prompts))
+    assert prompts == [
+        "На какую дату поставить событие?", "Во сколько начнётся событие?", "Как назвать?",
+        "Сколько стоит покупка?", "Какую запись нужно изменить?", "Где пройдёт событие?",
+    ]
+
+
+def test_multiple_entity_candidates_are_readable_and_keep_ids_hidden(monkeypatch):
+    nl_assistant._parser = FakeParser(ParsedIntent(IntentKind.DELETE_CALENDAR_EVENT, {"target": "Стоматолог"}))
+    candidates = [
+        nl_assistant.EntityCandidate("secret-1", "vova", {"title": "Стоматолог", "date": "2026-08-12", "start_time": "18:00"}),
+        nl_assistant.EntityCandidate("secret-2", "vova", {"title": "Стоматолог", "date": "2026-08-19", "start_time": "09:30"}),
+    ]
+    monkeypatch.setattr(nl_assistant, "resolve_entities", lambda *args, **kwargs: candidates)
+    monkeypatch.setattr(nl_assistant.storage, "load", lambda: {})
+    upd = update(); run(nl_assistant.nl_text_handler(upd, context()))
+    text = upd.effective_message.waiting.edit_text.await_args.args[0]
+    markup = upd.effective_message.waiting.edit_text.await_args.kwargs["reply_markup"]
+    assert "несколько похожих записей" in text
+    assert "12.08.2026, 18:00" in text and "19.08.2026, 09:30" in text
+    assert "secret-" not in text
+    assert markup.inline_keyboard[0][0].text.startswith("1. Стоматолог")
+    assert markup.inline_keyboard[-1][0].text == "❌ Отменить"
+
+
+def test_no_candidate_has_clear_manual_recovery(monkeypatch):
+    nl_assistant._parser = FakeParser(ParsedIntent(IntentKind.DELETE_PURCHASE, {"target": "Телескоп"}))
+    monkeypatch.setattr(nl_assistant, "resolve_entities", lambda *args, **kwargs: [])
+    monkeypatch.setattr(nl_assistant.storage, "load", lambda: {})
+    upd = update(); run(nl_assistant.nl_text_handler(upd, context()))
+    assert upd.effective_message.waiting.edit_text.await_args.args[0] == "Не нашёл такую запись. Проверь название или открой нужный раздел вручную."
+
+
+def test_phase6_list_and_empty_state_replace_waiting(monkeypatch):
+    args = {"status": "planned", "priority": "any", "buyer": "any", "operation": "list"}
+    nl_assistant._parser = FakeParser(ParsedIntent(IntentKind.QUERY_PURCHASES, args))
+    monkeypatch.setattr(nl_assistant.storage, "load", lambda: {})
+    monkeypatch.setattr(nl_assistant, "query_purchases", lambda *a, **kw: SimpleNamespace(
+        items=[{"title": "Кофе", "price": 1200}], total=1, amount=1200, missing_prices=0))
+    upd = update(); run(nl_assistant.nl_text_handler(upd, context()))
+    text = upd.effective_message.waiting.edit_text.await_args.args[0]
+    assert text.startswith("🛍 Покупки") and "Кофе — 1 200 ₽" in text and "Показано 1 из 1" in text
+
+    monkeypatch.setattr(nl_assistant, "query_purchases", lambda *a, **kw: SimpleNamespace(items=[], total=0, amount=0, missing_prices=0))
+    upd = update(); run(nl_assistant.nl_text_handler(upd, context()))
+    assert upd.effective_message.waiting.edit_text.await_args.args[0] == "Подходящих покупок пока нет."

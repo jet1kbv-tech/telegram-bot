@@ -19,7 +19,7 @@ from bot.services.actions.existing import mutate_existing
 from bot.services.nl_dates import DateExpressionError, resolve_date_expression, resolve_time_expression, zoned_now
 from bot.services.nl_dates import resolve_date_range
 from bot.services.nl_intent import (
-    IntentContext, IntentKind, IntentParser, IntentParserError, IntentParserTimeout,
+    IntentContext, IntentKind, IntentParser, IntentParserError, IntentParserTimeout, IntentParserUnavailable,
 )
 from bot.services.nl_proposals import ActionProposal, active_proposal, create_proposal, discard_proposal, get_proposal
 from bot.services.nl_entity_resolution import EntityCandidate, resolve_entities
@@ -53,7 +53,7 @@ def _keyboard(proposal_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Добавить", callback_data=f"ai:c:{proposal_id}")],
         [InlineKeyboardButton("✏️ Изменить", callback_data=f"ai:e:{proposal_id}")],
-        [InlineKeyboardButton("❌ Отмена", callback_data=f"ai:x:{proposal_id}")],
+        [InlineKeyboardButton("❌ Отменить", callback_data=f"ai:x:{proposal_id}")],
     ])
 
 
@@ -61,7 +61,7 @@ def _mutation_keyboard(proposal: ActionProposal) -> InlineKeyboardMarkup:
     delete = proposal.intent.name.startswith("DELETE_")
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🗑 Удалить" if delete else "✅ Изменить", callback_data=f"ai:c:{proposal.proposal_id}")],
-        [InlineKeyboardButton("❌ Отмена", callback_data=f"ai:x:{proposal.proposal_id}")],
+        [InlineKeyboardButton("❌ Отменить", callback_data=f"ai:x:{proposal.proposal_id}")],
     ])
 
 
@@ -101,11 +101,51 @@ def _menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[InlineKeyboardButton("🏠 В меню", callback_data="menu:main")]])
 
 
+def _clarification_keyboard(proposal_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[InlineKeyboardButton("❌ Отменить", callback_data=f"ai:x:{proposal_id}")]])
+
+
+async def _safe_query_edit(query: Any, text: str, **kwargs: Any) -> Any:
+    """Edit a callback message, or reply without leaving a broken callback flow."""
+    try:
+        return await query.edit_message_text(text, **kwargs)
+    except Exception:
+        logger.warning("NL callback message edit failed; using reply fallback")
+        message = getattr(query, "message", None)
+        if message is not None:
+            return await message.reply_text(text, **kwargs)
+        return None
+
+
+def _human_date(value: Any) -> str:
+    raw = str(value or "")
+    try:
+        return datetime.strptime(raw, "%Y-%m-%d").strftime("%d.%m.%Y")
+    except ValueError:
+        return raw or "—"
+
+
+_VALUE_LABELS = {
+    "high": "высокий", "medium": "средний", "low": "низкий", "none": "не указан",
+    "planned": "запланирована", "bought": "куплена", "want": "хочу посмотреть", "watched": "просмотрено",
+    "current_user": "я", "": "не назначен",
+}
+
+
+def _human_value(field: str, value: Any) -> str:
+    if field == "date":
+        return _human_date(value)
+    if field == "price" and value is not None:
+        return f"{value:,} ₽".replace(",", " ")
+    return _VALUE_LABELS.get(str(value), str(value or "—"))
+
+
 def _candidate_label(candidate: EntityCandidate) -> str:
     item = candidate.item
     when = item.get("date")
     clock = item.get("start_time") or item.get("time")
-    suffix = " — " + ", ".join(str(value) for value in (when, clock) if value) if when or clock else ""
+    values = (_human_date(when), str(clock)) if when else (str(clock),)
+    suffix = " — " + ", ".join(value for value in values if value) if when or clock else ""
     return f"{item.get('title') or 'Без названия'}{suffix}"
 
 
@@ -228,7 +268,7 @@ async def nl_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await response.discard()
             return _idle_state(context)
         if parsed.intent is IntentKind.UNSUPPORTED:
-            await response.reply_text("Я пока умею добавлять фильмы, покупки и события в твой календарь или Афишу.", reply_markup=_menu_keyboard())
+            await response.reply_text("С этой командой я пока не умею работать. Могу помочь с покупками, фильмами, календарём и Афишей.", reply_markup=_menu_keyboard())
             return _idle_state(context)
         arguments, missing = _prepare(parsed.intent, parsed.arguments, now)
         if parsed.intent in _QUERY_KINDS:
@@ -245,16 +285,16 @@ async def nl_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                                            include_past=False, now=now, timezone=BOT_TIMEZONE)
             logger.info("NL entity resolution intent=%s status=%s candidate_count=%s", parsed.intent.value, "found" if candidates else "missing", len(candidates))
             if not candidates:
-                await response.reply_text("Не нашёл подходящий объект. Проверь название и попробуй ещё раз.", reply_markup=_menu_keyboard())
+                await response.reply_text("Не нашёл такую запись. Проверь название или открой нужный раздел вручную.", reply_markup=_menu_keyboard())
                 return _idle_state(context)
             proposal = create_proposal(context.user_data, intent=parsed.intent, arguments=arguments,
                                        actor_key=get_username(update), now=now, ttl_seconds=AI_PROPOSAL_TTL_SECONDS,
                                        missing_fields=missing)
             proposal.arguments["_candidates"] = [{"id": c.item_id, "bucket": c.bucket, "item": c.item} for c in candidates]
             if len(candidates) > 1:
-                lines = ["Нашёл несколько вариантов:", ""] + [f"○ {_candidate_label(c)}" for c in candidates] + ["", "Какой выбрать?"]
-                buttons = [[InlineKeyboardButton(str(index + 1), callback_data=f"ai:r:{proposal.proposal_id}:{index}")] for index in range(len(candidates))]
-                buttons.append([InlineKeyboardButton("❌ Отмена", callback_data=f"ai:x:{proposal.proposal_id}")])
+                lines = ["Нашёл несколько похожих записей. Какую выбрать?", ""] + [f"{index + 1}. {_candidate_label(c)}" for index, c in enumerate(candidates)]
+                buttons = [[InlineKeyboardButton(f"{index + 1}. {_candidate_label(candidate)}"[:60], callback_data=f"ai:r:{proposal.proposal_id}:{index}")] for index, candidate in enumerate(candidates)]
+                buttons.append([InlineKeyboardButton("❌ Отменить", callback_data=f"ai:x:{proposal.proposal_id}")])
                 await response.reply_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(buttons))
                 return _idle_state(context)
             _select_candidate(proposal, candidates[0], get_user_name(update))
@@ -263,18 +303,21 @@ async def nl_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 await response.reply_text("Это значение уже установлено.", reply_markup=_menu_keyboard())
                 return _idle_state(context)
             if missing:
-                await response.reply_text(_clarification_prompt(missing[0]))
+                await response.reply_text(_clarification_prompt(missing[0], proposal.intent), reply_markup=_clarification_keyboard(proposal.proposal_id))
                 return AI_CLARIFYING
             await response.reply_text(_preview(proposal), reply_markup=_mutation_keyboard(proposal))
             return _idle_state(context)
         if not missing:
             _validate_prepared(parsed.intent, arguments)
     except IntentParserTimeout:
-        await response.reply_text("Не удалось разобрать команду вовремя. Попробуй ещё раз или открой меню.", reply_markup=_menu_keyboard())
+        await response.reply_text("Ответ занял слишком много времени. Попробуй отправить команду ещё раз.", reply_markup=_menu_keyboard())
+        return _idle_state(context)
+    except IntentParserUnavailable:
+        await response.reply_text("Сейчас не получается разобрать команду. Попробуй чуть позже или открой меню.", reply_markup=_menu_keyboard())
         return _idle_state(context)
     except (IntentParserError, ValueError, DateExpressionError):
         logger.info("NL intent parsing or validation failed", exc_info=True)
-        await response.reply_text("Не понял, что именно нужно сделать. Попробуй ещё раз.", reply_markup=_menu_keyboard())
+        await response.reply_text("Не получилось надёжно разобрать команду. Попробуй сформулировать её чуть иначе.", reply_markup=_menu_keyboard())
         return _idle_state(context)
 
     proposal = create_proposal(context.user_data, intent=parsed.intent, arguments=arguments,
@@ -282,7 +325,7 @@ async def nl_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                                missing_fields=missing)
     logger.info("NL proposal created intent=%s missing=%s", proposal.intent.value, len(missing))
     if missing:
-        await response.reply_text(_clarification_prompt(missing[0]))
+        await response.reply_text(_clarification_prompt(missing[0], proposal.intent), reply_markup=_clarification_keyboard(proposal.proposal_id))
         return AI_CLARIFYING
     keyboard = _mutation_keyboard(proposal) if proposal.intent in _MUTATION_KINDS else _keyboard(proposal.proposal_id)
     await response.reply_text(_preview(proposal), reply_markup=keyboard)
@@ -328,9 +371,9 @@ async def _answer_query(message: Any, context: ContextTypes.DEFAULT_TYPE, kind: 
     if operation == "next":
         parser = parse_calendar_event_start_dt if kind is IntentKind.QUERY_CALENDAR else parse_event_dt
         item = next_event(result, parser, now)
-        text = _event_line(item, kind is IntentKind.QUERY_CALENDAR) if item else "Будущих подходящих событий не найдено."
+        text = "Ближайшее событие\n\n" + _event_line(item, kind is IntentKind.QUERY_CALENDAR) if item else "Впереди подходящих событий нет."
     elif operation == "count":
-        text = f"Всего: {result.total}"
+        text = f"Найдено: {result.total}"
     elif operation == "sum":
         text = f"Общая стоимость: {result.amount:,} ₽".replace(",", " ")
         if result.missing_prices:
@@ -357,7 +400,7 @@ async def _answer_query(message: Any, context: ContextTypes.DEFAULT_TYPE, kind: 
         markup = _query_keyboard(token, page=page, more=start + len(shown) < result.total)
     logger.info("NL query intent=%s operation=%s result_count=%s", kind.value, operation, result.total)
     if edit:
-        await message.edit_message_text(text, reply_markup=markup)
+        await _safe_query_edit(message, text, reply_markup=markup)
     else:
         await message.reply_text(text, reply_markup=markup)
 
@@ -372,7 +415,7 @@ async def nl_query_callback_router(update: Update, context: ContextTypes.DEFAULT
     now = zoned_now(BOT_TIMEZONE)
     saved = get_query_context(context.user_data, token, actor_key=get_username(update), now=now)
     if saved is None:
-        await query.edit_message_text("Этот запрос уже устарел. Задай вопрос ещё раз.", reply_markup=_menu_keyboard())
+        await _safe_query_edit(query, "Этот запрос уже устарел. Отправь его ещё раз.", reply_markup=_menu_keyboard())
         return _idle_state(context)
     page = 0
     if len(parts) == 4 and parts[2] == "p":
@@ -384,11 +427,12 @@ async def nl_query_callback_router(update: Update, context: ContextTypes.DEFAULT
     return _idle_state(context)
 
 
-def _clarification_prompt(field: str) -> str:
+def _clarification_prompt(field: str, intent: IntentKind | None = None) -> str:
     return {
-        "date": "На какую дату?", "time": "Во сколько?", "end_time": "Во сколько событие закончится?",
-        "end_date": "На какую дату приходится окончание?",
-    }.get(field, "Уточни недостающие данные:")
+        "date": "На какую дату поставить событие?", "time": "Во сколько начнётся событие?", "end_time": "Во сколько событие закончится?",
+        "end_date": "В какой день событие закончится?", "title": "Как назвать?",
+        "price": "Сколько стоит покупка?", "target": "Какую запись нужно изменить?", "place": "Где пройдёт событие?",
+    }.get(field, "Какую деталь нужно добавить?")
 
 
 async def nl_clarification_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -414,10 +458,10 @@ async def nl_clarification_handler(update: Update, context: ContextTypes.DEFAULT
         proposal.clarification_count += 1
     except DateExpressionError:
         proposal.clarification_count += 1
-        await message.reply_text(f"Не смог распознать. {_clarification_prompt(field)}")
+        await message.reply_text(f"Не смог распознать. {_clarification_prompt(field, proposal.intent)}", reply_markup=_clarification_keyboard(proposal.proposal_id))
         return AI_CLARIFYING
     if proposal.missing_fields:
-        await message.reply_text(_clarification_prompt(proposal.missing_fields[0]))
+        await message.reply_text(_clarification_prompt(proposal.missing_fields[0], proposal.intent), reply_markup=_clarification_keyboard(proposal.proposal_id))
         return AI_CLARIFYING
     if proposal.intent in _MUTATION_KINDS:
         selected = EntityCandidate(str(proposal.arguments["_id"]), str(proposal.arguments["_bucket"]), proposal.arguments["_selected"])
@@ -432,7 +476,8 @@ async def nl_clarification_handler(update: Update, context: ContextTypes.DEFAULT
         discard_proposal(context.user_data, proposal)
         await message.reply_text("Эти дата или время не образуют корректное событие. Напиши команду ещё раз.", reply_markup=_menu_keyboard())
         return _idle_state(context)
-    await message.reply_text(_preview(proposal), reply_markup=_keyboard(proposal.proposal_id))
+    keyboard = _mutation_keyboard(proposal) if proposal.intent in _MUTATION_KINDS else _keyboard(proposal.proposal_id)
+    await message.reply_text(_preview(proposal), reply_markup=keyboard)
     return _idle_state(context)
 
 
@@ -441,39 +486,48 @@ def _preview(proposal: ActionProposal) -> str:
     if proposal.intent in _MUTATION_KINDS:
         item, changes = args["_selected"], args["_changes"]
         if proposal.intent.name.startswith("DELETE_"):
-            return f"🗑 Удалить объект?\n\n{item.get('title', 'Без названия')}\n\nЭто действие удалит объект."
+            parts = [_human_date(item["date"])] if item.get("date") else []
+            if item.get("start_time") or item.get("time"):
+                parts.append(str(item.get("start_time") or item.get("time")))
+            when = " в ".join(parts)
+            details = f"\n{when}" if when else ""
+            return f"🗑 Удалить\n\n{item.get('title') or 'Без названия'}{details}\n\nПока ничего не удалено."
         labels = {"title": "Название", "price": "Стоимость", "priority": "Приоритет", "buyer": "Исполнитель", "status": "Статус", "comment": "Комментарий", "link": "Ссылка", "date": "Дата", "time": "Время", "start_time": "Время"}
-        lines = ["✏️ Изменить объект", "", str(item.get("title") or "Без названия"), ""]
-        lines.extend(f"{labels.get(field, field)}: {item.get(field, '') or '—'} → {value or '—'}" for field, value in changes.items())
+        lines = ["✏️ Изменить", "", str(item.get("title") or "Без названия"), ""]
+        lines.extend(f"{labels.get(field, field)}: {_human_value(field, item.get(field))} → {_human_value(field, value)}" for field, value in changes.items())
+        lines.extend(["", "Пока ничего не изменено."])
         return "\n".join(lines)
     if proposal.intent is IntentKind.ADD_MOVIE_OR_TV:
-        return f"🎬 Найти и добавить в фильмы?\n\n{args['query']}"
+        return f"🎬 Добавить фильм или сериал\n\n{args['query']}\n\nПока ничего не добавлено."
     if proposal.intent is IntentKind.ADD_PURCHASE:
-        lines = ["🛍 Новая покупка", "", f"Название: {str(args['title']).capitalize()}"]
+        lines = ["➕ Добавить покупку", "", f"Название: {str(args['title']).capitalize()}"]
         if args.get("price") is not None:
             lines.append(f"Стоимость: {args['price']:,} ₽".replace(",", " "))
         labels = {"high": "Высокий", "medium": "Средний", "low": "Низкий"}
         if args.get("priority"):
             lines.append(f"Приоритет: {labels[args['priority']]}")
         if args.get("buyer") == "current_user":
-            lines.append("🙋 Куплю я")
+            lines.append("Куплю я")
         if args.get("link"):
-            lines.append(f"🔗 {args['link']}")
+            lines.append(f"Ссылка: {args['link']}")
         if args.get("comment"):
-            lines.append(f"💬 {args['comment']}")
+            lines.append(f"Комментарий: {args['comment']}")
+        lines.extend(["", "Пока ничего не добавлено."])
         return "\n".join(lines)
     if proposal.intent is IntentKind.ADD_PERSONAL_CALENDAR_EVENT:
-        lines = ["📅 Добавить в мой календарь?", "", str(args["title"]), str(args["date"]), str(args["start_time"])]
+        lines = ["➕ Добавить в календарь", "", str(args["title"]), _human_date(args["date"]), str(args["start_time"])]
         if args.get("end_time"):
             lines[-1] += f"–{args['end_time']}"
         if args.get("comment"):
-            lines.append(f"💬 {args['comment']}")
+            lines.append(f"Комментарий: {args['comment']}")
+        lines.extend(["", "Пока ничего не добавлено."])
         return "\n".join(lines)
-    lines = ["🗓 Добавить в Афишу?", "", str(args["title"]), str(args["date"]), str(args["time"])]
+    lines = ["➕ Добавить в Афишу", "", str(args["title"]), _human_date(args["date"]), str(args["time"])]
     if args.get("place"):
-        lines.append(f"📍 {args['place']}")
+        lines.append(f"Место: {args['place']}")
     if args.get("link"):
-        lines.append(f"🔗 {args['link']}")
+        lines.append(f"Ссылка: {args['link']}")
+    lines.extend(["", "Пока ничего не добавлено."])
     return "\n".join(lines)
 
 
@@ -487,35 +541,35 @@ async def nl_callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE)
     now = zoned_now(BOT_TIMEZONE)
     proposal = get_proposal(context.user_data, proposal_id, actor_key=get_username(update), now=now)
     if proposal is None:
-        await query.edit_message_text("Это предложение уже устарело. Напиши команду ещё раз.", reply_markup=_menu_keyboard())
+        await _safe_query_edit(query, "Это предложение уже устарело. Отправь команду ещё раз.", reply_markup=_menu_keyboard())
         return _idle_state(context)
     if action == "x":
         proposal.status = "cancelled"
         discard_proposal(context.user_data, proposal)
         logger.info("NL proposal cancelled intent=%s", proposal.intent.value)
-        await query.edit_message_text("Отменено.", reply_markup=_menu_keyboard())
+        await _safe_query_edit(query, "Действие отменено. Ничего не изменилось.", reply_markup=_menu_keyboard())
         return _idle_state(context)
     if action == "r" and len(parts) == 4:
         candidates = proposal.arguments.get("_candidates", [])
         try:
             raw = candidates[int(parts[3])]
         except (ValueError, IndexError, TypeError):
-            await query.edit_message_text("Вариант больше недоступен. Напиши команду ещё раз.", reply_markup=_menu_keyboard())
+            await _safe_query_edit(query, "Вариант больше недоступен. Напиши команду ещё раз.", reply_markup=_menu_keyboard())
             return _idle_state(context)
         _select_candidate(proposal, EntityCandidate(raw["id"], raw["bucket"], raw["item"]), get_user_name(update))
         if proposal.missing_fields:
-            await query.edit_message_text(_clarification_prompt(proposal.missing_fields[0]))
+            await _safe_query_edit(query, _clarification_prompt(proposal.missing_fields[0], proposal.intent), reply_markup=_clarification_keyboard(proposal.proposal_id))
             return AI_CLARIFYING
         if not proposal.arguments["_changes"] and proposal.intent.name.startswith("UPDATE_"):
             discard_proposal(context.user_data, proposal)
-            await query.edit_message_text("Это значение уже установлено.", reply_markup=_menu_keyboard())
+            await _safe_query_edit(query, "Это значение уже установлено.", reply_markup=_menu_keyboard())
             return _idle_state(context)
-        await query.edit_message_text(_preview(proposal), reply_markup=_mutation_keyboard(proposal))
+        await _safe_query_edit(query, _preview(proposal), reply_markup=_mutation_keyboard(proposal))
         return _idle_state(context)
     if action == "e":
         return await _edit_proposal(update, context, proposal)
     if action != "c" or proposal.status != "pending" or proposal.missing_fields:
-        await query.edit_message_text("Это предложение уже устарело. Напиши команду ещё раз.", reply_markup=_menu_keyboard())
+        await _safe_query_edit(query, "Это предложение уже устарело. Отправь команду ещё раз.", reply_markup=_menu_keyboard())
         return _idle_state(context)
     proposal.status = "executing"
     try:
@@ -523,18 +577,18 @@ async def nl_callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE)
             result = mutate_existing(proposal.intent, proposal.arguments)
             if result.status == "conflict":
                 discard_proposal(context.user_data, proposal)
-                await query.edit_message_text("Объект изменился с момента подтверждения. Проверь актуальные данные и попробуй ещё раз.", reply_markup=_menu_keyboard())
+                await _safe_query_edit(query, "Объект изменился с момента подтверждения. Проверь актуальные данные и попробуй ещё раз.", reply_markup=_menu_keyboard())
                 return _idle_state(context)
             if result.status in {"missing", "already_deleted"}:
                 discard_proposal(context.user_data, proposal)
-                await query.edit_message_text("Объекта больше нет.", reply_markup=_menu_keyboard())
+                await _safe_query_edit(query, "Объекта больше нет.", reply_markup=_menu_keyboard())
                 return SECTION
             if result.status not in {"updated", "deleted"}:
                 raise ValueError("mutation_failed")
             text = "Объект удалён." if result.status == "deleted" else "Объект обновлён."
         if proposal.intent is IntentKind.ADD_MOVIE_OR_TV:
             discard_proposal(context.user_data, proposal)
-            await query.edit_message_text("Ищу фильм или сериал…")
+            await _safe_query_edit(query, "Ищу фильм или сериал…")
             return await begin_film_search(update, context, str(proposal.arguments["query"]))
         elif proposal.intent is IntentKind.ADD_PURCHASE:
             args = dict(proposal.arguments)
@@ -556,12 +610,12 @@ async def nl_callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE)
     except ValueError:
         proposal.status = "pending"
         logger.info("NL proposal domain validation failed intent=%s", proposal.intent.value, exc_info=True)
-        await query.edit_message_text("Не удалось применить предложение. Проверь данные через «Изменить».", reply_markup=_keyboard(proposal.proposal_id))
+        await _safe_query_edit(query, "Не удалось применить предложение. Проверь данные через «Изменить».", reply_markup=_keyboard(proposal.proposal_id))
         return _idle_state(context)
     proposal.status = "confirmed"
     discard_proposal(context.user_data, proposal)
     logger.info("NL proposal confirmed intent=%s", proposal.intent.value)
-    await query.edit_message_text(text, reply_markup=_menu_keyboard())
+    await _safe_query_edit(query, text, reply_markup=_menu_keyboard())
     return SECTION
 
 
@@ -570,17 +624,17 @@ async def _edit_proposal(update: Update, context: ContextTypes.DEFAULT_TYPE, pro
     args = proposal.arguments
     discard_proposal(context.user_data, proposal)
     if proposal.intent is IntentKind.ADD_MOVIE_OR_TV:
-        await query.edit_message_text("Отправь новое название фильма или сериала:")
+        await _safe_query_edit(query, "Отправь новое название фильма или сериала:")
         return ADDING_FILM_TITLE
     if proposal.intent is IntentKind.ADD_PURCHASE:
         context.user_data.update({"purchase_title": args.get("title"), "purchase_link": args.get("link") or "",
                                   "purchase_price": args.get("price"), "purchase_priority": args.get("priority") or ""})
-        await query.edit_message_text("Изменение через обычную форму. Отправь название покупки:")
+        await _safe_query_edit(query, "Изменение через обычную форму. Отправь название покупки:")
         return ADDING_PURCHASE_TITLE
     if proposal.intent is IntentKind.ADD_PERSONAL_CALENDAR_EVENT:
         profile = get_allowed_profile(update) or {}
         context.user_data["calendar_owner"] = profile.get("wishlist_owner")
-        await query.edit_message_text("Изменение через обычную форму. Отправь название события:")
+        await _safe_query_edit(query, "Изменение через обычную форму. Отправь название события:")
         return ADDING_CALENDAR_EVENT_TITLE
-    await query.edit_message_text("Изменение через обычную форму. Отправь название события:")
+    await _safe_query_edit(query, "Изменение через обычную форму. Отправь название события:")
     return ADDING_EVENT_TITLE
