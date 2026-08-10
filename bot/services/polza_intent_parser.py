@@ -15,39 +15,37 @@ from bot.services.nl_intent_decoder import INTENT_JSON_SCHEMA, decode_provider_e
 logger = logging.getLogger(__name__)
 POLZA_CHAT_COMPLETIONS_URL = "https://polza.ai/api/v1/chat/completions"
 
-SYSTEM_PROMPT = """Ты — классификатор и извлекатель аргументов команд Telegram-бота. Верни только JSON по заданной схеме.
+SYSTEM_PROMPT = """Классифицируй русскую команду Telegram-бота и верни только строгий JSON заданной ветки schema.
 
-Поддержанные добавления:
-- add_personal_calendar_event — добавить/запланировать/записать событие в личный календарь пользователя;
-- add_afisha_event — добавить событие в общую афишу;
-- add_purchase — добавить вещь в покупки;
-- add_movie_or_tv — добавить фильм или сериал в список.
-Выбирай поддержанный intent по ясно выраженному действию, даже при разговорной фразе, ошибках склонения, другом порядке слов, без пунктуации и с неполными аргументами. Отсутствие даты, времени или другого обязательного значения НЕ означает unsupported: верни nullable поля как null, чтобы бот запросил уточнение.
+Intents: add_personal_calendar_event/add_afisha_event/add_purchase/add_movie_or_tv; update/delete_purchase, _film, _calendar_event, _afisha_event; read-only query_purchases/query_films/query_calendar/query_afisha; unsupported; no_action. Различай add, update, delete и query как ровно одно действие. Терпи разговорную грамматику, склонения, порядок слов и отсутствие пунктуации. Недостающие значения = null, а не unsupported/no_action. Для update заполняй только явно изменяемые поля; target — название, не ID. Purchase statuses planned/bought; film want/watched.
 
-Для личного календаря фразы «в календарь», «в мой календарь», «мне в календарь» без явно названного другого владельца означают owner=current_user. Только явная просьба изменить личный календарь другого человека — unsupported с category=other_user_calendar. Для дат дословно сохраняй выражение пользователя в date_expression (например, «17.08», «17 августа», «завтра», «в пятницу»); не преобразуй его в ISO и не отвергай intent из-за неполной даты. Аналогично сохраняй выражение времени.
-Для фильма/сериала верни только query и не придумывай метаданные. Для add_purchase верни title, числовой price в рублях (например, «35 тысяч» = 35000), priority, link, comment и buyer.
+Личный календарь без явно другого владельца: owner=current_user. Явное изменение чужого календаря: unsupported/other_user_calendar. Query calendar также только current_user и без owner/id; Афиша общая. Отсутствие даты, времени НЕ означает unsupported. Даты/время сохраняй компактно и дословно в *_expression («17.08», «завтра», «в пятницу»), не преобразуй его в ISO. Для фильма/TV извлекай только query. Цена покупки — число рублей («35 тысяч» = 35000).
 
-Также поддержаны update/delete_purchase, update/delete_film, update/delete_calendar_event, update/delete_afisha_event. Отличай изменение и удаление от добавления. Для update/delete верни только human-readable target, никогда не ID. В update заполняй только явно запрошенные изменения, остальные nullable поля — null; не подставляй существующие значения. Статусы: purchase planned/bought, film want/watched. Удаление существующей сущности — соответствующий delete intent, не unsupported.
+Query defaults: purchases status=planned priority=any buyer=any, operations list/count/sum; films status=want media_type=any genre=null, operations list/count/random (сериалы=tv, фильмы=movie); calendar/afisha operations list/count/next, target только при поиске названия, date_from/date_to повторяют исходный диапазон либо null.
 
-Read-only вопросы классифицируй как query_purchases, query_films, query_calendar или query_afisha. Это ровно одно действие, без proposal. Для покупок по умолчанию status=planned, priority=any, buyer=any; операции list/count/sum. Для фильмов по умолчанию status=want, media_type=any, genre=null; операции list/count/random. «Сериалы» означает media_type=tv, «фильмы» — movie. Для calendar/afisha операции list/count/next; target заполняй только для поиска по названию. date_from/date_to содержат одно и то же исходное выражение диапазона пользователя (например «завтра», «на выходных», «в августе»), либо null. Личный calendar всегда относится только к current_user: не возвращай owner или user id. Афиша общая.
+unsupported — только команда вне доменов, destructive/bulk или чужой календарь. no_action используй только для текста без команды. Все поля выбранной ветки обязательны; необязательные значения null. Не объясняй ответ и не добавляй поля.
 
-unsupported используй узко: только для ясно выраженной выполнимой команды вне перечисленных возможностей, запрещённой destructive/bulk операции, неподдержанного домена или явного изменения чужого календаря. Не используй unsupported из-за плохой грамматики или недостающих полей. no_action используй только для текста без команды: приветствия, реплики и разговор («привет», «мы устали», «прикольно»). Частично заполненная поддержанная команда — не no_action.
-
-Примеры границ:
+Граничные примеры:
 «добавь стоматолог в календарь 17.08» -> add_personal_calendar_event, title="стоматолог", date_expression="17.08", owner="current_user";
 «добавь кофемашину в покупки за 35 тысяч» -> add_purchase;
 «добавь Во все тяжкие в фильмы» -> add_movie_or_tv;
 «добавь концерт в афишу 20 сентября» -> add_afisha_event;
-«удали концерт из афиши» -> delete_afisha_event;
-«перенеси стоматолога на завтра» -> update_calendar_event;
+«удали концерт из афиши» -> delete_afisha_event; «перенеси стоматолога на завтра» -> update_calendar_event;
 «добавь Саше в календарь встречу» (если Саша не текущий пользователь) -> unsupported/other_user_calendar.
-«что у нас в покупках?» -> query_purchases status=planned;
-«сколько стоят покупки в планах?» -> query_purchases operation=sum;
-«какие комедии мы ещё не смотрели?» -> query_films status=want genre="Комедия";
+«что у нас в покупках?» -> query_purchases status=planned; «какие комедии мы ещё не смотрели?» -> query_films status=want genre="Комедия";
 «что у меня завтра?» -> query_calendar date_from=date_to="завтра";
-«что в афише в августе?» -> query_afisha date_from=date_to="в августе".
+«что в афише в августе?» -> query_afisha date_from=date_to="в августе"."""
 
-Не объясняй ответ и не добавляй поля. Верни ровно ветку выбранного intent; все её аргументы должны присутствовать, необязательные значения — null."""
+
+def payload_diagnostics() -> dict[str, int]:
+    schema = json.dumps(INTENT_JSON_SCHEMA, ensure_ascii=False, separators=(",", ":"))
+    static = json.dumps({"messages": [{"role": "system", "content": SYSTEM_PROMPT}],
+                         "response_format": {"type": "json_schema", "json_schema": INTENT_JSON_SCHEMA}},
+                        ensure_ascii=False, separators=(",", ":"))
+    return {"prompt_chars": len(SYSTEM_PROMPT), "prompt_bytes": len(SYSTEM_PROMPT.encode()),
+            "schema_bytes": len(schema.encode()), "static_payload_bytes": len(static.encode()),
+            "intent_branches": len(INTENT_JSON_SCHEMA["schema"]["oneOf"]),
+            "few_shot_examples": SYSTEM_PROMPT.partition("Граничные примеры:")[2].count("->")}
 
 
 class PolzaIntentParser:
@@ -58,6 +56,10 @@ class PolzaIntentParser:
         self._model = model
         self._timeout = timeout_seconds
         self._client = client
+        metrics = payload_diagnostics()
+        logger.info("NL parser configured prompt_bytes=%s schema_bytes=%s static_payload_bytes=%s intent_branches=%s few_shots=%s",
+                    metrics["prompt_bytes"], metrics["schema_bytes"], metrics["static_payload_bytes"],
+                    metrics["intent_branches"], metrics["few_shot_examples"])
 
     async def parse(self, text: str, context: IntentContext) -> ParsedIntent:
         payload: dict[str, Any] = {
@@ -74,6 +76,7 @@ class PolzaIntentParser:
             "response_format": {"type": "json_schema", "json_schema": INTENT_JSON_SCHEMA},
         }
         started = time.monotonic()
+        logger.info("NL parse started outcome=started")
         try:
             if self._client is None:
                 async with httpx.AsyncClient(timeout=self._timeout) as client:
@@ -81,30 +84,34 @@ class PolzaIntentParser:
             else:
                 response = await self._client.post(POLZA_CHAT_COMPLETIONS_URL, headers=self._headers(), json=payload, timeout=self._timeout)
         except httpx.TimeoutException as exc:
+            logger.warning("NL parse timeout outcome=timeout latency_ms=%s", round((time.monotonic() - started) * 1000))
             raise IntentParserTimeout("provider_timeout") from exc
         except httpx.HTTPError as exc:
+            logger.warning("NL parse provider_error outcome=transport_error latency_ms=%s", round((time.monotonic() - started) * 1000))
             raise IntentParserUnavailable("provider_unavailable") from exc
         latency_ms = round((time.monotonic() - started) * 1000)
         if response.status_code >= 400:
-            logger.warning("Polza intent request failed status=%s latency_ms=%s", response.status_code, latency_ms)
+            logger.warning("NL parse provider_error outcome=http_%s latency_ms=%s", response.status_code, latency_ms)
             raise IntentParserUnavailable(f"provider_status_{response.status_code}")
         try:
             body = response.json()
             content = body["choices"][0]["message"]["content"]
         except (ValueError, KeyError, IndexError, TypeError) as exc:
+            logger.warning("NL parse validation_error outcome=invalid_envelope latency_ms=%s", latency_ms)
             raise IntentParserInvalidOutput("invalid_provider_response") from exc
         if not isinstance(content, str):
+            logger.warning("NL parse validation_error outcome=invalid_content latency_ms=%s", latency_ms)
             raise IntentParserInvalidOutput("invalid_provider_content")
         try:
             result = decode_provider_envelope(content)
         except IntentParserInvalidOutput as exc:
             intent, argument_keys = _response_shape(content)
             logger.warning(
-                "Polza intent decode failed reason=%s intent=%s argument_keys=%s latency_ms=%s",
+                "NL parse validation_error outcome=decode_error reason=%s intent=%s argument_keys=%s latency_ms=%s",
                 str(exc) or type(exc).__name__, intent, argument_keys, latency_ms,
             )
             raise
-        logger.info("Polza intent parsed intent=%s latency_ms=%s", result.intent.value, latency_ms)
+        logger.info("NL parse success outcome=success intent=%s latency_ms=%s", result.intent.value, latency_ms)
         return result
 
     def _headers(self) -> dict[str, str]:

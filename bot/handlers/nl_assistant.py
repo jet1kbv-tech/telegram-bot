@@ -70,6 +70,33 @@ _QUERY_KINDS = {IntentKind.QUERY_PURCHASES, IntentKind.QUERY_FILMS, IntentKind.Q
 _QUERY_PAGE_SIZE = 10
 
 
+class _WaitingResponse:
+    """Resolve one progress message, falling back to a normal reply on Telegram errors."""
+
+    def __init__(self, source: Any, waiting: Any | None) -> None:
+        self._source, self._waiting, self.resolved = source, waiting, False
+
+    async def reply_text(self, text: str, **kwargs: Any) -> Any:
+        if self._waiting is not None and not self.resolved:
+            try:
+                result = await self._waiting.edit_text(text, **kwargs)
+                self.resolved = True
+                return result
+            except Exception:  # Telegram/network failures must not strand the progress UI.
+                logger.warning("NL waiting message edit failed; using reply fallback")
+        result = await self._source.reply_text(text, **kwargs)
+        self.resolved = True
+        return result
+
+    async def discard(self) -> None:
+        if self._waiting is not None and not self.resolved:
+            try:
+                await self._waiting.delete()
+            except Exception:
+                logger.warning("NL waiting message delete failed")
+        self.resolved = True
+
+
 def _menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[InlineKeyboardButton("🏠 В меню", callback_data="menu:main")]])
 
@@ -185,6 +212,12 @@ async def nl_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if message is None:
         return _idle_state(context)
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+    waiting = None
+    try:
+        waiting = await message.reply_text("⏳ Разбираю команду…")
+    except Exception:
+        logger.warning("NL waiting message send failed; continuing without progress message")
+    response = _WaitingResponse(message, waiting)
     now = zoned_now(BOT_TIMEZONE)
     try:
         parsed = await _parser.parse(message.text or "", IntentContext(
@@ -192,25 +225,27 @@ async def nl_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             active_section=context.user_data.get("active_section"),
         ))
         if parsed.intent is IntentKind.NO_ACTION:
+            await response.discard()
             return _idle_state(context)
         if parsed.intent is IntentKind.UNSUPPORTED:
-            await message.reply_text("Я пока умею добавлять фильмы, покупки и события в твой календарь или Афишу.", reply_markup=_menu_keyboard())
+            await response.reply_text("Я пока умею добавлять фильмы, покупки и события в твой календарь или Афишу.", reply_markup=_menu_keyboard())
             return _idle_state(context)
         arguments, missing = _prepare(parsed.intent, parsed.arguments, now)
         if parsed.intent in _QUERY_KINDS:
-            await _answer_query(message, context, parsed.intent, arguments, update, now)
+            await _answer_query(response, context, parsed.intent, arguments, update, now)
             return _idle_state(context)
         if parsed.intent in _MUTATION_KINDS:
             update_fields = [key for key, value in arguments.items() if key != "target" and value is not None]
             if parsed.intent.name.startswith("UPDATE_") and not update_fields and not missing:
-                await message.reply_text("Что именно нужно изменить? Сформулируй команду ещё раз.", reply_markup=_menu_keyboard())
+                await response.reply_text("Что именно нужно изменить? Сформулируй команду ещё раз.", reply_markup=_menu_keyboard())
                 return _idle_state(context)
             profile = get_allowed_profile(update) or {}
             owner = str(profile.get("wishlist_owner") or "")
-            candidates = resolve_entities(__import__("bot.storage", fromlist=["storage"]).storage.load(), parsed.intent, arguments["target"], owner=owner)
+            candidates = resolve_entities(storage.load(), parsed.intent, arguments["target"], owner=owner,
+                                           include_past=False, now=now, timezone=BOT_TIMEZONE)
             logger.info("NL entity resolution intent=%s status=%s candidate_count=%s", parsed.intent.value, "found" if candidates else "missing", len(candidates))
             if not candidates:
-                await message.reply_text("Не нашёл подходящий объект. Проверь название и попробуй ещё раз.", reply_markup=_menu_keyboard())
+                await response.reply_text("Не нашёл подходящий объект. Проверь название и попробуй ещё раз.", reply_markup=_menu_keyboard())
                 return _idle_state(context)
             proposal = create_proposal(context.user_data, intent=parsed.intent, arguments=arguments,
                                        actor_key=get_username(update), now=now, ttl_seconds=AI_PROPOSAL_TTL_SECONDS,
@@ -220,26 +255,26 @@ async def nl_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 lines = ["Нашёл несколько вариантов:", ""] + [f"○ {_candidate_label(c)}" for c in candidates] + ["", "Какой выбрать?"]
                 buttons = [[InlineKeyboardButton(str(index + 1), callback_data=f"ai:r:{proposal.proposal_id}:{index}")] for index in range(len(candidates))]
                 buttons.append([InlineKeyboardButton("❌ Отмена", callback_data=f"ai:x:{proposal.proposal_id}")])
-                await message.reply_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(buttons))
+                await response.reply_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(buttons))
                 return _idle_state(context)
             _select_candidate(proposal, candidates[0], get_user_name(update))
             if not proposal.arguments["_changes"] and parsed.intent.name.startswith("UPDATE_") and not missing:
                 discard_proposal(context.user_data, proposal)
-                await message.reply_text("Это значение уже установлено.", reply_markup=_menu_keyboard())
+                await response.reply_text("Это значение уже установлено.", reply_markup=_menu_keyboard())
                 return _idle_state(context)
             if missing:
-                await message.reply_text(_clarification_prompt(missing[0]))
+                await response.reply_text(_clarification_prompt(missing[0]))
                 return AI_CLARIFYING
-            await message.reply_text(_preview(proposal), reply_markup=_mutation_keyboard(proposal))
+            await response.reply_text(_preview(proposal), reply_markup=_mutation_keyboard(proposal))
             return _idle_state(context)
         if not missing:
             _validate_prepared(parsed.intent, arguments)
     except IntentParserTimeout:
-        await message.reply_text("Не удалось разобрать команду вовремя. Попробуй ещё раз или открой меню.", reply_markup=_menu_keyboard())
+        await response.reply_text("Не удалось разобрать команду вовремя. Попробуй ещё раз или открой меню.", reply_markup=_menu_keyboard())
         return _idle_state(context)
     except (IntentParserError, ValueError, DateExpressionError):
         logger.info("NL intent parsing or validation failed", exc_info=True)
-        await message.reply_text("Не понял, что именно нужно сделать. Попробуй ещё раз.", reply_markup=_menu_keyboard())
+        await response.reply_text("Не понял, что именно нужно сделать. Попробуй ещё раз.", reply_markup=_menu_keyboard())
         return _idle_state(context)
 
     proposal = create_proposal(context.user_data, intent=parsed.intent, arguments=arguments,
@@ -247,10 +282,10 @@ async def nl_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                                missing_fields=missing)
     logger.info("NL proposal created intent=%s missing=%s", proposal.intent.value, len(missing))
     if missing:
-        await message.reply_text(_clarification_prompt(missing[0]))
+        await response.reply_text(_clarification_prompt(missing[0]))
         return AI_CLARIFYING
     keyboard = _mutation_keyboard(proposal) if proposal.intent in _MUTATION_KINDS else _keyboard(proposal.proposal_id)
-    await message.reply_text(_preview(proposal), reply_markup=keyboard)
+    await response.reply_text(_preview(proposal), reply_markup=keyboard)
     return _idle_state(context)
 
 

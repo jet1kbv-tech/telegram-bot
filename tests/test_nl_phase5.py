@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 import pytest
 
 from bot.services.actions import existing
@@ -42,6 +44,27 @@ def test_ambiguity_and_calendar_owner_isolation():
     data["calendars"]["vova"].append({**data["calendars"]["vova"][0], "id": "c3", "date": "2026-08-19"})
     assert len(resolve_entities(data, IntentKind.DELETE_CALENDAR_EVENT, "стоматолог", owner="vova")) == 2
     assert {candidate.item_id for candidate in resolve_entities(data, IntentKind.DELETE_CALENDAR_EVENT, "стоматолог", owner="sasha")} == {"c2"}
+
+
+def test_calendar_mutation_resolution_filters_past_and_sorts():
+    now = datetime(2026, 8, 10, 12, 0, tzinfo=timezone.utc)
+    event = {"owner": "vova", "title": "Стоматолог", "end_time": "", "source": "manual"}
+    rows = [
+        {**event, "id": "months", "date": "2026-02-01", "start_time": "10:00"},
+        {**event, "id": "yesterday", "date": "2026-08-09", "start_time": "10:00"},
+        {**event, "id": "today-past", "date": "2026-08-10", "start_time": "11:59"},
+        {**event, "id": "late", "date": "2026-09-21", "start_time": "12:00"},
+        {**event, "id": "today-future", "date": "2026-08-10", "start_time": "12:01"},
+        {**event, "id": "all-day", "date": "2026-08-10", "start_time": ""},
+        {**event, "id": "early", "date": "2026-08-15", "start_time": "16:30"},
+        {**event, "id": "projection", "date": "2026-08-11", "start_time": "10:00", "source": "afisha"},
+    ]
+    data = {"calendars": {"vova": rows, "sasha": [{**event, "id": "other", "date": "2026-08-11", "start_time": "09:00"}]}}
+    current = resolve_entities(data, IntentKind.DELETE_CALENDAR_EVENT, "стоматолог", owner="vova", now=now, timezone="UTC")
+    assert [item.item_id for item in current] == ["all-day", "today-future", "early", "late"]
+    historical = resolve_entities(data, IntentKind.DELETE_CALENDAR_EVENT, "стоматолог", owner="vova", include_past=True, now=now, timezone="UTC")
+    assert {item.item_id for item in historical} >= {"months", "yesterday", "today-past"}
+    assert "projection" not in {item.item_id for item in historical}
 
 
 @pytest.mark.parametrize(("changes", "expected_bucket"), [({"priority": "high"}, "planned"), ({"price": 40000}, "planned"), ({"status": "bought"}, "bought")])

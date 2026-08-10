@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from bot.handlers import nl_assistant
-from bot.services.nl_intent import IntentKind, ParsedIntent
+from bot.services.nl_intent import IntentKind, IntentParserTimeout, IntentParserUnavailable, ParsedIntent
 from bot.states import ADDING_CALENDAR_EVENT_TITLE, ADDING_EVENT_TITLE, ADDING_PURCHASE_TITLE, AI_CLARIFYING, MENU, SECTION
 
 
@@ -19,12 +19,21 @@ class FakeParser:
         return self.result
 
 
+class FailingParser:
+    def __init__(self, error):
+        self.error = error
+
+    async def parse(self, text, context):
+        raise self.error
+
+
 def run(coro):
     return asyncio.run(coro)
 
 
 def update(*, text="command", callback_data=None):
-    message = SimpleNamespace(text=text, reply_text=AsyncMock())
+    waiting = SimpleNamespace(edit_text=AsyncMock(), delete=AsyncMock())
+    message = SimpleNamespace(text=text, reply_text=AsyncMock(return_value=waiting), waiting=waiting)
     query = None
     if callback_data:
         query = SimpleNamespace(data=callback_data, answer=AsyncMock(), edit_message_text=AsyncMock(), message=message)
@@ -62,7 +71,7 @@ def test_purchase_has_preview_and_no_mutation_before_confirmation(monkeypatch):
     upd, ctx = update(), context()
     assert run(nl_assistant.nl_text_handler(upd, ctx)) == MENU
     create.assert_not_called()
-    preview = upd.effective_message.reply_text.await_args.args[0]
+    preview = upd.effective_message.waiting.edit_text.await_args.args[0]
     assert preview.startswith("🛍 Новая покупка")
     assert "Название: Кофемашина" in preview and "Стоимость: 35 000 ₽" in preview
     assert "Приоритет: Высокий" in preview and "Куплю я" in preview
@@ -70,6 +79,25 @@ def test_purchase_has_preview_and_no_mutation_before_confirmation(monkeypatch):
     cb = update(callback_data=f"ai:c:{proposal_id}")
     assert run(nl_assistant.nl_callback_router(cb, ctx)) == SECTION
     create.assert_called_once()
+
+
+@pytest.mark.parametrize(("error", "expected"), [
+    (IntentParserTimeout("timeout"), "вовремя"),
+    (IntentParserUnavailable("down"), "Не понял"),
+])
+def test_controlled_parser_failure_replaces_waiting_message(error, expected):
+    nl_assistant._parser = FailingParser(error)
+    upd = update(text="private command")
+    run(nl_assistant.nl_text_handler(upd, context()))
+    assert upd.effective_message.reply_text.await_args_list[0].args[0] == "⏳ Разбираю команду…"
+    assert expected in upd.effective_message.waiting.edit_text.await_args.args[0]
+
+
+def test_no_action_removes_waiting_message():
+    nl_assistant._parser = FakeParser(ParsedIntent(IntentKind.NO_ACTION, {}))
+    upd = update(text="привет")
+    run(nl_assistant.nl_text_handler(upd, context()))
+    upd.effective_message.waiting.delete.assert_awaited_once()
 
 
 def test_cancel_and_double_confirm_are_idempotent(monkeypatch):
@@ -98,7 +126,7 @@ def test_calendar_clarification_continues_same_proposal(monkeypatch):
     ctx, first = context(), update()
     assert run(nl_assistant.nl_text_handler(first, ctx)) == AI_CLARIFYING
     proposal_id = ctx.user_data["ai_active_proposal_id"]
-    assert first.effective_message.reply_text.await_args.args[0] == "На какую дату?"
+    assert first.effective_message.waiting.edit_text.await_args.args[0] == "На какую дату?"
     answer = update(text="завтра")
     assert run(nl_assistant.nl_clarification_handler(answer, ctx)) == MENU
     assert ctx.user_data["ai_active_proposal_id"] == proposal_id
