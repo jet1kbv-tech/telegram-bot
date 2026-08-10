@@ -45,7 +45,7 @@ def payload_diagnostics() -> dict[str, int]:
                         ensure_ascii=False, separators=(",", ":"))
     return {"prompt_chars": len(SYSTEM_PROMPT), "prompt_bytes": len(SYSTEM_PROMPT.encode()),
             "schema_bytes": len(schema.encode()), "static_payload_bytes": len(static.encode()),
-            "intent_branches": len(INTENT_JSON_SCHEMA["schema"]["properties"]["arguments"]["anyOf"]),
+            "intent_branches": len(INTENT_JSON_SCHEMA["schema"]["properties"]["intent"]["enum"]),
             "few_shot_examples": SYSTEM_PROMPT.partition("Граничные примеры:")[2].count("->")}
 
 

@@ -153,10 +153,27 @@ _BRANCH_PROPERTIES: dict[IntentKind, dict[str, Any]] = {
     IntentKind.UNSUPPORTED: {"category": {"type": "string", "enum": sorted(_UNSUPPORTED)}},
 }
 
-# GPT-4o structured outputs require the root schema itself to be an object; the
-# former root-level oneOf was rejected before generation.  Keep discrimination
-# strict at the authoritative decoder boundary while presenting the provider a
-# supported root object with nested argument alternatives.
+# A nested discriminated union could bind intent to arguments, but would require
+# changing the response envelope (for example, putting both values inside an
+# anyOf branch).  Keeping the existing envelope with independent properties
+# cannot establish that relationship.  Instead, GPT-4o sees one strict superset
+# object.  Every field is nullable because it is irrelevant to at least one
+# intent; the adapter below rejects non-null data outside the selected intent.
+def _nullable_provider_property(name: str) -> dict[str, Any]:
+    schemas = [properties[name] for properties in _BRANCH_PROPERTIES.values() if name in properties]
+    result: dict[str, Any] = {"type": ["integer", "null"] if name == "price" else ["string", "null"]}
+    if name == "price":
+        result.update(minimum=0, maximum=1_000_000_000)
+    enums = {item for schema in schemas for item in schema.get("enum", [])}
+    if enums:
+        result["enum"] = sorted((item for item in enums if item is not None), key=str) + [None]
+    return result
+
+
+_PROVIDER_FIELD_NAMES = sorted({name for properties in _BRANCH_PROPERTIES.values() for name in properties})
+_PROVIDER_PROPERTIES = {name: _nullable_provider_property(name) for name in _PROVIDER_FIELD_NAMES}
+
+
 INTENT_JSON_SCHEMA: dict[str, Any] = {
     "name": "telegram_bot_intent",
     "strict": True,
@@ -166,11 +183,46 @@ INTENT_JSON_SCHEMA: dict[str, Any] = {
         "required": ["intent", "arguments"],
         "properties": {
             "intent": {"type": "string", "enum": [kind.value for kind in IntentKind]},
-            "arguments": {"anyOf": [_arguments_schema(_BRANCH_PROPERTIES[kind]) for kind in IntentKind]},
+            "arguments": _arguments_schema(_PROVIDER_PROPERTIES),
         },
     },
 }
 
 
+def normalize_provider_envelope(raw: str | dict[str, Any]) -> dict[str, Any]:
+    """Validate the provider superset and return the exact canonical envelope."""
+    try:
+        value = json.loads(raw) if isinstance(raw, str) else raw
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise IntentParserInvalidOutput("invalid_json") from exc
+    if not isinstance(value, dict) or set(value) != {"intent", "arguments"}:
+        raise IntentParserInvalidOutput("invalid_envelope")
+    intent, supplied = value["intent"], value["arguments"]
+    if not isinstance(intent, str) or not isinstance(supplied, dict):
+        raise IntentParserInvalidOutput("invalid_envelope")
+    try:
+        kind = IntentKind(intent)
+    except ValueError as exc:
+        raise IntentParserInvalidOutput("unsupported_intent") from exc
+    if set(supplied) != set(_PROVIDER_FIELD_NAMES):
+        raise IntentParserInvalidOutput("invalid_provider_fields")
+
+    allowed = _FIELDS[kind]
+    for name, item in supplied.items():
+        if name not in allowed and item is not None:
+            raise IntentParserInvalidOutput("irrelevant_non_null_field")
+        schema = _PROVIDER_PROPERTIES[name]
+        valid_type = item is None or (name == "price" and isinstance(item, int) and not isinstance(item, bool)) or (
+            name != "price" and isinstance(item, str)
+        )
+        if not valid_type:
+            raise IntentParserInvalidOutput(f"invalid_provider_{name}")
+        if "enum" in schema and item not in schema["enum"]:
+            raise IntentParserInvalidOutput(f"invalid_provider_{name}")
+        if name == "price" and item is not None and not 0 <= item <= 1_000_000_000:
+            raise IntentParserInvalidOutput("invalid_provider_price")
+    return {"intent": intent, "arguments": {name: supplied[name] for name in allowed}}
+
+
 def decode_provider_envelope(raw: str) -> ParsedIntent:
-    return decode_intent(raw)
+    return decode_intent(normalize_provider_envelope(raw))
