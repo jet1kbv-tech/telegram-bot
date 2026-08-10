@@ -9,7 +9,9 @@ import logging
 from bot.services.nl_intent import (
     IntentContext, IntentKind, IntentParserInvalidOutput, IntentParserTimeout, IntentParserUnavailable,
 )
-from bot.services.polza_intent_parser import POLZA_CHAT_COMPLETIONS_URL, SYSTEM_PROMPT, PolzaIntentParser
+from bot.services.polza_intent_parser import (
+    POLZA_CHAT_COMPLETIONS_URL, SYSTEM_PROMPT, PolzaIntentParser, provider_priority_diagnostic,
+)
 from bot.services.nl_intent_decoder import (
     INTENT_JSON_SCHEMA, decode_intent, decode_provider_envelope, normalize_provider_envelope,
     provider_rejection_diagnostics,
@@ -256,8 +258,69 @@ def test_decode_failure_logs_only_safe_response_shape(caplog):
     run(client.aclose())
     log = caplog.text
     assert "reason=invalid_priority" in log and "intent=add_purchase" in log
+    assert "provider_priority=urgent" in log
     assert "conflicting_fields=[]" in log
     assert secret_value not in log and "super-secret-key" not in log and "private" not in log
+
+
+@pytest.mark.parametrize("priority", ["any", "urgent", "high"])
+def test_priority_rejection_logs_safe_provider_token(priority, caplog):
+    if priority == "urgent":
+        payload = provider_envelope("add_purchase", {
+            **CANONICAL_BY_INTENT["add_purchase"], "priority": priority,
+        })
+    else:
+        payload = provider_envelope("query_purchases", {
+            **CANONICAL_BY_INTENT["query_purchases"], "status": "invalid", "priority": priority,
+        })
+    content = json.dumps(payload)
+    client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: response_content(content)))
+    with caplog.at_level(logging.WARNING), pytest.raises(IntentParserInvalidOutput):
+        run(PolzaIntentParser(api_key="secret", model="configured/model", client=client).parse("private", context()))
+    run(client.aclose())
+    assert f"provider_priority={priority}" in caplog.text
+
+
+def test_unsafe_priority_rejection_logs_unknown_and_never_raw_content(caplog):
+    unsafe = "urgent priority https://private.invalid/token?credential=hunter2"
+    content = json.dumps(provider_envelope("add_purchase", {
+        **CANONICAL_BY_INTENT["add_purchase"], "title": "private purchase title", "priority": unsafe,
+    }))
+    client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: response_content(content)))
+    with caplog.at_level(logging.WARNING), pytest.raises(IntentParserInvalidOutput):
+        run(PolzaIntentParser(api_key="super-secret-key", model="configured/model", client=client).parse("private command", context()))
+    run(client.aclose())
+    assert "provider_priority=unknown" in caplog.text
+    assert unsafe not in caplog.text
+    assert "private purchase title" not in caplog.text
+    assert "super-secret-key" not in caplog.text and "private command" not in caplog.text
+
+
+@pytest.mark.parametrize(("content", "category"), [
+    (json.dumps(provider_envelope("query_purchases", {
+        "status": "planned", "buyer": "any", "operation": "list",
+    })), "missing"),
+    (json.dumps({
+        "intent": "add_purchase", "arguments": [{"name": "priority", "value": None}],
+    }), "null"),
+])
+def test_missing_and_null_provider_priority_log_fixed_safe_categories(content, category, caplog):
+    client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: response_content(content)))
+    with caplog.at_level(logging.WARNING), pytest.raises(IntentParserInvalidOutput):
+        run(PolzaIntentParser(api_key="secret", model="configured/model", client=client).parse("private", context()))
+    run(client.aclose())
+
+    assert f"provider_priority={category}" in caplog.text
+
+
+def test_priority_diagnostic_categories_are_deterministic():
+    missing = json.dumps(provider_envelope("query_purchases", {
+        "status": "planned", "buyer": "any", "operation": "list",
+    }))
+    null = json.dumps({"intent": "add_purchase", "arguments": [{"name": "priority", "value": None}]})
+
+    assert provider_priority_diagnostic(missing, "invalid_priority") == "missing"
+    assert provider_priority_diagnostic(null, "invalid_argument_entry") == "null"
 
 
 @pytest.mark.parametrize("status", [401, 403, 429, 500, 503])
