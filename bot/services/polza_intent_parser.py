@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import logging
 import json
+import logging
+import re
 import time
 from typing import Any
 
@@ -44,7 +45,7 @@ def payload_diagnostics() -> dict[str, int]:
                         ensure_ascii=False, separators=(",", ":"))
     return {"prompt_chars": len(SYSTEM_PROMPT), "prompt_bytes": len(SYSTEM_PROMPT.encode()),
             "schema_bytes": len(schema.encode()), "static_payload_bytes": len(static.encode()),
-            "intent_branches": len(INTENT_JSON_SCHEMA["schema"]["oneOf"]),
+            "intent_branches": len(INTENT_JSON_SCHEMA["schema"]["properties"]["arguments"]["anyOf"]),
             "few_shot_examples": SYSTEM_PROMPT.partition("Граничные примеры:")[2].count("->")}
 
 
@@ -91,7 +92,11 @@ class PolzaIntentParser:
             raise IntentParserUnavailable("provider_unavailable") from exc
         latency_ms = round((time.monotonic() - started) * 1000)
         if response.status_code >= 400:
-            logger.warning("NL parse provider_error outcome=http_%s latency_ms=%s", response.status_code, latency_ms)
+            provider_type, provider_code, reason = _safe_provider_error(response)
+            logger.warning(
+                "NL parse provider_error outcome=http_%s provider_type=%s provider_code=%s reason=%s latency_ms=%s",
+                response.status_code, provider_type, provider_code, reason, latency_ms,
+            )
             raise IntentParserUnavailable(f"provider_status_{response.status_code}")
         try:
             body = response.json()
@@ -129,3 +134,35 @@ def _response_shape(content: str) -> tuple[str, list[str]]:
     intent = value.get("intent")
     arguments = value.get("arguments")
     return (intent if isinstance(intent, str) else "<invalid>", sorted(arguments) if isinstance(arguments, dict) else [])
+
+
+_SAFE_ERROR_TOKEN = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
+_SCHEMA_KEYWORDS = ("oneOf", "anyOf", "additionalProperties", "required", "response_format", "json_schema")
+
+
+def _safe_provider_error(response: httpx.Response) -> tuple[str, str, str]:
+    """Extract only bounded identifiers and a normalized reason, never provider text."""
+    try:
+        body = response.json()
+    except (ValueError, TypeError):
+        return "unknown", "unknown", "unclassified"
+    error = body.get("error") if isinstance(body, dict) else None
+    if not isinstance(error, dict):
+        return "unknown", "unknown", "unclassified"
+
+    def token(name: str) -> str:
+        value = error.get(name)
+        return value if isinstance(value, str) and _SAFE_ERROR_TOKEN.fullmatch(value) else "unknown"
+
+    message = error.get("message")
+    if not isinstance(message, str) or len(message) > 4000:
+        reason = "unclassified"
+    elif any(keyword.lower() in message.lower() for keyword in _SCHEMA_KEYWORDS):
+        reason = "invalid_structured_output_schema"
+    elif "model" in message.lower():
+        reason = "model_restriction"
+    elif "response format" in message.lower():
+        reason = "invalid_response_format"
+    else:
+        reason = "provider_rejected_request"
+    return token("type"), token("code"), reason

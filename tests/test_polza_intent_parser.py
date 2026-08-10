@@ -33,7 +33,7 @@ def response_content(content):
     return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
 
 
-def test_polza_request_contract_and_model_is_unchanged():
+def test_polza_request_contract_uses_configured_model():
     seen = {}
     model = "deepseek/deepseek-v4-flash-0731"
 
@@ -200,13 +200,41 @@ def test_purchase_unknown_missing_and_wrong_typed_fields_remain_rejected(payload
 
 
 def test_schema_discriminates_every_intent_and_matches_decoder_contract():
-    branches = INTENT_JSON_SCHEMA["schema"]["oneOf"]
-    assert {branch["properties"]["intent"]["const"] for branch in branches} == {kind.value for kind in IntentKind}
-    purchase = next(branch for branch in branches if branch["properties"]["intent"]["const"] == "add_purchase")
-    assert set(purchase["properties"]["arguments"]["properties"]) == {
+    schema = INTENT_JSON_SCHEMA["schema"]
+    branches = schema["properties"]["arguments"]["anyOf"]
+    assert set(schema["properties"]["intent"]["enum"]) == {kind.value for kind in IntentKind}
+    assert len(branches) == len(IntentKind) == 18
+    purchase = next(branch for branch in branches if set(branch["properties"]) == {
+        "title", "price", "priority", "link", "comment", "buyer",
+    })
+    assert set(purchase["properties"]) == {
         "title", "price", "priority", "link", "comment", "buyer",
     }
     assert "price_text" not in json.dumps(INTENT_JSON_SCHEMA)
+
+
+def test_gpt4o_provider_schema_has_supported_root_and_no_discriminator_oneof_or_const():
+    """Regression for Polza/GPT-4o's rejection of the former root oneOf schema."""
+    schema = INTENT_JSON_SCHEMA["schema"]
+    serialized = json.dumps(schema, sort_keys=True)
+    assert schema["type"] == "object"
+    assert schema["additionalProperties"] is False
+    assert set(schema["required"]) == set(schema["properties"])
+    assert '"oneOf"' not in serialized
+    assert '"const"' not in serialized
+    for branch in schema["properties"]["arguments"]["anyOf"]:
+        assert branch["type"] == "object"
+        assert branch["additionalProperties"] is False
+        assert set(branch["required"]) == set(branch["properties"])
+
+
+def test_exact_production_response_format_matches_golden_file():
+    actual = json.dumps(
+        {"type": "json_schema", "json_schema": INTENT_JSON_SCHEMA},
+        ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    )
+    with open("tests/fixtures/polza_response_format.json", encoding="utf-8") as fixture:
+        assert actual == fixture.read().rstrip("\n")
 
 
 def test_decode_failure_logs_only_safe_response_shape(caplog):
@@ -231,6 +259,36 @@ def test_polza_http_failures_are_mapped(status):
     with pytest.raises(IntentParserUnavailable):
         run(PolzaIntentParser(api_key="secret", model="configured/model", client=client).parse("text", context()))
     run(client.aclose())
+
+
+def test_http_400_logs_only_safe_structured_diagnostics(caplog):
+    user_text = "delete dentist appointment private title"
+    secret = "polza-secret-key"
+    response = httpx.Response(400, json={"error": {
+        "type": "invalid_request_error", "code": "invalid_json_schema",
+        "message": "Invalid response_format json_schema: root oneOf is unsupported; " + user_text,
+    }})
+    client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: response))
+    with caplog.at_level(logging.WARNING), pytest.raises(IntentParserUnavailable):
+        run(PolzaIntentParser(api_key=secret, model="openai/gpt-4o-mini", client=client).parse(user_text, context()))
+    run(client.aclose())
+    assert "provider_type=invalid_request_error" in caplog.text
+    assert "provider_code=invalid_json_schema" in caplog.text
+    assert "reason=invalid_structured_output_schema" in caplog.text
+    assert user_text not in caplog.text and secret not in caplog.text
+
+
+def test_http_error_does_not_log_unsafe_type_code_or_arbitrary_body(caplog):
+    private = "private title and https://secret.invalid/link"
+    response = httpx.Response(400, json={"error": {
+        "type": private, "code": "bad code with spaces", "message": private,
+    }})
+    client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: response))
+    with caplog.at_level(logging.WARNING), pytest.raises(IntentParserUnavailable):
+        run(PolzaIntentParser(api_key="key", model="model", client=client).parse(private, context()))
+    run(client.aclose())
+    assert "provider_type=unknown provider_code=unknown reason=provider_rejected_request" in caplog.text
+    assert private not in caplog.text
 
 
 def test_polza_timeout_is_mapped():
