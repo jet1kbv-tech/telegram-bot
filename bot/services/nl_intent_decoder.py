@@ -259,7 +259,11 @@ def normalize_provider_envelope(raw: str | dict[str, Any]) -> dict[str, Any]:
     for name, default in _PROVIDER_TECHNICAL_DEFAULTS.get(kind, {}).items():
         if name not in supplied:
             arguments[name] = default
-    if "priority" in supplied and isinstance(supplied["priority"], str) and kind in {
+    if supplied.get("priority") == "null" and kind in {
+        IntentKind.ADD_PURCHASE, IntentKind.UPDATE_PURCHASE,
+    }:
+        arguments["priority"] = None
+    elif "priority" in supplied and isinstance(supplied["priority"], str) and kind in {
         IntentKind.ADD_PURCHASE, IntentKind.UPDATE_PURCHASE, IntentKind.QUERY_PURCHASES,
     }:
         priority = supplied["priority"].casefold()
