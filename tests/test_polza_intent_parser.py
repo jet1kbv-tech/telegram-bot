@@ -473,12 +473,18 @@ def test_query_calendar_unrecognized_or_ambiguous_operations_remain_rejected(ope
         decode_provider_envelope(json.dumps(payload))
 
 
-def test_query_calendar_missing_operation_remains_rejected():
-    payload = provider_envelope("query_calendar", {
-        "date_from": "на этой неделе", "date_to": "на этой неделе", "target": None,
-    })
-    with pytest.raises(IntentParserInvalidOutput, match="invalid_operation"):
-        decode_provider_envelope(json.dumps(payload))
+@pytest.mark.parametrize("intent", [
+    "query_purchases", "query_films", "query_calendar", "query_afisha",
+])
+def test_query_missing_operation_uses_existing_list_default(intent):
+    arguments = {**CANONICAL_BY_INTENT[intent]}
+    arguments.pop("operation")
+
+    result = decode_provider_envelope(json.dumps(provider_envelope(intent, arguments)))
+
+    assert result.arguments["operation"] == "list"
+    for name, value in arguments.items():
+        assert result.arguments[name] == value
 
 
 @pytest.mark.parametrize("operation", ["list", "count", "next"])
@@ -487,6 +493,33 @@ def test_every_canonical_query_calendar_operation_is_accepted(operation):
         **CANONICAL_BY_INTENT["query_calendar"], "operation": operation,
     })
     assert decode_provider_envelope(json.dumps(payload)).arguments["operation"] == operation
+
+
+def test_add_purchase_missing_priority_uses_native_no_priority_default():
+    arguments = {**CANONICAL_BY_INTENT["add_purchase"]}
+    arguments.pop("priority")
+
+    result = decode_provider_envelope(json.dumps(provider_envelope("add_purchase", arguments)))
+
+    assert result.arguments["priority"] is None
+    assert result.arguments["title"] == "Чайник"
+
+
+@pytest.mark.parametrize("priority", ["high", "medium", "low"])
+def test_add_purchase_explicit_valid_priority_is_preserved(priority):
+    payload = provider_envelope("add_purchase", {
+        **CANONICAL_BY_INTENT["add_purchase"], "priority": priority,
+    })
+    assert decode_provider_envelope(json.dumps(payload)).arguments["priority"] == priority
+
+
+@pytest.mark.parametrize("priority", ["urgent", "none", "any"])
+def test_add_purchase_explicit_invalid_priority_remains_rejected(priority):
+    payload = provider_envelope("add_purchase", {
+        **CANONICAL_BY_INTENT["add_purchase"], "priority": priority,
+    })
+    with pytest.raises(IntentParserInvalidOutput, match="invalid_priority"):
+        decode_provider_envelope(json.dumps(payload))
 
 
 @pytest.mark.parametrize(("provider_price", "expected"), [
