@@ -15,11 +15,13 @@ from bot.handlers.films import begin_film_search
 from bot.services.actions.afisha import create_afisha_event
 from bot.services.actions.calendar import create_personal_calendar_event
 from bot.services.actions.purchases import create_purchase
+from bot.services.actions.existing import mutate_existing
 from bot.services.nl_dates import DateExpressionError, resolve_date_expression, resolve_time_expression, zoned_now
 from bot.services.nl_intent import (
     IntentContext, IntentKind, IntentParser, IntentParserError, IntentParserTimeout,
 )
 from bot.services.nl_proposals import ActionProposal, active_proposal, create_proposal, discard_proposal, get_proposal
+from bot.services.nl_entity_resolution import EntityCandidate, resolve_entities
 from bot.states import (
     ADDING_CALENDAR_EVENT_TITLE, ADDING_EVENT_TITLE, ADDING_FILM_TITLE, ADDING_PURCHASE_TITLE, AI_CLARIFYING, MENU, SECTION,
 )
@@ -51,8 +53,47 @@ def _keyboard(proposal_id: str) -> InlineKeyboardMarkup:
     ])
 
 
+def _mutation_keyboard(proposal: ActionProposal) -> InlineKeyboardMarkup:
+    delete = proposal.intent.name.startswith("DELETE_")
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🗑 Удалить" if delete else "✅ Изменить", callback_data=f"ai:c:{proposal.proposal_id}")],
+        [InlineKeyboardButton("❌ Отмена", callback_data=f"ai:x:{proposal.proposal_id}")],
+    ])
+
+
+_MUTATION_KINDS = {kind for kind in IntentKind if kind.name.startswith(("UPDATE_", "DELETE_"))}
+
+
 def _menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[InlineKeyboardButton("🏠 В меню", callback_data="menu:main")]])
+
+
+def _candidate_label(candidate: EntityCandidate) -> str:
+    item = candidate.item
+    when = item.get("date")
+    clock = item.get("start_time") or item.get("time")
+    suffix = " — " + ", ".join(str(value) for value in (when, clock) if value) if when or clock else ""
+    return f"{item.get('title') or 'Без названия'}{suffix}"
+
+
+def _select_candidate(proposal: ActionProposal, candidate: EntityCandidate, actor_name: str) -> None:
+    args, item = proposal.arguments, candidate.item
+    changes: dict[str, Any] = {}
+    mapping = {"date": "date", "time": "time", "start_time": "start_time"}
+    for field, value in list(args.items()):
+        if field == "target" or field.startswith("_") or value is None:
+            continue
+        target_field = mapping.get(field, field)
+        comparable = actor_name if field == "buyer" and value == "current_user" else "" if value in {"none"} else value
+        old = candidate.bucket if field == "status" and proposal.intent in {IntentKind.UPDATE_PURCHASE} else item.get(target_field)
+        if old != comparable:
+            changes[target_field if field != "status" else field] = value
+    expected = dict(item) if proposal.intent.name.startswith("DELETE_") else {
+        (field if field != "status" else field): (candidate.bucket if field == "status" and proposal.intent is IntentKind.UPDATE_PURCHASE else item.get(field))
+        for field in changes
+    }
+    proposal.arguments.update({"_id": candidate.item_id, "_bucket": candidate.bucket, "_selected": item,
+                               "_changes": changes, "_expected": expected, "_actor_name": actor_name})
 
 
 def _prepare(kind: IntentKind, arguments: dict[str, Any], now: datetime) -> tuple[dict[str, Any], list[str]]:
@@ -97,6 +138,14 @@ def _prepare(kind: IntentKind, arguments: dict[str, Any], now: datetime) -> tupl
                     missing.append("end_date")
             else:
                 args["end_date"] = ""
+    elif kind in {IntentKind.UPDATE_CALENDAR_EVENT, IntentKind.UPDATE_AFISHA_EVENT}:
+        for source, target in (("date_expression", "date"), ("time_expression", "start_time" if kind is IntentKind.UPDATE_CALENDAR_EVENT else "time")):
+            expression = args.pop(source, None)
+            if expression:
+                try:
+                    args[target] = resolve_date_expression(expression, now=now, timezone=BOT_TIMEZONE) if target == "date" else resolve_time_expression(expression)
+                except DateExpressionError:
+                    missing.append("date" if target == "date" else "time")
     return args, missing
 
 
@@ -136,6 +185,38 @@ async def nl_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await message.reply_text("Я пока умею добавлять фильмы, покупки и события в твой календарь или Афишу.", reply_markup=_menu_keyboard())
             return _idle_state(context)
         arguments, missing = _prepare(parsed.intent, parsed.arguments, now)
+        if parsed.intent in _MUTATION_KINDS:
+            update_fields = [key for key, value in arguments.items() if key != "target" and value is not None]
+            if parsed.intent.name.startswith("UPDATE_") and not update_fields and not missing:
+                await message.reply_text("Что именно нужно изменить? Сформулируй команду ещё раз.", reply_markup=_menu_keyboard())
+                return _idle_state(context)
+            profile = get_allowed_profile(update) or {}
+            owner = str(profile.get("wishlist_owner") or "")
+            candidates = resolve_entities(__import__("bot.storage", fromlist=["storage"]).storage.load(), parsed.intent, arguments["target"], owner=owner)
+            logger.info("NL entity resolution intent=%s status=%s candidate_count=%s", parsed.intent.value, "found" if candidates else "missing", len(candidates))
+            if not candidates:
+                await message.reply_text("Не нашёл подходящий объект. Проверь название и попробуй ещё раз.", reply_markup=_menu_keyboard())
+                return _idle_state(context)
+            proposal = create_proposal(context.user_data, intent=parsed.intent, arguments=arguments,
+                                       actor_key=get_username(update), now=now, ttl_seconds=AI_PROPOSAL_TTL_SECONDS,
+                                       missing_fields=missing)
+            proposal.arguments["_candidates"] = [{"id": c.item_id, "bucket": c.bucket, "item": c.item} for c in candidates]
+            if len(candidates) > 1:
+                lines = ["Нашёл несколько вариантов:", ""] + [f"○ {_candidate_label(c)}" for c in candidates] + ["", "Какой выбрать?"]
+                buttons = [[InlineKeyboardButton(str(index + 1), callback_data=f"ai:r:{proposal.proposal_id}:{index}")] for index in range(len(candidates))]
+                buttons.append([InlineKeyboardButton("❌ Отмена", callback_data=f"ai:x:{proposal.proposal_id}")])
+                await message.reply_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(buttons))
+                return _idle_state(context)
+            _select_candidate(proposal, candidates[0], get_user_name(update))
+            if not proposal.arguments["_changes"] and parsed.intent.name.startswith("UPDATE_") and not missing:
+                discard_proposal(context.user_data, proposal)
+                await message.reply_text("Это значение уже установлено.", reply_markup=_menu_keyboard())
+                return _idle_state(context)
+            if missing:
+                await message.reply_text(_clarification_prompt(missing[0]))
+                return AI_CLARIFYING
+            await message.reply_text(_preview(proposal), reply_markup=_mutation_keyboard(proposal))
+            return _idle_state(context)
         if not missing:
             _validate_prepared(parsed.intent, arguments)
     except IntentParserTimeout:
@@ -153,7 +234,8 @@ async def nl_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if missing:
         await message.reply_text(_clarification_prompt(missing[0]))
         return AI_CLARIFYING
-    await message.reply_text(_preview(proposal), reply_markup=_keyboard(proposal.proposal_id))
+    keyboard = _mutation_keyboard(proposal) if proposal.intent in _MUTATION_KINDS else _keyboard(proposal.proposal_id)
+    await message.reply_text(_preview(proposal), reply_markup=keyboard)
     return _idle_state(context)
 
 
@@ -192,6 +274,13 @@ async def nl_clarification_handler(update: Update, context: ContextTypes.DEFAULT
     if proposal.missing_fields:
         await message.reply_text(_clarification_prompt(proposal.missing_fields[0]))
         return AI_CLARIFYING
+    if proposal.intent in _MUTATION_KINDS:
+        selected = EntityCandidate(str(proposal.arguments["_id"]), str(proposal.arguments["_bucket"]), proposal.arguments["_selected"])
+        _select_candidate(proposal, selected, get_user_name(update))
+        if not proposal.arguments["_changes"]:
+            discard_proposal(context.user_data, proposal)
+            await message.reply_text("Это значение уже установлено.", reply_markup=_menu_keyboard())
+            return _idle_state(context)
     try:
         _validate_prepared(proposal.intent, proposal.arguments)
     except ValueError:
@@ -204,6 +293,14 @@ async def nl_clarification_handler(update: Update, context: ContextTypes.DEFAULT
 
 def _preview(proposal: ActionProposal) -> str:
     args = proposal.arguments
+    if proposal.intent in _MUTATION_KINDS:
+        item, changes = args["_selected"], args["_changes"]
+        if proposal.intent.name.startswith("DELETE_"):
+            return f"🗑 Удалить объект?\n\n{item.get('title', 'Без названия')}\n\nЭто действие удалит объект."
+        labels = {"title": "Название", "price": "Стоимость", "priority": "Приоритет", "buyer": "Исполнитель", "status": "Статус", "comment": "Комментарий", "link": "Ссылка", "date": "Дата", "time": "Время", "start_time": "Время"}
+        lines = ["✏️ Изменить объект", "", str(item.get("title") or "Без названия"), ""]
+        lines.extend(f"{labels.get(field, field)}: {item.get(field, '') or '—'} → {value or '—'}" for field, value in changes.items())
+        return "\n".join(lines)
     if proposal.intent is IntentKind.ADD_MOVIE_OR_TV:
         return f"🎬 Найти и добавить в фильмы?\n\n{args['query']}"
     if proposal.intent is IntentKind.ADD_PURCHASE:
@@ -241,7 +338,7 @@ async def nl_callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE)
     query = update.callback_query
     await query.answer()
     parts = (query.data or "").split(":")
-    action, proposal_id = (parts[1], parts[2]) if len(parts) == 3 else ("", "")
+    action, proposal_id = (parts[1], parts[2]) if len(parts) >= 3 else ("", "")
     now = zoned_now(BOT_TIMEZONE)
     proposal = get_proposal(context.user_data, proposal_id, actor_key=get_username(update), now=now)
     if proposal is None:
@@ -253,6 +350,23 @@ async def nl_callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE)
         logger.info("NL proposal cancelled intent=%s", proposal.intent.value)
         await query.edit_message_text("Отменено.", reply_markup=_menu_keyboard())
         return _idle_state(context)
+    if action == "r" and len(parts) == 4:
+        candidates = proposal.arguments.get("_candidates", [])
+        try:
+            raw = candidates[int(parts[3])]
+        except (ValueError, IndexError, TypeError):
+            await query.edit_message_text("Вариант больше недоступен. Напиши команду ещё раз.", reply_markup=_menu_keyboard())
+            return _idle_state(context)
+        _select_candidate(proposal, EntityCandidate(raw["id"], raw["bucket"], raw["item"]), get_user_name(update))
+        if proposal.missing_fields:
+            await query.edit_message_text(_clarification_prompt(proposal.missing_fields[0]))
+            return AI_CLARIFYING
+        if not proposal.arguments["_changes"] and proposal.intent.name.startswith("UPDATE_"):
+            discard_proposal(context.user_data, proposal)
+            await query.edit_message_text("Это значение уже установлено.", reply_markup=_menu_keyboard())
+            return _idle_state(context)
+        await query.edit_message_text(_preview(proposal), reply_markup=_mutation_keyboard(proposal))
+        return _idle_state(context)
     if action == "e":
         return await _edit_proposal(update, context, proposal)
     if action != "c" or proposal.status != "pending" or proposal.missing_fields:
@@ -260,11 +374,24 @@ async def nl_callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return _idle_state(context)
     proposal.status = "executing"
     try:
+        if proposal.intent in _MUTATION_KINDS:
+            result = mutate_existing(proposal.intent, proposal.arguments)
+            if result.status == "conflict":
+                discard_proposal(context.user_data, proposal)
+                await query.edit_message_text("Объект изменился с момента подтверждения. Проверь актуальные данные и попробуй ещё раз.", reply_markup=_menu_keyboard())
+                return _idle_state(context)
+            if result.status in {"missing", "already_deleted"}:
+                discard_proposal(context.user_data, proposal)
+                await query.edit_message_text("Объекта больше нет.", reply_markup=_menu_keyboard())
+                return SECTION
+            if result.status not in {"updated", "deleted"}:
+                raise ValueError("mutation_failed")
+            text = "Объект удалён." if result.status == "deleted" else "Объект обновлён."
         if proposal.intent is IntentKind.ADD_MOVIE_OR_TV:
             discard_proposal(context.user_data, proposal)
             await query.edit_message_text("Ищу фильм или сериал…")
             return await begin_film_search(update, context, str(proposal.arguments["query"]))
-        if proposal.intent is IntentKind.ADD_PURCHASE:
+        elif proposal.intent is IntentKind.ADD_PURCHASE:
             args = dict(proposal.arguments)
             args["buyer"] = get_user_name(update) if args.get("buyer") == "current_user" else ""
             item = create_purchase(args)
@@ -279,7 +406,7 @@ async def nl_callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE)
         elif proposal.intent is IntentKind.ADD_AFISHA_EVENT:
             item = create_afisha_event(proposal.arguments)
             text = "Событие сохранено:\n\n" + build_afisha_item_text(item)
-        else:
+        elif proposal.intent not in _MUTATION_KINDS:
             raise ValueError("unsupported_proposal")
     except ValueError:
         proposal.status = "pending"
