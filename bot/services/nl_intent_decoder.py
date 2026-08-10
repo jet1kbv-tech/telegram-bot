@@ -144,25 +144,7 @@ _BRANCH_PROPERTIES: dict[IntentKind, dict[str, Any]] = {
     IntentKind.UNSUPPORTED: {"category": {"type": "string", "enum": sorted(_UNSUPPORTED)}},
 }
 
-# Polza/GPT-4o-mini rejects a root discriminated union.  Its provider contract is
-# therefore one flat object: the discriminator sits next to the nullable slots
-# it controls.  Flattening removes the misleading global ``arguments`` bucket;
-# the prompt supplies the intent-to-slot relationship.  This adapter still
-# rejects every non-null unrelated slot rather than weakening the canonical
-# boundary.
-def _nullable_provider_property(name: str) -> dict[str, Any]:
-    schemas = [properties[name] for properties in _BRANCH_PROPERTIES.values() if name in properties]
-    result: dict[str, Any] = {"type": ["integer", "null"] if name == "price" else ["string", "null"]}
-    if name == "price":
-        result.update(minimum=0, maximum=1_000_000_000)
-    enums = {item for schema in schemas for item in schema.get("enum", [])}
-    if enums:
-        result["enum"] = sorted((item for item in enums if item is not None), key=str) + [None]
-    return result
-
-
 _PROVIDER_FIELD_NAMES = sorted({name for properties in _BRANCH_PROPERTIES.values() for name in properties})
-_PROVIDER_PROPERTIES = {name: _nullable_provider_property(name) for name in _PROVIDER_FIELD_NAMES}
 
 
 INTENT_JSON_SCHEMA: dict[str, Any] = {
@@ -171,48 +153,85 @@ INTENT_JSON_SCHEMA: dict[str, Any] = {
     "schema": {
         "type": "object",
         "additionalProperties": False,
-        "required": ["intent", *_PROVIDER_FIELD_NAMES],
+        "required": ["intent", "arguments"],
         "properties": {
             "intent": {"type": "string", "enum": [kind.value for kind in IntentKind]},
-            **_PROVIDER_PROPERTIES,
+            "arguments": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["name", "value"],
+                    "properties": {
+                        "name": {"type": "string", "enum": _PROVIDER_FIELD_NAMES},
+                        "value": {"type": "string", "minLength": 1, "maxLength": 1000},
+                    },
+                },
+                "maxItems": len(_PROVIDER_FIELD_NAMES),
+            },
         },
     },
 }
 
 
 def normalize_provider_envelope(raw: str | dict[str, Any]) -> dict[str, Any]:
-    """Validate the provider superset and return the exact canonical envelope."""
+    """Turn the compact provider semantics into the exact canonical envelope."""
     try:
         value = json.loads(raw) if isinstance(raw, str) else raw
     except (json.JSONDecodeError, TypeError) as exc:
         raise IntentParserInvalidOutput("invalid_json") from exc
-    expected = {"intent", *_PROVIDER_FIELD_NAMES}
-    if not isinstance(value, dict) or set(value) != expected:
+    if not isinstance(value, dict) or set(value) != {"intent", "arguments"}:
         raise IntentParserInvalidOutput("invalid_envelope")
     intent = value["intent"]
-    if not isinstance(intent, str):
+    items = value["arguments"]
+    if not isinstance(intent, str) or not isinstance(items, list) or len(items) > len(_PROVIDER_FIELD_NAMES):
         raise IntentParserInvalidOutput("invalid_envelope")
     try:
         kind = IntentKind(intent)
     except ValueError as exc:
         raise IntentParserInvalidOutput("unsupported_intent") from exc
-    supplied = {name: value[name] for name in _PROVIDER_FIELD_NAMES}
-
     allowed = _FIELDS[kind]
-    for name, item in supplied.items():
-        if name not in allowed and item is not None:
+    supplied: dict[str, str] = {}
+    for item in items:
+        if not isinstance(item, dict) or set(item) != {"name", "value"}:
+            raise IntentParserInvalidOutput("invalid_argument_entry")
+        name, raw_value = item["name"], item["value"]
+        if name not in _PROVIDER_FIELD_NAMES or not isinstance(raw_value, str):
+            raise IntentParserInvalidOutput("invalid_argument_entry")
+        raw_value = raw_value.strip()
+        if not raw_value or len(raw_value) > 1000:
+            raise IntentParserInvalidOutput(f"invalid_provider_{name}")
+        if name in supplied:
+            raise IntentParserInvalidOutput("duplicate_provider_field")
+        supplied[name] = raw_value
+
+    # These are narrow, intent-scoped equivalences, not a general policy of
+    # discarding unrelated values.  They cover vocabulary the model naturally
+    # uses while retaining fail-closed handling for every other mismatch.
+    if kind is IntentKind.ADD_MOVIE_OR_TV and "title" in supplied:
+        if "query" in supplied:
+            raise IntentParserInvalidOutput("conflicting_provider_fields")
+        supplied["query"] = supplied.pop("title")
+    if kind in {IntentKind.QUERY_CALENDAR, IntentKind.UPDATE_CALENDAR_EVENT} and "owner" in supplied:
+        if supplied.pop("owner") != "current_user":
             raise IntentParserInvalidOutput("irrelevant_non_null_field")
-        schema = _PROVIDER_PROPERTIES[name]
-        valid_type = item is None or (name == "price" and isinstance(item, int) and not isinstance(item, bool)) or (
-            name != "price" and isinstance(item, str)
-        )
-        if not valid_type:
-            raise IntentParserInvalidOutput(f"invalid_provider_{name}")
-        if "enum" in schema and item not in schema["enum"]:
-            raise IntentParserInvalidOutput(f"invalid_provider_{name}")
-        if name == "price" and item is not None and not 0 <= item <= 1_000_000_000:
+
+    conflicts = set(supplied) - set(allowed)
+    if conflicts:
+        raise IntentParserInvalidOutput("irrelevant_non_null_field")
+
+    arguments: dict[str, Any] = {name: None for name in allowed}
+    arguments.update(supplied)
+    if "price" in supplied:
+        if not supplied["price"].isdigit():
             raise IntentParserInvalidOutput("invalid_provider_price")
-    return {"intent": intent, "arguments": {name: supplied[name] for name in allowed}}
+        arguments["price"] = int(supplied["price"])
+    # Unsupported is non-mutating.  Collapsing an unfamiliar taxonomy label to
+    # the canonical catch-all cannot authorize an action and avoids coupling the
+    # provider's wording to internal UI categories.
+    if kind is IntentKind.UNSUPPORTED and arguments["category"] not in _UNSUPPORTED:
+        arguments["category"] = "unsupported_domain"
+    return {"intent": intent, "arguments": arguments}
 
 
 def provider_rejection_shape(raw: str) -> tuple[str, list[str]]:
@@ -225,13 +244,18 @@ def provider_rejection_shape(raw: str) -> tuple[str, list[str]]:
         return "<invalid>", []
     intent = value["intent"]
     try:
-        allowed = _FIELDS[IntentKind(intent)]
+        kind = IntentKind(intent)
+        allowed = _FIELDS[kind]
     except ValueError:
         return intent, []
-    return intent, sorted(
-        name for name in _PROVIDER_FIELD_NAMES
-        if name not in allowed and value.get(name) is not None
-    )
+    items = value.get("arguments")
+    if not isinstance(items, list):
+        return intent, []
+    names = [item.get("name") for item in items if isinstance(item, dict)]
+    benign = {"owner"} if kind in {IntentKind.QUERY_CALENDAR, IntentKind.UPDATE_CALENDAR_EVENT} else set()
+    aliases = {"title"} if kind is IntentKind.ADD_MOVIE_OR_TV else set()
+    known = set(allowed) | benign | aliases
+    return intent, sorted({name for name in names if isinstance(name, str) and name not in known})
 
 
 def decode_provider_envelope(raw: str) -> ParsedIntent:
