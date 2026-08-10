@@ -11,12 +11,18 @@ import httpx
 from bot.services.nl_intent import (
     IntentContext, IntentParserInvalidOutput, IntentParserTimeout, IntentParserUnavailable, ParsedIntent,
 )
-from bot.services.nl_intent_decoder import INTENT_JSON_SCHEMA, decode_provider_envelope
+from bot.services.nl_intent_decoder import INTENT_JSON_SCHEMA, decode_provider_envelope, provider_rejection_shape
 
 logger = logging.getLogger(__name__)
 POLZA_CHAT_COMPLETIONS_URL = "https://polza.ai/api/v1/chat/completions"
 
-SYSTEM_PROMPT = """Классифицируй русскую команду Telegram-бота и верни только строгий JSON заданной ветки schema.
+SYSTEM_PROMPT = """Классифицируй русскую команду Telegram-бота и верни только строгий JSON по schema.
+
+Выбери один intent. Intent определяет разрешённые смысловые поля. Только перечисленные для него поля могут быть non-null; КАЖДОЕ прочее поле ОБЯЗАНО быть null. Не угадывай значения посторонних полей лишь потому, что они есть в schema.
+Поля intent:
+add_movie_or_tv=query; add_purchase=title,price,priority,link,comment,buyer; add_personal_calendar_event=title,date_expression,time_expression,end_time_expression,comment,owner; add_afisha_event=title,place,date_expression,time_expression,end_date_expression,end_time_expression,link;
+update_purchase=target,title,price,priority,link,comment,buyer,status; delete_purchase=target; update_film=target,status,comment; delete_film=target; update_calendar_event=target,title,date_expression,time_expression; delete_calendar_event=target; update_afisha_event=target,title,date_expression,time_expression; delete_afisha_event=target;
+query_purchases=status,priority,buyer,operation; query_films=status,media_type,genre,operation; query_calendar/query_afisha=date_from,date_to,target,operation; unsupported=category; no_action=без полей.
 
 Intents: add_personal_calendar_event/add_afisha_event/add_purchase/add_movie_or_tv; update/delete_purchase, _film, _calendar_event, _afisha_event; read-only query_purchases/query_films/query_calendar/query_afisha; unsupported; no_action. Различай add, update, delete и query как ровно одно действие. Терпи разговорную грамматику, склонения, порядок слов и отсутствие пунктуации. Недостающие значения = null, а не unsupported/no_action. Для update заполняй только явно изменяемые поля; target — название, не ID. Purchase statuses planned/bought; film want/watched.
 
@@ -110,10 +116,10 @@ class PolzaIntentParser:
         try:
             result = decode_provider_envelope(content)
         except IntentParserInvalidOutput as exc:
-            intent, argument_keys = _response_shape(content)
+            intent, conflicting_fields = provider_rejection_shape(content)
             logger.warning(
-                "NL parse validation_error outcome=decode_error reason=%s intent=%s argument_keys=%s latency_ms=%s",
-                str(exc) or type(exc).__name__, intent, argument_keys, latency_ms,
+                "NL parse normalization_rejection intent=%s reason=%s conflicting_fields=%s latency_ms=%s",
+                intent, str(exc) or type(exc).__name__, conflicting_fields, latency_ms,
             )
             raise
         logger.info("NL parse success outcome=success intent=%s latency_ms=%s", result.intent.value, latency_ms)
@@ -121,19 +127,6 @@ class PolzaIntentParser:
 
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"}
-
-
-def _response_shape(content: str) -> tuple[str, list[str]]:
-    """Return non-sensitive structure only; provider/user values are never logged."""
-    try:
-        value = json.loads(content)
-    except (ValueError, TypeError):
-        return "<unavailable>", []
-    if not isinstance(value, dict):
-        return "<invalid>", []
-    intent = value.get("intent")
-    arguments = value.get("arguments")
-    return (intent if isinstance(intent, str) else "<invalid>", sorted(arguments) if isinstance(arguments, dict) else [])
 
 
 _SAFE_ERROR_TOKEN = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")

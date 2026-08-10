@@ -110,15 +110,6 @@ def decode_intent(raw: str | dict[str, Any]) -> ParsedIntent:
     return ParsedIntent(kind, arguments)
 
 
-def _arguments_schema(properties: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "type": "object",
-        "additionalProperties": False,
-        "required": list(properties),
-        "properties": properties,
-    }
-
-
 _BRANCH_PROPERTIES: dict[IntentKind, dict[str, Any]] = {
     IntentKind.ADD_MOVIE_OR_TV: {"query": {"type": "string"}},
     IntentKind.ADD_PURCHASE: {
@@ -153,12 +144,12 @@ _BRANCH_PROPERTIES: dict[IntentKind, dict[str, Any]] = {
     IntentKind.UNSUPPORTED: {"category": {"type": "string", "enum": sorted(_UNSUPPORTED)}},
 }
 
-# A nested discriminated union could bind intent to arguments, but would require
-# changing the response envelope (for example, putting both values inside an
-# anyOf branch).  Keeping the existing envelope with independent properties
-# cannot establish that relationship.  Instead, GPT-4o sees one strict superset
-# object.  Every field is nullable because it is irrelevant to at least one
-# intent; the adapter below rejects non-null data outside the selected intent.
+# Polza/GPT-4o-mini rejects a root discriminated union.  Its provider contract is
+# therefore one flat object: the discriminator sits next to the nullable slots
+# it controls.  Flattening removes the misleading global ``arguments`` bucket;
+# the prompt supplies the intent-to-slot relationship.  This adapter still
+# rejects every non-null unrelated slot rather than weakening the canonical
+# boundary.
 def _nullable_provider_property(name: str) -> dict[str, Any]:
     schemas = [properties[name] for properties in _BRANCH_PROPERTIES.values() if name in properties]
     result: dict[str, Any] = {"type": ["integer", "null"] if name == "price" else ["string", "null"]}
@@ -180,10 +171,10 @@ INTENT_JSON_SCHEMA: dict[str, Any] = {
     "schema": {
         "type": "object",
         "additionalProperties": False,
-        "required": ["intent", "arguments"],
+        "required": ["intent", *_PROVIDER_FIELD_NAMES],
         "properties": {
             "intent": {"type": "string", "enum": [kind.value for kind in IntentKind]},
-            "arguments": _arguments_schema(_PROVIDER_PROPERTIES),
+            **_PROVIDER_PROPERTIES,
         },
     },
 }
@@ -195,17 +186,17 @@ def normalize_provider_envelope(raw: str | dict[str, Any]) -> dict[str, Any]:
         value = json.loads(raw) if isinstance(raw, str) else raw
     except (json.JSONDecodeError, TypeError) as exc:
         raise IntentParserInvalidOutput("invalid_json") from exc
-    if not isinstance(value, dict) or set(value) != {"intent", "arguments"}:
+    expected = {"intent", *_PROVIDER_FIELD_NAMES}
+    if not isinstance(value, dict) or set(value) != expected:
         raise IntentParserInvalidOutput("invalid_envelope")
-    intent, supplied = value["intent"], value["arguments"]
-    if not isinstance(intent, str) or not isinstance(supplied, dict):
+    intent = value["intent"]
+    if not isinstance(intent, str):
         raise IntentParserInvalidOutput("invalid_envelope")
     try:
         kind = IntentKind(intent)
     except ValueError as exc:
         raise IntentParserInvalidOutput("unsupported_intent") from exc
-    if set(supplied) != set(_PROVIDER_FIELD_NAMES):
-        raise IntentParserInvalidOutput("invalid_provider_fields")
+    supplied = {name: value[name] for name in _PROVIDER_FIELD_NAMES}
 
     allowed = _FIELDS[kind]
     for name, item in supplied.items():
@@ -222,6 +213,25 @@ def normalize_provider_envelope(raw: str | dict[str, Any]) -> dict[str, Any]:
         if name == "price" and item is not None and not 0 <= item <= 1_000_000_000:
             raise IntentParserInvalidOutput("invalid_provider_price")
     return {"intent": intent, "arguments": {name: supplied[name] for name in allowed}}
+
+
+def provider_rejection_shape(raw: str) -> tuple[str, list[str]]:
+    """Return only safe structural details for a normalization rejection."""
+    try:
+        value = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return "<unavailable>", []
+    if not isinstance(value, dict) or not isinstance(value.get("intent"), str):
+        return "<invalid>", []
+    intent = value["intent"]
+    try:
+        allowed = _FIELDS[IntentKind(intent)]
+    except ValueError:
+        return intent, []
+    return intent, sorted(
+        name for name in _PROVIDER_FIELD_NAMES
+        if name not in allowed and value.get(name) is not None
+    )
 
 
 def decode_provider_envelope(raw: str) -> ParsedIntent:
