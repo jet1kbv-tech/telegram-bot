@@ -227,7 +227,7 @@ def normalize_provider_envelope(raw: str | dict[str, Any]) -> dict[str, Any]:
             raise IntentParserInvalidOutput("invalid_argument_entry")
         if name in supplied:
             raise IntentParserInvalidOutput("duplicate_provider_field")
-        if raw_value is None and name == "priority" and kind in {
+        if raw_value is None and name in {"priority", "buyer"} and kind in {
             IntentKind.ADD_PURCHASE, IntentKind.UPDATE_PURCHASE,
         }:
             supplied[name] = None
@@ -268,6 +268,10 @@ def normalize_provider_envelope(raw: str | dict[str, Any]) -> dict[str, Any]:
     }:
         priority = supplied["priority"].casefold()
         arguments["priority"] = _PURCHASE_PRIORITY_ALIASES.get(priority, priority)
+    if supplied.get("buyer") == "null" and kind in {
+        IntentKind.ADD_PURCHASE, IntentKind.UPDATE_PURCHASE,
+    }:
+        arguments["buyer"] = None
     if "price" in supplied:
         match = _PROVIDER_PRICE.fullmatch(supplied["price"])
         if match is None:

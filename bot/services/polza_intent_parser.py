@@ -121,11 +121,12 @@ class PolzaIntentParser:
             intent, conflicting_fields = provider_rejection_shape(content)
             provider_operation, price_category = provider_rejection_diagnostics(content, str(exc))
             provider_priority = provider_priority_diagnostic(content, str(exc))
+            provider_buyer = provider_buyer_diagnostic(content, str(exc))
             logger.warning(
                 "NL parse normalization_rejection intent=%s reason=%s conflicting_fields=%s "
-                "provider_operation=%s provider_price_category=%s provider_priority=%s latency_ms=%s",
+                "provider_operation=%s provider_price_category=%s provider_priority=%s provider_buyer=%s latency_ms=%s",
                 intent, str(exc) or type(exc).__name__, conflicting_fields,
-                provider_operation, price_category, provider_priority, latency_ms,
+                provider_operation, price_category, provider_priority, provider_buyer, latency_ms,
             )
             raise
         logger.info("NL parse success outcome=success intent=%s latency_ms=%s", result.intent.value, latency_ms)
@@ -167,6 +168,36 @@ def provider_priority_diagnostic(raw: str, reason: str) -> str:
         return "string_null"
     if isinstance(priority, str) and priority in _CANONICAL_PROVIDER_PRIORITIES:
         return priority
+    return "unknown"
+
+
+def provider_buyer_diagnostic(raw: str, reason: str) -> str:
+    """Return only a fixed buyer category for buyer-related rejections."""
+    if reason not in {"invalid_buyer", "invalid_query_arguments", "invalid_argument_entry"}:
+        return "unknown"
+    try:
+        value = json.loads(raw)
+        items = value.get("arguments") if isinstance(value, dict) else None
+    except (json.JSONDecodeError, TypeError):
+        return "unknown"
+    if not isinstance(items, list):
+        return "unknown"
+    buyers = [
+        item.get("value")
+        for item in items
+        if isinstance(item, dict) and item.get("name") == "buyer"
+    ]
+    if not buyers:
+        return "missing"
+    if len(buyers) != 1:
+        return "unknown"
+    buyer = buyers[0]
+    if buyer is None:
+        return "json_null"
+    if buyer == "null":
+        return "string_null"
+    if buyer == "current_user":
+        return "current_user"
     return "unknown"
 
 
