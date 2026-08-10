@@ -10,7 +10,9 @@ from bot.services.nl_intent import (
     IntentContext, IntentKind, IntentParserInvalidOutput, IntentParserTimeout, IntentParserUnavailable,
 )
 from bot.services.polza_intent_parser import POLZA_CHAT_COMPLETIONS_URL, SYSTEM_PROMPT, PolzaIntentParser
-from bot.services.nl_intent_decoder import INTENT_JSON_SCHEMA, decode_provider_envelope
+from bot.services.nl_intent_decoder import (
+    INTENT_JSON_SCHEMA, decode_intent, decode_provider_envelope, normalize_provider_envelope,
+)
 
 
 def run(coro):
@@ -33,13 +35,20 @@ def response_content(content):
     return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
 
 
+def provider_envelope(intent, arguments, **irrelevant):
+    fields = {name: None for name in INTENT_JSON_SCHEMA["schema"]["properties"]["arguments"]["properties"]}
+    fields.update(arguments)
+    fields.update(irrelevant)
+    return {"intent": intent, "arguments": fields}
+
+
 def test_polza_request_contract_uses_configured_model():
     seen = {}
     model = "deepseek/deepseek-v4-flash-0731"
 
     def transport(request):
         seen["request"] = request
-        return response_content(json.dumps({"intent": "add_movie_or_tv", "arguments": {"query": "Дюна"}}))
+        return response_content(json.dumps(provider_envelope("add_movie_or_tv", {"query": "Дюна"})))
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(transport))
     result = run(PolzaIntentParser(api_key="secret", model=model, client=client).parse("private text", context()))
@@ -104,7 +113,7 @@ def test_natural_russian_classification_contract_with_mocked_polza(phrase, expec
     """Exercise the strict provider boundary without making a live Polza request."""
     arguments = canonical_arguments(expected_intent, phrase)
     client = httpx.AsyncClient(transport=httpx.MockTransport(
-        lambda request: response_content(json.dumps({"intent": expected_intent, "arguments": arguments}))
+        lambda request: response_content(json.dumps(provider_envelope(expected_intent, arguments)))
     ))
     result = run(PolzaIntentParser(api_key="secret", model="configured/model", client=client).parse(phrase, context()))
     run(client.aclose())
@@ -123,9 +132,9 @@ def test_prompt_prioritizes_supported_partial_commands_and_preserves_dates():
 
 def test_calendar_add_without_date_or_time_keeps_null_slots_for_clarification():
     arguments = canonical_arguments("add_personal_calendar_event", "Запиши стоматолога в календарь")
-    result = decode_provider_envelope(json.dumps({
+    result = decode_intent({
         "intent": "add_personal_calendar_event", "arguments": arguments,
-    }))
+    })
 
     assert result.intent is IntentKind.ADD_PERSONAL_CALENDAR_EVENT
     assert result.arguments["date_expression"] is None
@@ -148,7 +157,7 @@ def test_purchase_natural_phrasings_decode_strict_mocked_provider_output(phrase,
         "link": None, "comment": None, "buyer": None,
     }
     client = httpx.AsyncClient(transport=httpx.MockTransport(
-        lambda request: response_content(json.dumps({"intent": "add_purchase", "arguments": arguments}))
+        lambda request: response_content(json.dumps(provider_envelope("add_purchase", arguments)))
     ))
     result = run(PolzaIntentParser(api_key="secret", model="configured/model", client=client).parse(phrase, context()))
     run(client.aclose())
@@ -158,11 +167,11 @@ def test_purchase_natural_phrasings_decode_strict_mocked_provider_output(phrase,
 
 def test_production_price_field_no_longer_causes_unexpected_fields():
     """The production-shaped price field used to differ from decoder's price_text."""
-    result = decode_provider_envelope(json.dumps({
+    result = decode_intent({
         "intent": "add_purchase",
         "arguments": {"title": "кофемашина", "price": 35000, "priority": "high",
                       "link": None, "comment": None, "buyer": None},
-    }))
+    })
     assert result.arguments["price"] == 35000
 
 
@@ -180,7 +189,7 @@ def test_production_price_field_no_longer_causes_unexpected_fields():
     ("unsupported", {"category": "conversation"}),
 ])
 def test_every_supported_intent_has_a_valid_canonical_envelope(intent, arguments):
-    result = decode_provider_envelope(json.dumps({"intent": intent, "arguments": arguments}))
+    result = decode_intent({"intent": intent, "arguments": arguments})
     assert result.intent.value == intent
     assert result.arguments == arguments
 
@@ -194,22 +203,18 @@ def test_every_supported_intent_has_a_valid_canonical_envelope(intent, arguments
 ])
 def test_purchase_unknown_missing_and_wrong_typed_fields_remain_rejected(payload):
     with pytest.raises(IntentParserInvalidOutput) as error:
-        decode_provider_envelope(json.dumps(payload))
+        decode_intent(payload)
     if "danger" in payload["arguments"]:
         assert str(error.value) == "unexpected_fields"
 
 
 def test_schema_discriminates_every_intent_and_matches_decoder_contract():
     schema = INTENT_JSON_SCHEMA["schema"]
-    branches = schema["properties"]["arguments"]["anyOf"]
+    arguments = schema["properties"]["arguments"]
     assert set(schema["properties"]["intent"]["enum"]) == {kind.value for kind in IntentKind}
-    assert len(branches) == len(IntentKind) == 18
-    purchase = next(branch for branch in branches if set(branch["properties"]) == {
-        "title", "price", "priority", "link", "comment", "buyer",
-    })
-    assert set(purchase["properties"]) == {
-        "title", "price", "priority", "link", "comment", "buyer",
-    }
+    assert len(IntentKind) == 18
+    assert arguments["additionalProperties"] is False
+    assert set(arguments["required"]) == set(arguments["properties"])
     assert "price_text" not in json.dumps(INTENT_JSON_SCHEMA)
 
 
@@ -222,10 +227,11 @@ def test_gpt4o_provider_schema_has_supported_root_and_no_discriminator_oneof_or_
     assert set(schema["required"]) == set(schema["properties"])
     assert '"oneOf"' not in serialized
     assert '"const"' not in serialized
-    for branch in schema["properties"]["arguments"]["anyOf"]:
-        assert branch["type"] == "object"
-        assert branch["additionalProperties"] is False
-        assert set(branch["required"]) == set(branch["properties"])
+    arguments = schema["properties"]["arguments"]
+    assert arguments["type"] == "object"
+    assert arguments["additionalProperties"] is False
+    assert set(arguments["required"]) == set(arguments["properties"])
+    assert '"anyOf"' not in serialized
 
 
 def test_exact_production_response_format_matches_golden_file():
@@ -239,17 +245,17 @@ def test_exact_production_response_format_matches_golden_file():
 
 def test_decode_failure_logs_only_safe_response_shape(caplog):
     secret_value = "sensitive user comment"
-    content = json.dumps({"intent": "add_purchase", "arguments": {
+    content = json.dumps(provider_envelope("add_purchase", {
         "title": secret_value, "price": 35000, "priority": "urgent", "link": None,
         "comment": secret_value, "buyer": None,
-    }})
+    }))
     client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: response_content(content)))
     with caplog.at_level(logging.WARNING), pytest.raises(IntentParserInvalidOutput):
         run(PolzaIntentParser(api_key="super-secret-key", model="configured/model", client=client).parse("private", context()))
     run(client.aclose())
     log = caplog.text
-    assert "reason=invalid_priority" in log and "intent=add_purchase" in log
-    assert "argument_keys=['buyer', 'comment', 'link', 'price', 'priority', 'title']" in log
+    assert "reason=invalid_provider_priority" in log and "intent=add_purchase" in log
+    assert "argument_keys=['buyer', 'category', 'comment'" in log
     assert secret_value not in log and "super-secret-key" not in log and "private" not in log
 
 
@@ -330,3 +336,72 @@ def test_polza_requires_key_and_environment_supplied_model():
         PolzaIntentParser(api_key="", model="configured/model")
     with pytest.raises(ValueError):
         PolzaIntentParser(api_key="secret", model="")
+
+
+CANONICAL_BY_INTENT = {
+    "add_movie_or_tv": {"query": "Дюна"},
+    "add_purchase": {"title": "Чайник", "price": None, "priority": None, "link": None, "comment": None, "buyer": None},
+    "add_personal_calendar_event": {"title": "Врач", "date_expression": None, "time_expression": None, "end_time_expression": None, "comment": None, "owner": "current_user"},
+    "add_afisha_event": {"title": "Концерт", "place": None, "date_expression": None, "time_expression": None, "end_date_expression": None, "end_time_expression": None, "link": None},
+    "update_purchase": {"target": "Чайник", "title": None, "price": None, "priority": None, "link": None, "comment": None, "buyer": None, "status": None},
+    "delete_purchase": {"target": "Чайник"},
+    "update_film": {"target": "Дюна", "status": None, "comment": None},
+    "delete_film": {"target": "Дюна"},
+    "update_calendar_event": {"target": "Врач", "title": None, "date_expression": None, "time_expression": None},
+    "delete_calendar_event": {"target": "Врач"},
+    "update_afisha_event": {"target": "Концерт", "title": None, "date_expression": None, "time_expression": None},
+    "delete_afisha_event": {"target": "Концерт"},
+    "query_purchases": {"status": "planned", "priority": "any", "buyer": "any", "operation": "list"},
+    "query_films": {"status": "want", "media_type": "any", "genre": None, "operation": "list"},
+    "query_calendar": {"date_from": None, "date_to": None, "target": None, "operation": "list"},
+    "query_afisha": {"date_from": None, "date_to": None, "target": None, "operation": "list"},
+    "no_action": {},
+    "unsupported": {"category": "conversation"},
+}
+
+
+@pytest.mark.parametrize(("intent", "arguments"), CANONICAL_BY_INTENT.items())
+def test_all_18_provider_intents_normalize_to_exact_canonical_shape(intent, arguments):
+    normalized = normalize_provider_envelope(provider_envelope(intent, arguments))
+    assert normalized == {"intent": intent, "arguments": arguments}
+    assert decode_provider_envelope(json.dumps(provider_envelope(intent, arguments))).intent.value == intent
+
+
+def test_production_afisha_calendar_shape_is_not_accepted_for_afisha():
+    payload = provider_envelope("add_afisha_event", CANONICAL_BY_INTENT["add_afisha_event"], owner="current_user")
+    with pytest.raises(IntentParserInvalidOutput, match="irrelevant_non_null_field"):
+        decode_provider_envelope(json.dumps(payload))
+
+
+def test_delete_calendar_receives_exact_canonical_arguments():
+    payload = provider_envelope("delete_calendar_event", CANONICAL_BY_INTENT["delete_calendar_event"])
+    assert normalize_provider_envelope(payload)["arguments"] == {"target": "Врач"}
+
+
+def test_irrelevant_nulls_are_stripped_but_relevant_nulls_are_preserved():
+    normalized = normalize_provider_envelope(provider_envelope(
+        "add_personal_calendar_event", CANONICAL_BY_INTENT["add_personal_calendar_event"], price=None,
+    ))
+    assert "price" not in normalized["arguments"]
+    assert normalized["arguments"]["comment"] is None
+
+
+@pytest.mark.parametrize("mutation", ["missing", "unknown", "wrong_type"])
+def test_provider_contract_rejects_missing_unknown_and_wrong_typed_fields(mutation):
+    payload = provider_envelope("add_purchase", CANONICAL_BY_INTENT["add_purchase"])
+    if mutation == "missing":
+        payload["arguments"].pop("place")
+    elif mutation == "unknown":
+        payload["arguments"]["danger"] = None
+    else:
+        payload["arguments"]["price"] = "35000"
+    with pytest.raises(IntentParserInvalidOutput):
+        normalize_provider_envelope(payload)
+
+
+def test_canonical_decoder_remains_authoritative_and_rejects_direct_mismatch():
+    with pytest.raises(IntentParserInvalidOutput, match="unexpected_fields"):
+        decode_intent({"intent": "delete_calendar_event", "arguments": {
+            "title": "Врач", "date_expression": None, "time_expression": None,
+            "end_time_expression": None, "comment": None, "owner": "current_user",
+        }})
