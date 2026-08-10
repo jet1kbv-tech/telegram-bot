@@ -15,12 +15,31 @@ from bot.services.nl_intent_decoder import INTENT_JSON_SCHEMA, decode_provider_e
 logger = logging.getLogger(__name__)
 POLZA_CHAT_COMPLETIONS_URL = "https://polza.ai/api/v1/chat/completions"
 
-SYSTEM_PROMPT = """Ты — классификатор команд Telegram-бота. Верни только JSON по заданной схеме.
-Поддерживаются add_movie_or_tv, add_purchase, add_personal_calendar_event, add_afisha_event, update/delete_purchase, update/delete_film, update/delete_calendar_event, update/delete_afisha_event, no_action, unsupported.
-Для фильма верни только query: не придумывай метаданные. Для дат сохраняй исходное русское выражение, приложение разрешит дату само.
-Для add_purchase верни title, числовой price в рублях (например, «35 тысяч» = 35000), priority, link, comment и buyer.
-owner личного календаря всегда current_user. Если просят календарь другого человека — unsupported/other_user_calendar.
-Для update/delete верни только human-readable target, никогда не ID. В update заполняй только явно запрошенные изменения, остальные nullable поля — null. Не подставляй существующие значения. Статусы: purchase planned/bought, film want/watched. Удаление — соответствующий delete intent, не unsupported.
+SYSTEM_PROMPT = """Ты — классификатор и извлекатель аргументов команд Telegram-бота. Верни только JSON по заданной схеме.
+
+Поддержанные добавления:
+- add_personal_calendar_event — добавить/запланировать/записать событие в личный календарь пользователя;
+- add_afisha_event — добавить событие в общую афишу;
+- add_purchase — добавить вещь в покупки;
+- add_movie_or_tv — добавить фильм или сериал в список.
+Выбирай поддержанный intent по ясно выраженному действию, даже при разговорной фразе, ошибках склонения, другом порядке слов, без пунктуации и с неполными аргументами. Отсутствие даты, времени или другого обязательного значения НЕ означает unsupported: верни nullable поля как null, чтобы бот запросил уточнение.
+
+Для личного календаря фразы «в календарь», «в мой календарь», «мне в календарь» без явно названного другого владельца означают owner=current_user. Только явная просьба изменить личный календарь другого человека — unsupported с category=other_user_calendar. Для дат дословно сохраняй выражение пользователя в date_expression (например, «17.08», «17 августа», «завтра», «в пятницу»); не преобразуй его в ISO и не отвергай intent из-за неполной даты. Аналогично сохраняй выражение времени.
+Для фильма/сериала верни только query и не придумывай метаданные. Для add_purchase верни title, числовой price в рублях (например, «35 тысяч» = 35000), priority, link, comment и buyer.
+
+Также поддержаны update/delete_purchase, update/delete_film, update/delete_calendar_event, update/delete_afisha_event. Отличай изменение и удаление от добавления. Для update/delete верни только human-readable target, никогда не ID. В update заполняй только явно запрошенные изменения, остальные nullable поля — null; не подставляй существующие значения. Статусы: purchase planned/bought, film want/watched. Удаление существующей сущности — соответствующий delete intent, не unsupported.
+
+unsupported используй узко: только для ясно выраженной выполнимой команды вне перечисленных возможностей, запрещённой destructive/bulk операции, неподдержанного домена или явного изменения чужого календаря. Не используй unsupported из-за плохой грамматики или недостающих полей. no_action используй только для текста без команды: приветствия, реплики и разговор («привет», «мы устали», «прикольно»). Частично заполненная поддержанная команда — не no_action.
+
+Примеры границ:
+«добавь стоматолог в календарь 17.08» -> add_personal_calendar_event, title="стоматолог", date_expression="17.08", owner="current_user";
+«добавь кофемашину в покупки за 35 тысяч» -> add_purchase;
+«добавь Во все тяжкие в фильмы» -> add_movie_or_tv;
+«добавь концерт в афишу 20 сентября» -> add_afisha_event;
+«удали концерт из афиши» -> delete_afisha_event;
+«перенеси стоматолога на завтра» -> update_calendar_event;
+«добавь Саше в календарь встречу» (если Саша не текущий пользователь) -> unsupported/other_user_calendar.
+
 Не объясняй ответ и не добавляй поля. Верни ровно ветку выбранного intent; все её аргументы должны присутствовать, необязательные значения — null."""
 
 
@@ -37,6 +56,7 @@ class PolzaIntentParser:
         payload: dict[str, Any] = {
             "model": self._model,
             "stream": False,
+            "temperature": 0,
             "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": (
