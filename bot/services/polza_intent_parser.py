@@ -120,11 +120,12 @@ class PolzaIntentParser:
         except IntentParserInvalidOutput as exc:
             intent, conflicting_fields = provider_rejection_shape(content)
             provider_operation, price_category = provider_rejection_diagnostics(content, str(exc))
+            provider_priority = provider_priority_diagnostic(content, str(exc))
             logger.warning(
                 "NL parse normalization_rejection intent=%s reason=%s conflicting_fields=%s "
-                "provider_operation=%s provider_price_category=%s latency_ms=%s",
+                "provider_operation=%s provider_price_category=%s provider_priority=%s latency_ms=%s",
                 intent, str(exc) or type(exc).__name__, conflicting_fields,
-                provider_operation, price_category, latency_ms,
+                provider_operation, price_category, provider_priority, latency_ms,
             )
             raise
         logger.info("NL parse success outcome=success intent=%s latency_ms=%s", result.intent.value, latency_ms)
@@ -135,7 +136,36 @@ class PolzaIntentParser:
 
 
 _SAFE_ERROR_TOKEN = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
+_SAFE_PROVIDER_PRIORITY = re.compile(r"[A-Za-z0-9_-]{1,40}")
 _SCHEMA_KEYWORDS = ("oneOf", "anyOf", "additionalProperties", "required", "response_format", "json_schema")
+
+
+def provider_priority_diagnostic(raw: str, reason: str) -> str:
+    """Return only a bounded priority token/category for relevant rejections."""
+    if reason not in {"invalid_priority", "invalid_query_arguments", "invalid_argument_entry"}:
+        return "unknown"
+    try:
+        value = json.loads(raw)
+        items = value.get("arguments") if isinstance(value, dict) else None
+    except (json.JSONDecodeError, TypeError):
+        return "unknown"
+    if not isinstance(items, list):
+        return "unknown"
+    priorities = [
+        item.get("value")
+        for item in items
+        if isinstance(item, dict) and item.get("name") == "priority"
+    ]
+    if not priorities:
+        return "missing"
+    if len(priorities) != 1:
+        return "unknown"
+    priority = priorities[0]
+    if priority is None:
+        return "null"
+    if isinstance(priority, str) and _SAFE_PROVIDER_PRIORITY.fullmatch(priority):
+        return priority
+    return "unknown"
 
 
 def _safe_provider_error(response: httpx.Response) -> tuple[str, str, str]:
