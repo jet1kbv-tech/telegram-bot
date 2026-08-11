@@ -56,6 +56,29 @@ async def _show_candidates(message: Any, operation, *, intro: str) -> int:
     return SELECTING_NL_ATTACHMENT_EVENT
 
 
+async def _show_resolution_fallback(message: Any, operation, *, owner: str, now: datetime) -> int:
+    """Keep the operation intact while the user deterministically selects its parent."""
+    candidates = upcoming_attachment_events(
+        storage.load(), owner=owner, now=now, timezone=BOT_TIMEZONE, limit=8,
+    )
+    operation.candidates = [
+        {"id": candidate.item_id, "bucket": candidate.bucket, "item": candidate.item}
+        for candidate in candidates
+    ]
+    if candidates:
+        return await _show_candidates(
+            message,
+            operation,
+            intro="Не нашёл точного совпадения. Выбери событие, к которому прикрепить документ:",
+        )
+    operation.stage = "enter_title"
+    await message.reply_text(
+        "Не нашёл точного совпадения и ближайших событий. Напиши точное название события.",
+        reply_markup=InlineKeyboardMarkup(_cancel_menu(operation.operation_id)),
+    )
+    return ENTERING_NL_ATTACHMENT_EVENT_TITLE
+
+
 def _classification(operation_id: str) -> InlineKeyboardMarkup:
     labels = [("transport_ticket", "🚆 Билет"), ("voucher", "🏨 Ваучер / проживание"),
               ("insurance", "🛡 Страховка"), ("reservation", "📅 Бронь"), ("other", "📄 Другое")]
@@ -107,9 +130,7 @@ async def begin_intent_attachment(update: Update, context: ContextTypes.DEFAULT_
     candidates = resolve_attachment_events(storage.load(), arguments["target"], owner=owner, now=now, timezone=BOT_TIMEZONE)
     logger.info("NL attachment resolution candidate_count=%s file_count=%s", len(candidates), len(operation.files))
     if not candidates:
-        clear_pending(context.user_data)
-        await response.reply_text("Не нашёл такое событие. Проверь название или открой нужный раздел вручную.")
-        return _idle(context)
+        return await _show_resolution_fallback(response, operation, owner=owner, now=now)
     operation.candidates = [{"id": c.item_id, "bucket": c.bucket, "item": c.item} for c in candidates]
     if len(candidates) > 1:
         return await _show_candidates(response, operation, intro="Нашёл несколько похожих событий. Какое выбрать?")

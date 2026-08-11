@@ -4,6 +4,7 @@ from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
+from bot.handlers import common
 from bot.handlers import nl_event_attachments as handler
 from bot.services.nl_attachment_context import KEY, append_file, create_pending, get_pending
 from bot.services.nl_dates import zoned_now
@@ -69,6 +70,134 @@ def callback(value):
     query = SimpleNamespace(data=value, answer=AsyncMock(), edit_message_text=AsyncMock(), message=message)
     return SimpleNamespace(callback_query=query, effective_message=message,
                            effective_user=SimpleNamespace(username="wp_bvv"))
+
+
+def production_data(*, upcoming=True):
+    return {"calendars": {"vova": []}, "afisha": [{
+        "id": "sanatorium", "title": "Санаторий", "status": "active",
+        "date": "2099-06-01" if upcoming else "2000-06-01",
+    }], "event_attachments": []}
+
+
+def intent_update(*, with_file=False):
+    document = (SimpleNamespace(file_id="file-id", file_unique_id="file-unique",
+                                file_name="voucher.pdf", mime_type="application/pdf")
+                if with_file else None)
+    message = SimpleNamespace(document=document, photo=[], reply_text=AsyncMock())
+    return SimpleNamespace(effective_message=message), message
+
+
+def test_production_reference_uses_user_chooser_without_fuzzy_match(monkeypatch):
+    source = production_data(); store = SimpleNamespace(load=lambda: source); configure(monkeypatch, store)
+    context = SimpleNamespace(user_data={}); update, response = intent_update()
+
+    state = run(handler.begin_intent_attachment(update, context, {
+        "target": "поездка в санаторий", "semantic_type": "voucher",
+    }, response))
+
+    assert resolve_attachment_events(source, "поездка в санаторий", owner="vova") == []
+    assert state == handler.SELECTING_NL_ATTACHMENT_EVENT
+    operation = context.user_data[KEY]
+    assert operation.metadata == {"semantic_type": "voucher"}
+    assert [candidate["item"]["title"] for candidate in operation.candidates] == ["Санаторий"]
+    assert response.reply_text.await_args.args[0].startswith("Не нашёл точного совпадения")
+
+
+def test_file_and_metadata_survive_fallback_then_one_attachment_is_saved(monkeypatch):
+    source = production_data(); store = SimpleNamespace(load=Mock(return_value=source), save=Mock())
+    configure(monkeypatch, store)
+    context = SimpleNamespace(user_data={}); update, response = intent_update(with_file=True)
+    run(handler.begin_intent_attachment(update, context, {
+        "target": "поездка в санаторий", "semantic_type": "voucher",
+    }, response))
+    operation = context.user_data[KEY]
+    assert len(operation.files) == 1
+    assert operation.files[0]["telegram_file_unique_id"] == "file-unique"
+    assert operation.files[0]["telegram_file_id"] == "file-id"
+
+    selected = callback(f"nla:e:{operation.operation_id}:0")
+    assert run(handler.nl_attachment_callback_router(selected, context)) == handler.CONFIRMING_NL_ATTACHMENT
+    assert "Тип: 🏨 Ваучер / проживание" in selected.callback_query.message.reply_text.await_args.args[0]
+    assert run(handler.nl_attachment_callback_router(
+        callback(f"nla:c:{operation.operation_id}"), context,
+    )) == handler._idle(context)
+    store.save.assert_called_once()
+    assert len(store.save.call_args.args[0]["event_attachments"]) == 1
+
+
+def test_metadata_survives_fallback_and_later_file_needs_no_provider(monkeypatch):
+    source = production_data(); store = SimpleNamespace(load=lambda: source); configure(monkeypatch, store)
+    context = SimpleNamespace(user_data={}); update, response = intent_update()
+    run(handler.begin_intent_attachment(update, context, {
+        "target": "поездка в санаторий", "semantic_type": "transport_ticket", "destination": "Воронеж",
+    }, response))
+    operation = context.user_data[KEY]
+
+    assert run(handler.nl_attachment_callback_router(
+        callback(f"nla:e:{operation.operation_id}:0"), context,
+    )) == handler.WAITING_FOR_NL_ATTACHMENTS
+    file_update, _ = intent_update(with_file=True)
+    assert run(handler.collect_attachment_handler(file_update, context)) == handler.WAITING_FOR_NL_ATTACHMENTS
+    assert operation.metadata == {"semantic_type": "transport_ticket", "destination": "Воронеж"}
+    assert len(operation.files) == 1
+
+
+def test_zero_match_and_no_upcoming_events_enters_exact_title_without_losing_operation(monkeypatch):
+    source = production_data(upcoming=False); store = SimpleNamespace(load=lambda: source); configure(monkeypatch, store)
+    context = SimpleNamespace(user_data={}); update, response = intent_update(with_file=True)
+    state = run(handler.begin_intent_attachment(update, context, {
+        "target": "поездка в санаторий", "semantic_type": "voucher",
+    }, response))
+    operation = context.user_data[KEY]
+    assert state == handler.ENTERING_NL_ATTACHMENT_EVENT_TITLE
+    assert operation.stage == "enter_title" and operation.files and operation.metadata["semantic_type"] == "voucher"
+    assert "точное название" in response.reply_text.await_args.args[0]
+
+
+def test_exact_and_ambiguous_matches_keep_existing_paths(monkeypatch):
+    source = production_data(); store = SimpleNamespace(load=lambda: source); configure(monkeypatch, store)
+    context = SimpleNamespace(user_data={}); update, response = intent_update()
+    assert run(handler.begin_intent_attachment(update, context, {
+        "target": "санаторий", "semantic_type": "voucher",
+    }, response)) == handler.WAITING_FOR_NL_ATTACHMENTS
+    assert context.user_data[KEY].parent_id == "sanatorium"
+
+    source["afisha"].append({**source["afisha"][0], "id": "sanatorium-2"})
+    context = SimpleNamespace(user_data={}); update, response = intent_update()
+    assert run(handler.begin_intent_attachment(update, context, {
+        "target": "Санаторий", "semantic_type": "voucher",
+    }, response)) == handler.SELECTING_NL_ATTACHMENT_EVENT
+    assert len(context.user_data[KEY].candidates) == 2
+    assert response.reply_text.await_args.args[0] == "Нашёл несколько похожих событий. Какое выбрать?"
+
+
+def test_cancel_from_zero_candidate_chooser_clears_without_mutation(monkeypatch):
+    source = production_data(); store = SimpleNamespace(load=lambda: source, save=Mock()); configure(monkeypatch, store)
+    context = SimpleNamespace(user_data={}); update, response = intent_update(with_file=True)
+    run(handler.begin_intent_attachment(update, context, {
+        "target": "поездка в санаторий", "semantic_type": "voucher",
+    }, response))
+    operation = context.user_data[KEY]
+    run(handler.nl_attachment_callback_router(callback(f"nla:x:{operation.operation_id}"), context))
+    assert KEY not in context.user_data
+    store.save.assert_not_called()
+
+
+def test_main_menu_from_zero_candidate_chooser_clears_pending_context(monkeypatch):
+    source = production_data(); store = SimpleNamespace(load=lambda: source); configure(monkeypatch, store)
+    context = SimpleNamespace(user_data={}); update, response = intent_update()
+    run(handler.begin_intent_attachment(update, context, {
+        "target": "поездка в санаторий", "semantic_type": "voucher",
+    }, response))
+    assert KEY in context.user_data
+
+    monkeypatch.setattr(common, "ensure_access", AsyncMock(return_value=True))
+    monkeypatch.setattr(common, "remember_current_chat", AsyncMock())
+    common.configure_common_handlers(main_menu_keyboard=lambda: "main-keyboard", safe_edit_message=AsyncMock())
+    menu_update = callback("menu:main")
+    menu_update.message = None
+    assert run(common.back_to_main(menu_update, context)) == handler._idle(SimpleNamespace(user_data={}))
+    assert context.user_data == {}
 
 
 def test_exact_title_fallback_reaches_event_outside_first_eight(monkeypatch):
