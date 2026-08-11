@@ -45,6 +45,7 @@ class JsonStorage:
                 "active": [],
                 "used": [],
             },
+            "event_attachments": [],
             "spark": {
                 "active": [],
                 "done": [],
@@ -132,6 +133,7 @@ class JsonStorage:
 
         normalize_purchases_root(data, raw_data.get("purchases"))
         normalize_tickets_root(data, raw_data.get("tickets"))
+        normalize_event_attachments_root(data, raw_data.get("event_attachments"))
         normalize_spark_root(data, raw_data.get("spark"))
         normalize_places_root(data, raw_data.get("places"))
 
@@ -641,6 +643,57 @@ def normalize_tickets_root(data: dict[str, Any], raw_tickets: Any) -> None:
                 if item:
                     tickets[bucket].append(item)
     data["tickets"] = tickets
+
+
+def normalize_event_attachment(item: Any) -> dict[str, Any] | None:
+    if not isinstance(item, dict):
+        return None
+    parent_type = str(item.get("parent_type") or "")
+    media_type = str(item.get("telegram_media_type") or "")
+    semantic_type = str(item.get("semantic_type") or "other")
+    transport_type = item.get("transport_type")
+    person = item.get("person")
+    file_id = str(item.get("telegram_file_id") or "").strip()
+    parent_event_id = str(item.get("parent_event_id") or "").strip()
+    if parent_type not in {"calendar", "afisha"} or media_type not in {"document", "photo"}:
+        return None
+    if semantic_type not in {"transport_ticket", "voucher", "accommodation", "insurance", "reservation", "other"}:
+        semantic_type = "other"
+    if transport_type not in {None, "train", "plane", "bus", "other"}:
+        transport_type = None
+    if person not in {None, "vova", "sasha", "both"}:
+        person = None
+    if not file_id or not parent_event_id:
+        return None
+    return {
+        "id": str(item.get("id") or make_id()),
+        "parent_type": parent_type,
+        "parent_event_id": parent_event_id,
+        "telegram_file_id": file_id,
+        "telegram_file_unique_id": str(item.get("telegram_file_unique_id") or ""),
+        "telegram_media_type": media_type,
+        "file_name": str(item.get("file_name") or ""),
+        "mime_type": str(item.get("mime_type") or ""),
+        "semantic_type": semantic_type,
+        "transport_type": transport_type,
+        "origin": item.get("origin") or None,
+        "destination": item.get("destination") or None,
+        "date": item.get("date") or None,
+        "person": person,
+        "comment": item.get("comment") or None,
+        "created_by": str(item.get("created_by") or "unknown"),
+        "created_at": str(item.get("created_at") or ""),
+    }
+
+
+def normalize_event_attachments_root(data: dict[str, Any], raw_attachments: Any) -> None:
+    attachments = []
+    if isinstance(raw_attachments, list):
+        for raw_item in raw_attachments:
+            item = normalize_event_attachment(raw_item)
+            if item:
+                attachments.append(item)
+    data["event_attachments"] = attachments
 
 
 def normalize_calendar_event(item: Any, owner: str | None = None) -> dict[str, Any] | None:
