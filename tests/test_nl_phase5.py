@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 import pytest
 
 from bot.services.actions import existing
-from bot.services.nl_entity_resolution import normalize_reference, resolve_entities
+from bot.services.nl_entity_resolution import normalize_for_match, resolve_entities
 from bot.services.nl_intent import IntentKind, IntentParserInvalidOutput
 from bot.services.nl_intent_decoder import decode_intent
 from bot.storage import JsonStorage
@@ -32,11 +32,57 @@ def args(item, bucket, changes, expected=None):
 
 def test_reference_normalization_and_resolution_is_exact():
     data = base_data()
-    assert normalize_reference("  КОФЕМАШИНА!!! ") == "кофемашина"
+    assert normalize_for_match("  КОФЕМАШИНА   ") == "кофемашина"
     assert len(resolve_entities(data, IntentKind.UPDATE_PURCHASE, "кофемашина")) == 1
     assert not resolve_entities(data, IntentKind.UPDATE_PURCHASE, "кофемаш")
     assert len(resolve_entities(data, IntentKind.UPDATE_FILM, "игры разума")) == 1
     assert len(resolve_entities(data, IntentKind.UPDATE_FILM, "A Beautiful Mind")) == 1
+
+
+@pytest.mark.parametrize("target", ["кофемолка", "КОФЕМОЛКА", "  кофемолка   "])
+def test_purchase_matching_is_case_and_whitespace_insensitive(target):
+    data = base_data()
+    data["purchases"]["planned"][0]["title"] = "Кофемолка"
+    assert len(resolve_entities(data, IntentKind.DELETE_PURCHASE, target)) == 1
+
+
+def test_unicode_yo_equivalence_and_punctuation_safety():
+    data = base_data()
+    data["purchases"]["planned"] = [
+        {"id": "tree", "title": "Ёлка"},
+        {"id": "cat", "title": "Котёнок"},
+        {"id": "spider", "title": "Spider-Man"},
+    ]
+    assert [item.item_id for item in resolve_entities(data, IntentKind.UPDATE_PURCHASE, "елка")] == ["tree"]
+    assert not resolve_entities(data, IntentKind.UPDATE_PURCHASE, "кот")
+    assert not resolve_entities(data, IntentKind.UPDATE_PURCHASE, "Spider Man")
+
+
+def test_normalized_duplicate_titles_remain_ambiguous():
+    data = base_data()
+    data["purchases"]["planned"] = [
+        {"id": "one", "title": "Кофемолка"},
+        {"id": "two", "title": "  кофемолка  "},
+    ]
+    assert [item.item_id for item in resolve_entities(data, IntentKind.UPDATE_PURCHASE, "КОФЕМОЛКА")] == ["one", "two"]
+
+
+@pytest.mark.parametrize("target", ["стоматолог", "СТОМАТОЛОГ"])
+def test_calendar_matching_is_case_insensitive(target):
+    assert len(resolve_entities(base_data(), IntentKind.UPDATE_CALENDAR_EVENT, target, owner="vova")) == 1
+
+
+def test_afisha_matching_is_case_insensitive():
+    assert len(resolve_entities(base_data(), IntentKind.DELETE_AFISHA_EVENT, "КОНЦЕРТ")) == 1
+
+
+@pytest.mark.parametrize("target", ["a beautiful mind", "ИГРЫ РАЗУМА"])
+def test_film_matching_is_case_insensitive_without_changing_canonical_title(target):
+    data = base_data()
+    candidates = resolve_entities(data, IntentKind.UPDATE_FILM, target)
+    assert len(candidates) == 1
+    assert candidates[0].item["localized_title"] == "Игры разума"
+    assert candidates[0].item["original_title"] == "A Beautiful Mind"
 
 
 def test_ambiguity_and_calendar_owner_isolation():

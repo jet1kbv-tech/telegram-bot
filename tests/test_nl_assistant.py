@@ -1,4 +1,5 @@
 import asyncio
+from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -166,7 +167,8 @@ def test_calendar_clarification_continues_same_proposal(monkeypatch):
     answer = update(text="завтра")
     assert run(nl_assistant.nl_clarification_handler(answer, ctx)) == MENU
     assert ctx.user_data["ai_active_proposal_id"] == proposal_id
-    assert "11.08.2026" in answer.effective_message.reply_text.await_args.args[0]
+    tomorrow = (nl_assistant.zoned_now(nl_assistant.BOT_TIMEZONE) + timedelta(days=1)).strftime("%d.%m.%Y")
+    assert tomorrow in answer.effective_message.reply_text.await_args.args[0]
     run(nl_assistant.nl_callback_router(update(callback_data=f"ai:c:{proposal_id}"), ctx))
     create.assert_called_once()
 
