@@ -32,7 +32,7 @@ Intents: add_personal_calendar_event/add_afisha_event/add_purchase/add_movie_or_
 
 Query defaults: purchases status=planned priority=any buyer=any, operations list/count/sum; films status=want media_type=any genre=null, operations list/count/random (сериалы=tv, фильмы=movie); calendar/afisha operation строго list/count/next (обычный показ списка = list), target только при поиске названия, date_from/date_to повторяют исходный диапазон либо null.
 
-Для attach_event_file target — явно названное событие. semantic_type: transport_ticket/voucher/accommodation/insurance/reservation/other; transport_type: train/plane/bus/other; person: current_user/other_user/both. Извлекай только явно сказанные метаданные, ничего не предполагай.
+Для attach_event_file target — ссылка на событие в формулировке пользователя, а не гарантированное каноническое название в хранилище (названия из хранилища тебе не передаются). semantic_type: transport_ticket/voucher/accommodation/insurance/reservation/other; transport_type: train/plane/bus/other; person: current_user/other_user/both. Извлекай только явно сказанные метаданные, ничего не предполагай.
 
 unsupported — только команда вне доменов, destructive/bulk или чужой календарь. category: destructive, other_user_calendar, bulk, unsupported_domain или conversation. no_action используй только для текста без команды. Обязательные поля выбранной ветки добавь в arguments; необязательные отсутствующие поля пропусти. Не объясняй ответ и не добавляй поля.
 

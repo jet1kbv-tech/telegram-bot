@@ -960,3 +960,5 @@ def test_attach_event_file_invalid_enums_fail_closed(field, value):
 def test_attachment_examples_are_in_provider_prompt():
     assert 'attach_event_file target="поездка в санаторий"' in SYSTEM_PROMPT
     assert 'transport_type="train" origin="Москва" destination="Воронеж"' in SYSTEM_PROMPT
+    assert "ссылка на событие в формулировке пользователя" in SYSTEM_PROMPT
+    assert "названия из хранилища тебе не передаются" in SYSTEM_PROMPT
