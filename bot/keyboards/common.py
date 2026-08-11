@@ -223,6 +223,10 @@ def item_keyboard(
         status_callback = f"status|{section}|{item_id}|{toggle_to}|{page}"
         delete_confirm_callback = f"delete_confirm|{section}|{item_id}|{page}"
 
+    documents_row = []
+    if section == "afisha":
+        documents_row = [[InlineKeyboardButton("📎 Документы", callback_data=f"att|afi|{item_id}|{page}")]]
+
     back_callback = build_back_to_list_callback(section, page, owner, status_filter)
 
     return InlineKeyboardMarkup(
@@ -238,6 +242,7 @@ def item_keyboard(
                 if section == "afisha"
                 else []
             )
+            + documents_row
             + [
                 [InlineKeyboardButton("🗑️ Удалить", callback_data=delete_confirm_callback)],
                 [InlineKeyboardButton("⬅️ К списку", callback_data=back_callback)],

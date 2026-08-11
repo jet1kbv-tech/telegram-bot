@@ -254,6 +254,31 @@ def test_delete_preview_names_target_and_is_explicitly_pending():
     assert "Пока ничего не удалено" in text
 
 
+@pytest.mark.parametrize("kind", [IntentKind.DELETE_CALENDAR_EVENT, IntentKind.DELETE_AFISHA_EVENT])
+def test_event_delete_preview_warns_only_when_attachments_exist(kind):
+    base = {"_selected": {"title": "Поездка", "date": "2026-08-12"}, "_changes": {}}
+    without = nl_assistant._preview(SimpleNamespace(intent=kind, arguments=base))
+    with_files = nl_assistant._preview(SimpleNamespace(intent=kind, arguments={**base, "_attachment_count": 2}))
+    assert "К событию прикреплено" not in without
+    assert "К событию прикреплено 2 документов" in with_files
+    assert "они тоже исчезнут из бота" in with_files
+
+
+@pytest.mark.parametrize(("kind", "bucket", "parent_type"), [
+    (IntentKind.DELETE_CALENDAR_EVENT, "vova", "calendar"),
+    (IntentKind.DELETE_AFISHA_EVENT, "afisha", "afisha"),
+])
+def test_event_delete_candidate_selection_counts_source_attachments(monkeypatch, kind, bucket, parent_type):
+    item = {"id": "event1", "title": "Поездка", "date": "2026-08-12"}
+    data = {"afisha": [item] if parent_type == "afisha" else [],
+            "calendars": {"vova": [item] if parent_type == "calendar" else [], "sasha": []},
+            "event_attachments": [{"id": "att1", "parent_type": parent_type, "parent_event_id": "event1"}]}
+    monkeypatch.setattr(nl_assistant, "storage", SimpleNamespace(load=lambda: data))
+    proposal = SimpleNamespace(intent=kind, arguments={"target": "Поездка"})
+    nl_assistant._select_candidate(proposal, nl_assistant.EntityCandidate("event1", bucket, item), "Вова")
+    assert proposal.arguments["_attachment_count"] == 1
+
+
 def test_waiting_edit_failure_falls_back_to_single_reply():
     nl_assistant._parser = FakeParser(purchase_intent())
     upd = update()

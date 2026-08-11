@@ -162,6 +162,47 @@ def test_afisha_update_and_delete_sync_projections(monkeypatch, tmp_path):
     assert all(not any(event.get("source") == "afisha" for event in cal) for cal in store.load()["calendars"].values())
 
 
+@pytest.mark.parametrize(("kind", "bucket", "item_path", "parent_type"), [
+    (IntentKind.DELETE_CALENDAR_EVENT, "vova", ("calendars", "vova"), "calendar"),
+    (IntentKind.DELETE_AFISHA_EVENT, "afisha", ("afisha",), "afisha"),
+])
+def test_nl_event_delete_cascades_attachments_atomically(monkeypatch, tmp_path, kind, bucket, item_path, parent_type):
+    store = install_storage(monkeypatch, tmp_path)
+    data = store.load()
+    items = data[item_path[0]][item_path[1]] if len(item_path) == 2 else data[item_path[0]]
+    item = items[0]
+    data["event_attachments"] = [{
+        "id": "att1", "parent_type": parent_type, "parent_event_id": item["id"],
+        "telegram_file_id": "private", "telegram_file_unique_id": "unique",
+        "telegram_media_type": "document", "file_name": "", "mime_type": "",
+        "semantic_type": "other", "transport_type": None, "origin": None,
+        "destination": None, "date": None, "person": None, "comment": None,
+        "created_by": "unknown", "created_at": "",
+    }]
+    store.save(data)
+    assert existing.mutate_existing(kind, args(item, bucket, {}, item)).status == "deleted"
+    saved = store.load()
+    assert saved["event_attachments"] == []
+    remaining = saved[item_path[0]][item_path[1]] if len(item_path) == 2 else saved[item_path[0]]
+    assert not any(row["id"] == item["id"] for row in remaining)
+
+
+def test_afisha_non_delete_status_transition_preserves_attachments(monkeypatch, tmp_path):
+    store = install_storage(monkeypatch, tmp_path)
+    data = store.load(); item = data["afisha"][0]
+    data["event_attachments"] = [{
+        "id": "att1", "parent_type": "afisha", "parent_event_id": item["id"],
+        "telegram_file_id": "private", "telegram_file_unique_id": "unique",
+        "telegram_media_type": "photo", "file_name": "", "mime_type": "image/jpeg",
+        "semantic_type": "other", "transport_type": None, "origin": None,
+        "destination": None, "date": None, "person": None, "comment": None,
+        "created_by": "unknown", "created_at": "",
+    }]
+    store.save(data)
+    existing.mutate_existing(IntentKind.UPDATE_AFISHA_EVENT, args(item, "afisha", {"status": "done"}))
+    assert [row["id"] for row in store.load()["event_attachments"]] == ["att1"]
+
+
 def test_decoder_rejects_unexpected_and_invalid_enum():
     valid = {"intent": "update_film", "arguments": {"target": "Дюна", "status": "watched", "comment": None}}
     assert decode_intent(valid).intent is IntentKind.UPDATE_FILM

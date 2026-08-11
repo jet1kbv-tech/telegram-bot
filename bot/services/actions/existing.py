@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any
 
 from bot.services.afisha_calendar_sync import build_afisha_projection_id, project_afisha_to_calendars, remove_afisha_from_calendars
+from bot.services.event_attachments import delete_attachments_for_event
 from bot.services.nl_intent import IntentKind
 from bot.storage import delete_item_by_id, find_item, normalize_calendar_event, normalize_event, normalize_purchase_item, sort_calendar_events, sort_events, storage
 
@@ -34,6 +35,10 @@ def mutate_existing(kind: IntentKind, arguments: dict[str, Any]) -> MutationResu
         if any((bucket if field == "status" and kind is IntentKind.UPDATE_PURCHASE else item.get(field)) != old for field, old in expected.items()):
             return MutationResult("conflict")
         if deleting:
+            if kind is IntentKind.DELETE_CALENDAR_EVENT:
+                delete_attachments_for_event(data, "calendar", item_id)
+            elif kind is IntentKind.DELETE_AFISHA_EVENT:
+                delete_attachments_for_event(data, "afisha", item_id)
             delete_item_by_id(items, item_id)
             if kind is IntentKind.DELETE_AFISHA_EVENT:
                 remove_afisha_from_calendars(data, item_id)

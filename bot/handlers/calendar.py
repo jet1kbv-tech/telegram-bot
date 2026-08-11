@@ -134,6 +134,7 @@ def build_calendar_event_text(item: dict[str, Any]) -> str:
 def calendar_event_keyboard(owner: str, item_id: str, page: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
+            [InlineKeyboardButton("📎 Документы", callback_data=f"att|cal|{owner}|{item_id}|{page}")],
             [InlineKeyboardButton("✏️ Редактировать", callback_data=f"cal_edit|{owner}|{item_id}|{page}")],
             [InlineKeyboardButton("🗑️ Удалить", callback_data=f"cal_delete_confirm|{owner}|{item_id}|{page}")],
             [InlineKeyboardButton("⬅️ К списку", callback_data=f"cal_list|{owner}|{page}")],
@@ -145,6 +146,7 @@ def calendar_event_keyboard(owner: str, item_id: str, page: int) -> InlineKeyboa
 def calendar_event_readonly_keyboard(owner: str, source_id: str, page: int) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     if source_id:
+        rows.append([InlineKeyboardButton("📎 Документы", callback_data=f"att|afi|{source_id}|0")])
         rows.append([InlineKeyboardButton("🗓 Открыть в Афише", callback_data=f"view|afisha|{source_id}|0")])
     rows.append([InlineKeyboardButton("⬅️ К списку", callback_data=f"cal_list|{owner}|{page}")])
     rows.append([InlineKeyboardButton("🏠 В меню", callback_data="menu:main")])
@@ -302,9 +304,12 @@ async def handle_calendar_delete_confirm(update: Update, owner: str, item_id: st
             reply_markup=calendar_event_readonly_keyboard(owner, str(item.get("source_id") or ""), page),
         )
         return SECTION
+    from bot.services.event_attachments import get_attachments_for_event
+    count = len(get_attachments_for_event(data, "calendar", item_id))
+    warning = f"\n\nК событию прикреплено {count} документов.\nПри удалении события они тоже исчезнут из бота." if count else ""
     await safe_edit_message(
         query,
-        f"{build_calendar_event_text(item)}\n\nТочно удалить?",
+        f"{build_calendar_event_text(item)}{warning}\n\nТочно удалить?",
         reply_markup=calendar_event_delete_confirm_keyboard(owner, item_id, page),
     )
     return SECTION
@@ -330,6 +335,8 @@ async def handle_calendar_delete(update: Update, owner: str, item_id: str, reque
             reply_markup=calendar_event_readonly_keyboard(owner, str(item.get("source_id") or ""), requested_page),
         )
         return SECTION
+    from bot.services.event_attachments import delete_attachments_for_event
+    delete_attachments_for_event(data, "calendar", item_id)
     delete_item_by_id(items, item_id)
     storage.save(data)
     return await show_calendar_owner(update, owner, requested_page)

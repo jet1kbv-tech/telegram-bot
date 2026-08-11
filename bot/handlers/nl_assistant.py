@@ -165,8 +165,15 @@ def _select_candidate(proposal: ActionProposal, candidate: EntityCandidate, acto
         (field if field != "status" else field): (candidate.bucket if field == "status" and proposal.intent is IntentKind.UPDATE_PURCHASE else item.get(field))
         for field in changes
     }
+    attachment_count = 0
+    if proposal.intent in {IntentKind.DELETE_CALENDAR_EVENT, IntentKind.DELETE_AFISHA_EVENT}:
+        from bot.services.event_attachments import get_attachments_for_event
+        parent_type = "calendar" if proposal.intent is IntentKind.DELETE_CALENDAR_EVENT else "afisha"
+        attachment_count = len(get_attachments_for_event(storage.load(), parent_type, candidate.item_id))
     proposal.arguments.update({"_id": candidate.item_id, "_bucket": candidate.bucket, "_selected": item,
                                "_changes": changes, "_expected": expected, "_actor_name": actor_name})
+    if attachment_count:
+        proposal.arguments["_attachment_count"] = attachment_count
 
 
 def _prepare(kind: IntentKind, arguments: dict[str, Any], now: datetime) -> tuple[dict[str, Any], list[str]]:
@@ -504,7 +511,13 @@ def _preview(proposal: ActionProposal) -> str:
                 parts.append(str(item.get("start_time") or item.get("time")))
             when = " в ".join(parts)
             details = f"\n{when}" if when else ""
-            return f"🗑 Удалить\n\n{item.get('title') or 'Без названия'}{details}\n\nПока ничего не удалено."
+            warning = ""
+            if args.get("_attachment_count"):
+                warning = (
+                    f"\n\nК событию прикреплено {args['_attachment_count']} документов."
+                    "\nПри удалении события они тоже исчезнут из бота."
+                )
+            return f"🗑 Удалить\n\n{item.get('title') or 'Без названия'}{details}{warning}\n\nПока ничего не удалено."
         labels = {"title": "Название", "price": "Стоимость", "priority": "Приоритет", "buyer": "Исполнитель", "status": "Статус", "comment": "Комментарий", "link": "Ссылка", "date": "Дата", "time": "Время", "start_time": "Время"}
         lines = ["✏️ Изменить", "", str(item.get("title") or "Без названия"), ""]
         lines.extend(f"{labels.get(field, field)}: {_human_value(field, item.get(field))} → {_human_value(field, value)}" for field, value in changes.items())

@@ -98,6 +98,8 @@ def apply_afisha_status_update(data: dict[str, Any], item: dict[str, Any], new_s
 
 
 def apply_afisha_delete(data: dict[str, Any], item: dict[str, Any]) -> None:
+    from bot.services.event_attachments import delete_attachments_for_event
+    delete_attachments_for_event(data, "afisha", str(item.get("id") or ""))
     remove_afisha_from_calendars(data, str(item.get("id") or ""))
 
 

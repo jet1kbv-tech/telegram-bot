@@ -86,6 +86,7 @@ from bot.handlers.tickets import (
     configure_tickets_handlers,
     tickets_callback_router,
 )
+from bot.handlers.event_attachments import configure_event_attachment_handlers, event_attachment_router, receive_file
 from bot.handlers.wishlist import (
     add_wishlist_comment,
     add_wishlist_link,
@@ -129,6 +130,9 @@ from bot.states import (
     ADDING_TICKET_TIME,
     ADDING_TICKET_TITLE,
     EDITING_PURCHASE_FIELD,
+    ADDING_EVENT_ATTACHMENT_FILE,
+    SELECTING_EVENT_ATTACHMENT_TYPE,
+    SELECTING_EVENT_ATTACHMENT_TRANSPORT,
     CITY_ADD_COUNTRY,
     CITY_ADD_NAME,
     CITY_PLACE_ADD_COMMENT,
@@ -224,6 +228,7 @@ def build_app() -> Application:
         places_callback_router=places_callback_router,
     )
     configure_tickets_handlers(safe_edit_message=safe_edit_message)
+    configure_event_attachment_handlers(safe_edit_message=safe_edit_message)
 
     polza_key = os.getenv("POLZA_AI_API_KEY", "").strip()
     polza_model = os.getenv("POLZA_AI_MODEL", "").strip()
@@ -284,6 +289,7 @@ def build_app() -> Application:
                 CallbackQueryHandler(spark_callback_router, pattern=r"^spark:"),
                 CallbackQueryHandler(tickets_callback_router, pattern=r"^tickets:"),
                 CallbackQueryHandler(purchases_callback_router, pattern=r"^purchases:"),
+                CallbackQueryHandler(event_attachment_router, pattern=r"^att\|"),
                 CallbackQueryHandler(section_router),
                 *ai_text_handlers,
             ],
@@ -359,6 +365,13 @@ def build_app() -> Application:
                 MessageHandler(filters.PHOTO | filters.Document.ALL, add_ticket_attachment),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, add_ticket_attachment),
             ],
+            ADDING_EVENT_ATTACHMENT_FILE: [
+                CallbackQueryHandler(event_attachment_router, pattern=r"^att\|"),
+                MessageHandler(filters.PHOTO | filters.Document.ALL, receive_file),
+                MessageHandler(filters.ALL, receive_file),
+            ],
+            SELECTING_EVENT_ATTACHMENT_TYPE: [CallbackQueryHandler(event_attachment_router, pattern=r"^att\|")],
+            SELECTING_EVENT_ATTACHMENT_TRANSPORT: [CallbackQueryHandler(event_attachment_router, pattern=r"^att\|")],
             ADDING_EVENT_TITLE: text_state(add_event_title),
             ADDING_EVENT_PLACE: text_state(add_event_place),
             ADDING_EVENT_DATE: text_state(add_event_date),

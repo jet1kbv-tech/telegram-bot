@@ -677,7 +677,13 @@ async def section_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await safe_edit_message(query, "Не удалось найти элемент для удаления.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 В меню", callback_data="menu:main")]]))
             return SECTION
 
-        await safe_edit_message(query, f"{build_item_text(section, item)}\n\nТочно удалить?", reply_markup=delete_confirm_keyboard(section, item_id, page, owner, status_filter))
+        warning = ""
+        if section == "afisha":
+            from bot.services.event_attachments import get_attachments_for_event
+            count = len(get_attachments_for_event(data, "afisha", item_id))
+            if count:
+                warning = f"\n\nК событию прикреплено {count} документов.\nПри удалении события они тоже исчезнут из бота."
+        await safe_edit_message(query, f"{build_item_text(section, item)}{warning}\n\nТочно удалить?", reply_markup=delete_confirm_keyboard(section, item_id, page, owner, status_filter))
         return SECTION
 
     if action == "delete":
@@ -702,13 +708,15 @@ async def section_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await safe_edit_message(query, "Не удалось удалить: элемент не найден.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 В меню", callback_data="menu:main")]]))
             return SECTION
 
+        if section == "afisha":
+            # Cascade while the source parent still exists; the attachment
+            # service intentionally validates every parent reference.
+            apply_afisha_delete(data, item)
         if section == "films":
             delete_film(item_id)
             data = storage.load()
         else:
             delete_item_by_id(data[section], item_id)
-        if section == "afisha":
-            apply_afisha_delete(data, item)
         if section != "films":
             storage.save(data)
 
