@@ -32,6 +32,11 @@ _FIELDS: dict[IntentKind, dict[str, tuple[type, ...]]] = {
     IntentKind.DELETE_CALENDAR_EVENT: {"target": (str,)},
     IntentKind.UPDATE_AFISHA_EVENT: {"target": (str,), "title": (str, type(None)), "date_expression": (str, type(None)), "time_expression": (str, type(None))},
     IntentKind.DELETE_AFISHA_EVENT: {"target": (str,)},
+    IntentKind.ATTACH_EVENT_FILE: {
+        "target": (str,), "semantic_type": (str, type(None)), "transport_type": (str, type(None)),
+        "origin": (str, type(None)), "destination": (str, type(None)),
+        "date_expression": (str, type(None)), "person": (str, type(None)),
+    },
     IntentKind.QUERY_PURCHASES: {"status": (str,), "priority": (str,), "buyer": (str,), "operation": (str,)},
     IntentKind.QUERY_FILMS: {"status": (str,), "media_type": (str,), "genre": (str, type(None)), "operation": (str,)},
     IntentKind.QUERY_CALENDAR: {"date_from": (str, type(None)), "date_to": (str, type(None)), "target": (str, type(None)), "operation": (str,)},
@@ -136,6 +141,13 @@ def decode_intent(raw: str | dict[str, Any]) -> ParsedIntent:
         raise IntentParserInvalidOutput("invalid_query_arguments")
     if kind is IntentKind.UNSUPPORTED and arguments["category"] not in _UNSUPPORTED:
         raise IntentParserInvalidOutput("invalid_category")
+    if kind is IntentKind.ATTACH_EVENT_FILE:
+        if arguments["semantic_type"] not in {None, "transport_ticket", "voucher", "accommodation", "insurance", "reservation", "other"}:
+            raise IntentParserInvalidOutput("invalid_semantic_type")
+        if arguments["transport_type"] not in {None, "train", "plane", "bus", "other"}:
+            raise IntentParserInvalidOutput("invalid_transport_type")
+        if arguments["person"] not in {None, "current_user", "other_user", "both"}:
+            raise IntentParserInvalidOutput("invalid_person")
     return ParsedIntent(kind, arguments)
 
 
@@ -165,6 +177,14 @@ _BRANCH_PROPERTIES: dict[IntentKind, dict[str, Any]] = {
     IntentKind.DELETE_CALENDAR_EVENT: {"target": {"type": "string"}},
     IntentKind.UPDATE_AFISHA_EVENT: {"target": {"type": "string"}, "title": {"type": ["string", "null"]}, "date_expression": {"type": ["string", "null"]}, "time_expression": {"type": ["string", "null"]}},
     IntentKind.DELETE_AFISHA_EVENT: {"target": {"type": "string"}},
+    IntentKind.ATTACH_EVENT_FILE: {
+        "target": {"type": "string"},
+        "semantic_type": {"type": ["string", "null"], "enum": ["transport_ticket", "voucher", "accommodation", "insurance", "reservation", "other", None]},
+        "transport_type": {"type": ["string", "null"], "enum": ["train", "plane", "bus", "other", None]},
+        "origin": {"type": ["string", "null"]}, "destination": {"type": ["string", "null"]},
+        "date_expression": {"type": ["string", "null"]},
+        "person": {"type": ["string", "null"], "enum": ["current_user", "other_user", "both", None]},
+    },
     IntentKind.QUERY_PURCHASES: {"status": {"type": "string", "enum": ["planned", "bought", "any"]}, "priority": {"type": "string", "enum": ["high", "medium", "low", "any"]}, "buyer": {"type": "string", "enum": ["current_user", "other_user", "unassigned", "any"]}, "operation": {"type": "string", "enum": ["list", "count", "sum"]}},
     IntentKind.QUERY_FILMS: {"status": {"type": "string", "enum": ["want", "watched", "any"]}, "media_type": {"type": "string", "enum": ["movie", "tv", "any"]}, "genre": {"type": ["string", "null"]}, "operation": {"type": "string", "enum": ["list", "count", "random"]}},
     IntentKind.QUERY_CALENDAR: {"date_from": {"type": ["string", "null"]}, "date_to": {"type": ["string", "null"]}, "target": {"type": ["string", "null"]}, "operation": {"type": "string", "enum": ["list", "count", "next"]}},

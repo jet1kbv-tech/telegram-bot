@@ -15,8 +15,24 @@ from bot.utils import ensure_access, get_user_name, remember_current_chat
 _safe_edit_message: Callable[..., Awaitable[None]] | None = None
 
 TYPE_LABELS = {"transport_ticket": "🚆 Билет", "voucher": "🏨 Ваучер / проживание",
+              "accommodation": "🏨 Ваучер / проживание",
               "insurance": "🛡 Страховка", "reservation": "📅 Бронь", "other": "📄 Документ"}
 TRANSPORT_LABELS = {"train": "на поезд", "plane": "на самолёт", "bus": "на автобус", "other": ""}
+
+
+def extract_attachment_draft(message: Any) -> dict[str, str] | None:
+    """Copy Telegram references only; this deliberately performs no download."""
+    if getattr(message, "document", None):
+        file = message.document
+        return {"telegram_media_type": "document", "telegram_file_id": file.file_id,
+                "telegram_file_unique_id": file.file_unique_id, "file_name": file.file_name or "",
+                "mime_type": file.mime_type or ""}
+    photos = getattr(message, "photo", None) or []
+    if photos:
+        file = photos[-1]
+        return {"telegram_media_type": "photo", "telegram_file_id": file.file_id,
+                "telegram_file_unique_id": file.file_unique_id, "file_name": "", "mime_type": "image/jpeg"}
+    return None
 
 
 def configure_event_attachment_handlers(*, safe_edit_message: Callable[..., Awaitable[None]]) -> None:
@@ -64,15 +80,8 @@ async def receive_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     if not await ensure_access(update): return ConversationHandler.END
     await remember_current_chat(update)
     message = update.message
-    if message.document:
-        file = message.document
-        draft = {"telegram_media_type": "document", "telegram_file_id": file.file_id,
-                 "telegram_file_unique_id": file.file_unique_id, "file_name": file.file_name or "", "mime_type": file.mime_type or ""}
-    elif message.photo:
-        file = message.photo[-1]
-        draft = {"telegram_media_type": "photo", "telegram_file_id": file.file_id,
-                 "telegram_file_unique_id": file.file_unique_id, "file_name": "", "mime_type": "image/jpeg"}
-    else:
+    draft = extract_attachment_draft(message)
+    if draft is None:
         await message.reply_text("Нужен PDF, документ или фото.")
         return ADDING_EVENT_ATTACHMENT_FILE
     context.user_data["event_attachment_draft"] = draft

@@ -19,6 +19,7 @@ class IntentKind(str, Enum):
     DELETE_CALENDAR_EVENT = "delete_calendar_event"
     UPDATE_AFISHA_EVENT = "update_afisha_event"
     DELETE_AFISHA_EVENT = "delete_afisha_event"
+    ATTACH_EVENT_FILE = "attach_event_file"
     QUERY_PURCHASES = "query_purchases"
     QUERY_FILMS = "query_films"
     QUERY_CALENDAR = "query_calendar"

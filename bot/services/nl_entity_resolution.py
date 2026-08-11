@@ -60,6 +60,40 @@ def resolve_entities(data: dict[str, Any], kind: IntentKind, target: str, *, own
     return candidates
 
 
+def resolve_attachment_events(data: dict[str, Any], target: str, *, owner: str,
+                              include_past: bool = False, now: datetime | None = None,
+                              timezone: str = "Europe/Moscow") -> list[EntityCandidate]:
+    """Resolve an attachment target across owned manual calendar and Afisha sources."""
+    needle = normalize_for_match(target)
+    candidates: list[EntityCandidate] = []
+    for item in data.get("calendars", {}).get(owner, []):
+        if item.get("source") != "manual" or normalize_for_match(str(item.get("title") or "")) != needle:
+            continue
+        if include_past or not _calendar_event_is_past(item, now=now, timezone=timezone):
+            candidates.append(EntityCandidate(str(item.get("id") or ""), "calendar", dict(item)))
+    for item in data.get("afisha", []):
+        if item.get("status") == "active" and normalize_for_match(str(item.get("title") or "")) == needle:
+            candidates.append(EntityCandidate(str(item.get("id") or ""), "afisha", dict(item)))
+    candidates.sort(key=lambda candidate: _calendar_sort_key(candidate.item))
+    return candidates
+
+
+def upcoming_attachment_events(data: dict[str, Any], *, owner: str, now: datetime | None = None,
+                               timezone: str = "Europe/Moscow", limit: int = 8) -> list[EntityCandidate]:
+    """Return a small deterministic chooser without physical Afisha projections."""
+    candidates = [
+        EntityCandidate(str(item.get("id") or ""), "calendar", dict(item))
+        for item in data.get("calendars", {}).get(owner, [])
+        if item.get("source") == "manual" and not _calendar_event_is_past(item, now=now, timezone=timezone)
+    ]
+    candidates += [EntityCandidate(str(item.get("id") or ""), "afisha", dict(item))
+                   for item in data.get("afisha", [])
+                   if item.get("status") == "active"
+                   and not _calendar_event_is_past(item, now=now, timezone=timezone)]
+    candidates.sort(key=lambda candidate: _calendar_sort_key(candidate.item))
+    return candidates[:max(1, limit)]
+
+
 def _calendar_event_is_past(item: dict[str, Any], *, now: datetime | None, timezone: str) -> bool:
     local_now = now or datetime.now(ZoneInfo(timezone))
     if local_now.tzinfo is not None:
@@ -70,7 +104,7 @@ def _calendar_event_is_past(item: dict[str, Any], *, now: datetime | None, timez
         return False  # Keep partial legacy records editable rather than hiding them.
     if event_date != local_now.date():
         return event_date < local_now.date()
-    clock = item.get("end_time") or item.get("start_time")
+    clock = item.get("end_time") or item.get("start_time") or item.get("time")
     if not clock:
         return False
     try:
