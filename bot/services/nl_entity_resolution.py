@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
@@ -17,16 +16,26 @@ class EntityCandidate:
     item: dict[str, Any]
 
 
-def normalize_reference(value: str) -> str:
-    value = unicodedata.normalize("NFKC", value).strip().casefold().replace("ё", "е")
-    value = re.sub(r"[^\w\s]", " ", value, flags=re.UNICODE)
-    return " ".join(value.split())
+def normalize_for_match(text: str) -> str:
+    """Return a deterministic comparison key without changing display text.
+
+    Punctuation is intentionally preserved: entity resolution is exact after
+    Unicode, case, Russian ``ё``/``е``, and whitespace normalization.
+    """
+    normalized = unicodedata.normalize("NFKC", text).casefold().replace("ё", "е")
+    return " ".join(normalized.split())
+
+
+# Backwards-compatible name used by read-only event query filtering.  Keeping
+# one normalization primitive prevents query and mutation matching from
+# drifting while leaving their existing equality/substring semantics intact.
+normalize_reference = normalize_for_match
 
 
 def resolve_entities(data: dict[str, Any], kind: IntentKind, target: str, *, owner: str = "",
                      include_past: bool = False, now: datetime | None = None,
                      timezone: str = "Europe/Moscow") -> list[EntityCandidate]:
-    needle = normalize_reference(target)
+    needle = normalize_for_match(target)
     candidates: list[EntityCandidate] = []
     if kind in {IntentKind.UPDATE_PURCHASE, IntentKind.DELETE_PURCHASE}:
         sources = [(bucket, data.get("purchases", {}).get(bucket, [])) for bucket in ("planned", "bought")]
@@ -44,7 +53,7 @@ def resolve_entities(data: dict[str, Any], kind: IntentKind, target: str, *, own
             if kind in {IntentKind.UPDATE_CALENDAR_EVENT, IntentKind.DELETE_CALENDAR_EVENT} and not include_past:
                 if _calendar_event_is_past(item, now=now, timezone=timezone):
                     continue
-            if any(normalize_reference(str(item.get(field) or "")) == needle for field in title_fields):
+            if any(normalize_for_match(str(item.get(field) or "")) == needle for field in title_fields):
                 candidates.append(EntityCandidate(str(item.get("id") or ""), bucket, dict(item)))
     if kind in {IntentKind.UPDATE_CALENDAR_EVENT, IntentKind.DELETE_CALENDAR_EVENT}:
         candidates.sort(key=lambda candidate: _calendar_sort_key(candidate.item))
