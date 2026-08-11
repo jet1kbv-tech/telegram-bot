@@ -67,3 +67,9 @@ SELECTING_FILM_METADATA, CONFIRMING_FILM_ADD = range(60, 62)
 
 # Native event attachment flow. Never renumber deployed states above.
 ADDING_EVENT_ATTACHMENT_FILE, SELECTING_EVENT_ATTACHMENT_TYPE, SELECTING_EVENT_ATTACHMENT_TRANSPORT = range(66, 69)
+
+# NL/resumable event attachment flow. Never renumber deployed states above.
+WAITING_FOR_NL_ATTACHMENTS, SELECTING_NL_ATTACHMENT_EVENT, CONFIRMING_NL_ATTACHMENT = range(69, 72)
+
+# Exact-title fallback for the bounded orphan-file event chooser.
+ENTERING_NL_ATTACHMENT_EVENT_TITLE = 72

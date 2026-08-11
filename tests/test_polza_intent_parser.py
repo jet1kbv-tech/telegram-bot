@@ -219,7 +219,7 @@ def test_purchase_unknown_missing_and_wrong_typed_fields_remain_rejected(payload
 def test_schema_discriminates_every_intent_and_matches_decoder_contract():
     schema = INTENT_JSON_SCHEMA["schema"]
     assert set(schema["properties"]["intent"]["enum"]) == {kind.value for kind in IntentKind}
-    assert len(IntentKind) == 18
+    assert len(IntentKind) == 19
     assert set(schema["properties"]) == {"intent", "arguments"}
     assert set(schema["required"]) == set(schema["properties"])
     assert "price_text" not in json.dumps(INTENT_JSON_SCHEMA)
@@ -936,3 +936,27 @@ def test_production_unsupported_unknown_category_safely_collapses_to_catch_all()
     payload = provider_envelope("unsupported", {"category": "unknown_request"})
     result = decode_provider_envelope(json.dumps(payload))
     assert result.arguments == {"category": "unsupported_domain"}
+
+
+def test_attach_event_file_minimal_and_metadata_decode_strictly():
+    minimal = {"target": "поездка в санаторий", "semantic_type": None, "transport_type": None,
+               "origin": None, "destination": None, "date_expression": None, "person": None}
+    result = decode_intent({"intent": "attach_event_file", "arguments": minimal})
+    assert result.intent is IntentKind.ATTACH_EVENT_FILE and result.arguments == minimal
+    detailed = {**minimal, "semantic_type": "transport_ticket", "transport_type": "train",
+                "origin": "Москва", "destination": "Воронеж", "person": "current_user"}
+    assert decode_intent({"intent": "attach_event_file", "arguments": detailed}).arguments == detailed
+
+
+@pytest.mark.parametrize(("field", "value"), [("semantic_type", "receipt"), ("transport_type", "car"), ("person", "everyone")])
+def test_attach_event_file_invalid_enums_fail_closed(field, value):
+    arguments = {"target": "Санаторий", "semantic_type": None, "transport_type": None,
+                 "origin": None, "destination": None, "date_expression": None, "person": None}
+    arguments[field] = value
+    with pytest.raises(IntentParserInvalidOutput):
+        decode_intent({"intent": "attach_event_file", "arguments": arguments})
+
+
+def test_attachment_examples_are_in_provider_prompt():
+    assert 'attach_event_file target="поездка в санаторий"' in SYSTEM_PROMPT
+    assert 'transport_type="train" origin="Москва" destination="Воронеж"' in SYSTEM_PROMPT

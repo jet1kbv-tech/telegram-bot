@@ -87,6 +87,8 @@ from bot.handlers.tickets import (
     tickets_callback_router,
 )
 from bot.handlers.event_attachments import configure_event_attachment_handlers, event_attachment_router, receive_file
+from bot.handlers.nl_event_attachments import (attachment_event_title_handler, collect_attachment_handler, nl_attachment_callback_router,
+                                                orphan_attachment_handler)
 from bot.handlers.wishlist import (
     add_wishlist_comment,
     add_wishlist_link,
@@ -133,6 +135,10 @@ from bot.states import (
     ADDING_EVENT_ATTACHMENT_FILE,
     SELECTING_EVENT_ATTACHMENT_TYPE,
     SELECTING_EVENT_ATTACHMENT_TRANSPORT,
+    WAITING_FOR_NL_ATTACHMENTS,
+    SELECTING_NL_ATTACHMENT_EVENT,
+    CONFIRMING_NL_ATTACHMENT,
+    ENTERING_NL_ATTACHMENT_EVENT_TITLE,
     CITY_ADD_COUNTRY,
     CITY_ADD_NAME,
     CITY_PLACE_ADD_COMMENT,
@@ -248,11 +254,16 @@ def build_app() -> Application:
         logger.warning("JobQueue недоступна. Для уведомлений за день до события нужен APScheduler в requirements.")
 
     quick_commands_filter = quick_text_command_filter()
+    attachment_callback_handlers = [CallbackQueryHandler(nl_attachment_callback_router, pattern=r"^nla:")]
     ai_callback_handlers = ([
         CallbackQueryHandler(nl_query_callback_router, pattern=r"^aiq:[A-Za-z0-9_-]{8,16}:(?:r|p:\d+)$"),
         CallbackQueryHandler(nl_callback_router, pattern=r"^ai:(?:[cex]:[A-Za-z0-9_-]{8,16}|r:[A-Za-z0-9_-]{8,16}:\d+)$"),
     ] if nl_enabled else [])
-    ai_text_handlers = [MessageHandler(filters.TEXT & ~filters.COMMAND, nl_text_handler)] if nl_enabled else []
+    ai_text_handlers = ([
+        MessageHandler((filters.PHOTO | filters.Document.ALL) & filters.CaptionRegex(r"(?i)^\s*прикреп"), nl_text_handler),
+        MessageHandler(filters.PHOTO | filters.Document.ALL, orphan_attachment_handler),
+        MessageHandler(filters.TEXT & ~filters.COMMAND, nl_text_handler),
+    ] if nl_enabled else [MessageHandler(filters.PHOTO | filters.Document.ALL, orphan_attachment_handler)])
 
     def text_state(handler):
         return [
@@ -266,6 +277,7 @@ def build_app() -> Application:
         states={
             MENU: [
                 MessageHandler(quick_commands_filter, quick_text_command_router),
+                *attachment_callback_handlers,
                 *ai_callback_handlers,
                 CallbackQueryHandler(back_to_main, pattern=r"^(main|menu:main)$"),
                 CallbackQueryHandler(menu_router, pattern=r"^menu\|(films|wishlist|leisure|afisha|backlog)$"),
@@ -278,6 +290,7 @@ def build_app() -> Application:
             ],
             SECTION: [
                 MessageHandler(quick_commands_filter, quick_text_command_router),
+                *attachment_callback_handlers,
                 *ai_callback_handlers,
                 CallbackQueryHandler(noop, pattern=r"^noop$"),
                 CallbackQueryHandler(film_metadata_callback_router, pattern=r"^filmmeta:"),
@@ -372,6 +385,27 @@ def build_app() -> Application:
             ],
             SELECTING_EVENT_ATTACHMENT_TYPE: [CallbackQueryHandler(event_attachment_router, pattern=r"^att\|")],
             SELECTING_EVENT_ATTACHMENT_TRANSPORT: [CallbackQueryHandler(event_attachment_router, pattern=r"^att\|")],
+            WAITING_FOR_NL_ATTACHMENTS: [
+                MessageHandler(filters.Regex(rf"^{MAIN_MENU_TEXT}$"), quick_return_to_main_menu),
+                CallbackQueryHandler(back_to_main, pattern=r"^(main|menu:main)$"),
+                CallbackQueryHandler(nl_attachment_callback_router, pattern=r"^nla:"),
+                MessageHandler(filters.PHOTO | filters.Document.ALL, collect_attachment_handler),
+                MessageHandler(filters.ALL, collect_attachment_handler),
+            ],
+            SELECTING_NL_ATTACHMENT_EVENT: [
+                CallbackQueryHandler(back_to_main, pattern=r"^(main|menu:main)$"),
+                CallbackQueryHandler(nl_attachment_callback_router, pattern=r"^nla:"),
+            ],
+            CONFIRMING_NL_ATTACHMENT: [
+                CallbackQueryHandler(back_to_main, pattern=r"^(main|menu:main)$"),
+                CallbackQueryHandler(nl_attachment_callback_router, pattern=r"^nla:"),
+            ],
+            ENTERING_NL_ATTACHMENT_EVENT_TITLE: [
+                MessageHandler(filters.Regex(rf"^{MAIN_MENU_TEXT}$"), quick_return_to_main_menu),
+                CallbackQueryHandler(back_to_main, pattern=r"^(main|menu:main)$"),
+                CallbackQueryHandler(nl_attachment_callback_router, pattern=r"^nla:"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, attachment_event_title_handler),
+            ],
             ADDING_EVENT_TITLE: text_state(add_event_title),
             ADDING_EVENT_PLACE: text_state(add_event_place),
             ADDING_EVENT_DATE: text_state(add_event_date),

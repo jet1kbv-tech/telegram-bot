@@ -11,6 +11,7 @@ from telegram.ext import ContextTypes, ConversationHandler
 from bot.config import AI_MAX_CLARIFICATIONS, AI_PROPOSAL_TTL_SECONDS, BOT_TIMEZONE
 from bot.handlers.afisha import build_afisha_item_text
 from bot.handlers.calendar import build_calendar_event_text
+from bot.handlers.event_attachments import extract_attachment_draft
 from bot.handlers.films import begin_film_search
 from bot.services.actions.afisha import create_afisha_event
 from bot.services.actions.calendar import create_personal_calendar_event
@@ -23,6 +24,7 @@ from bot.services.nl_intent import (
 )
 from bot.services.nl_proposals import ActionProposal, active_proposal, create_proposal, discard_proposal, get_proposal
 from bot.services.nl_entity_resolution import EntityCandidate, resolve_entities
+from bot.handlers.nl_event_attachments import begin_intent_attachment, orphan_attachment_handler
 from bot.services.nl_query_contexts import create_query_context, get_query_context
 from bot.services.queries import choose_random, next_event, query_afisha, query_calendar, query_films, query_purchases
 from bot.states import (
@@ -275,10 +277,16 @@ async def nl_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     response = _WaitingResponse(message, waiting)
     now = zoned_now(BOT_TIMEZONE)
     try:
-        parsed = await _parser.parse(message.text or "", IntentContext(
+        parsed = await _parser.parse(message.text or message.caption or "", IntentContext(
             actor_key=get_username(update), local_now=now, timezone=BOT_TIMEZONE,
             active_section=context.user_data.get("active_section"),
         ))
+        if extract_attachment_draft(message) is not None and parsed.intent is not IntentKind.ATTACH_EVENT_FILE:
+            # A command-looking caption is parsed once. If it is not the
+            # attachment mutation, retain the physical file in the deterministic
+            # orphan flow rather than losing it or making a second provider call.
+            await response.discard()
+            return await orphan_attachment_handler(update, context)
         if parsed.intent is IntentKind.NO_ACTION:
             await response.reply_text(
                 "Я пока лучше всего умею работать с нашими планами 🙂\n"
@@ -290,6 +298,8 @@ async def nl_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if parsed.intent is IntentKind.UNSUPPORTED:
             await response.reply_text("С этой командой я пока не умею работать. Могу помочь с покупками, фильмами, календарём и Афишей.", reply_markup=_menu_keyboard())
             return _idle_state(context)
+        if parsed.intent is IntentKind.ATTACH_EVENT_FILE:
+            return await begin_intent_attachment(update, context, parsed.arguments, response)
         arguments, missing = _prepare(parsed.intent, parsed.arguments, now)
         if parsed.intent in _QUERY_KINDS:
             await _answer_query(response, context, parsed.intent, arguments, update, now)

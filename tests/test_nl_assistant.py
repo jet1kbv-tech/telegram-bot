@@ -44,6 +44,15 @@ def update(*, text="command", callback_data=None):
     )
 
 
+def file_update(*, caption):
+    result = update(text=None)
+    result.message.caption = caption
+    result.message.document = SimpleNamespace(file_id="private", file_unique_id="unique",
+                                              file_name="private.pdf", mime_type="application/pdf")
+    result.message.photo = []
+    return result
+
+
 def context():
     return SimpleNamespace(user_data={}, bot=SimpleNamespace(send_chat_action=AsyncMock()))
 
@@ -103,6 +112,41 @@ def test_no_action_replaces_waiting_message_with_capabilities_and_menu():
     edit.assert_awaited_once()
     assert "покупках, фильмах, календаре или Афише" in edit.await_args.args[0]
     assert edit.await_args.kwargs["reply_markup"].inline_keyboard[0][0].text == "🏠 В меню"
+
+
+def test_attachment_command_caption_calls_parser_once_and_routes_once(monkeypatch):
+    parser = FakeParser(ParsedIntent(IntentKind.ATTACH_EVENT_FILE, {
+        "target": "Поездка", "semantic_type": "voucher", "transport_type": None,
+        "origin": None, "destination": None, "date_expression": None, "person": None,
+    }))
+    nl_assistant._parser = parser
+    begin = AsyncMock(return_value=SECTION)
+    monkeypatch.setattr(nl_assistant, "begin_intent_attachment", begin)
+    upd = file_update(caption="прикрепи ваучер к поездке")
+    assert run(nl_assistant.nl_text_handler(upd, context())) == SECTION
+    assert len(parser.calls) == 1
+    begin.assert_awaited_once()
+
+
+def test_attachment_command_without_file_calls_parser_once(monkeypatch):
+    parser = FakeParser(ParsedIntent(IntentKind.ATTACH_EVENT_FILE, {
+        "target": "Поездка", "semantic_type": "transport_ticket", "transport_type": None,
+        "origin": None, "destination": "Воронеж", "date_expression": None, "person": None,
+    }))
+    nl_assistant._parser = parser
+    begin = AsyncMock(return_value=SECTION); monkeypatch.setattr(nl_assistant, "begin_intent_attachment", begin)
+    assert run(nl_assistant.nl_text_handler(update(text="прикрепи билеты к поездке"), context())) == SECTION
+    assert len(parser.calls) == 1
+    begin.assert_awaited_once()
+
+
+def test_command_looking_caption_non_attachment_falls_back_without_second_call(monkeypatch):
+    parser = FakeParser(ParsedIntent(IntentKind.NO_ACTION, {})); nl_assistant._parser = parser
+    orphan = AsyncMock(return_value=SECTION); monkeypatch.setattr(nl_assistant, "orphan_attachment_handler", orphan)
+    upd = file_update(caption="прикрепи это")
+    assert run(nl_assistant.nl_text_handler(upd, context())) == SECTION
+    assert len(parser.calls) == 1
+    orphan.assert_awaited_once()
 
 
 def test_no_action_edit_failure_uses_existing_reply_fallback():

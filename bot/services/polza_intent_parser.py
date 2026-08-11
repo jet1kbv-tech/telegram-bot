@@ -23,14 +23,16 @@ SYSTEM_PROMPT = """Классифицируй русскую команду Tele
 Выбери один intent. arguments — компактный список только явно извлечённых смысловых полей: {"name":"имя","value":"строковое значение"}. Не добавляй отсутствующие или посторонние поля; null-записей нет. Числа также передавай строкой.
 Поля intent:
 add_movie_or_tv=query; add_purchase=title,price,priority,link,comment,buyer; add_personal_calendar_event=title,date_expression,time_expression,end_time_expression,comment,owner; add_afisha_event=title,place,date_expression,time_expression,end_date_expression,end_time_expression,link;
-update_purchase=target,title,price,priority,link,comment,buyer,status; delete_purchase=target; update_film=target,status,comment; delete_film=target; update_calendar_event=target,title,date_expression,time_expression; delete_calendar_event=target; update_afisha_event=target,title,date_expression,time_expression; delete_afisha_event=target;
+update_purchase=target,title,price,priority,link,comment,buyer,status; delete_purchase=target; update_film=target,status,comment; delete_film=target; update_calendar_event=target,title,date_expression,time_expression; delete_calendar_event=target; update_afisha_event=target,title,date_expression,time_expression; delete_afisha_event=target; attach_event_file=target,semantic_type,transport_type,origin,destination,date_expression,person;
 query_purchases=status,priority,buyer,operation; query_films=status,media_type,genre,operation; query_calendar/query_afisha=date_from,date_to,target,operation; unsupported=category; no_action=без полей.
 
-Intents: add_personal_calendar_event/add_afisha_event/add_purchase/add_movie_or_tv; update/delete_purchase, _film, _calendar_event, _afisha_event; read-only query_purchases/query_films/query_calendar/query_afisha; unsupported; no_action. Различай add, update, delete и query как ровно одно действие. Терпи разговорную грамматику, склонения, порядок слов и отсутствие пунктуации. Недостающие значения = null, а не unsupported/no_action. Для update заполняй только явно изменяемые поля; target — название, не ID. Purchase statuses planned/bought, priority только high/medium/low; film want/watched.
+Intents: add_personal_calendar_event/add_afisha_event/add_purchase/add_movie_or_tv; update/delete_purchase, _film, _calendar_event, _afisha_event; attach_event_file; read-only query_purchases/query_films/query_calendar/query_afisha; unsupported; no_action. Различай add, update, delete и query как ровно одно действие. Терпи разговорную грамматику, склонения, порядок слов и отсутствие пунктуации. Недостающие значения = null, а не unsupported/no_action. Для update заполняй только явно изменяемые поля; target — название, не ID. Purchase statuses planned/bought, priority только high/medium/low; film want/watched.
 
 Личный календарь без явно другого владельца: owner=current_user. Явное изменение чужого календаря: unsupported/other_user_calendar. Query calendar также только current_user и без owner/id; Афиша общая. Отсутствие даты, времени НЕ означает unsupported. Даты/время сохраняй компактно и дословно в *_expression («17.08», «завтра», «в пятницу»), не преобразуй его в ISO. Для фильма/TV извлекай только query. Цену покупки передавай только цифрами без валюты («35 тысяч» = 35000).
 
 Query defaults: purchases status=planned priority=any buyer=any, operations list/count/sum; films status=want media_type=any genre=null, operations list/count/random (сериалы=tv, фильмы=movie); calendar/afisha operation строго list/count/next (обычный показ списка = list), target только при поиске названия, date_from/date_to повторяют исходный диапазон либо null.
+
+Для attach_event_file target — явно названное событие. semantic_type: transport_ticket/voucher/accommodation/insurance/reservation/other; transport_type: train/plane/bus/other; person: current_user/other_user/both. Извлекай только явно сказанные метаданные, ничего не предполагай.
 
 unsupported — только команда вне доменов, destructive/bulk или чужой календарь. category: destructive, other_user_calendar, bulk, unsupported_domain или conversation. no_action используй только для текста без команды. Обязательные поля выбранной ветки добавь в arguments; необязательные отсутствующие поля пропусти. Не объясняй ответ и не добавляй поля.
 
@@ -41,6 +43,9 @@ unsupported — только команда вне доменов, destructive/b
 «добавь концерт в афишу 20 сентября» -> add_afisha_event;
 «удали концерт из афиши» -> delete_afisha_event; «перенеси стоматолога на завтра» -> update_calendar_event;
 «добавь Саше в календарь встречу» (если Саша не текущий пользователь) -> unsupported/other_user_calendar.
+«прикрепи ваучер к поездке в санаторий» -> attach_event_file target="поездка в санаторий" semantic_type="voucher";
+«прикрепи билеты в Воронеж к поездке в санаторий» -> attach_event_file target="поездка в санаторий" semantic_type="transport_ticket" destination="Воронеж";
+«прикрепи билет на поезд Москва Воронеж к санаторию» -> attach_event_file target="санаторий" semantic_type="transport_ticket" transport_type="train" origin="Москва" destination="Воронеж";
 «что у нас в покупках?» -> query_purchases status=planned; «какие комедии мы ещё не смотрели?» -> query_films status=want genre="Комедия";
 «что у меня завтра?» -> query_calendar date_from=date_to="завтра";
 «что в афише в августе?» -> query_afisha date_from=date_to="в августе"."""
