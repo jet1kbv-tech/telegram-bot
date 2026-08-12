@@ -50,6 +50,7 @@ async def back_to_main(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         return ConversationHandler.END
 
     await remember_current_chat(update)
+    context.user_data.pop("nl_attachment_mutation_operation", None)
     if update.callback_query:
         await update.callback_query.answer()
     return await start(update, context)

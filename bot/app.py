@@ -93,6 +93,7 @@ from bot.handlers.event_attachments import (configure_event_attachment_handlers,
 from bot.handlers.nl_event_attachments import (attachment_event_title_handler, collect_attachment_handler, nl_attachment_callback_router,
                                                 orphan_attachment_handler)
 from bot.handlers.nl_attachment_retrieval import attachment_query_callback_router
+from bot.handlers.nl_attachment_mutations import attachment_mutation_callback_router
 from bot.handlers.wishlist import (
     add_wishlist_comment,
     add_wishlist_link,
@@ -270,7 +271,8 @@ def build_app() -> Application:
 
     quick_commands_filter = quick_text_command_filter()
     attachment_callback_handlers = [CallbackQueryHandler(nl_attachment_callback_router, pattern=r"^nla:"),
-                                    CallbackQueryHandler(attachment_query_callback_router, pattern=r"^nlar:")]
+                                    CallbackQueryHandler(attachment_query_callback_router, pattern=r"^nlar:"),
+                                    CallbackQueryHandler(attachment_mutation_callback_router, pattern=r"^nlam:")]
     ai_callback_handlers = ([
         CallbackQueryHandler(nl_query_callback_router, pattern=r"^aiq:[A-Za-z0-9_-]{8,16}:(?:r|p:\d+)$"),
         CallbackQueryHandler(nl_callback_router, pattern=r"^ai:(?:[cex]:[A-Za-z0-9_-]{8,16}|r:[A-Za-z0-9_-]{8,16}:\d+)$"),
@@ -450,6 +452,7 @@ def build_app() -> Application:
             SELECTING_NL_ATTACHMENT_QUERY: [
                 CallbackQueryHandler(back_to_main, pattern=r"^(main|menu:main)$"),
                 CallbackQueryHandler(attachment_query_callback_router, pattern=r"^nlar:"),
+                CallbackQueryHandler(attachment_mutation_callback_router, pattern=r"^nlam:"),
             ],
             ADDING_EVENT_TITLE: text_state(add_event_title),
             ADDING_EVENT_PLACE: text_state(add_event_place),

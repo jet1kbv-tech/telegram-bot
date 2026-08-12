@@ -219,7 +219,7 @@ def test_purchase_unknown_missing_and_wrong_typed_fields_remain_rejected(payload
 def test_schema_discriminates_every_intent_and_matches_decoder_contract():
     schema = INTENT_JSON_SCHEMA["schema"]
     assert set(schema["properties"]["intent"]["enum"]) == {kind.value for kind in IntentKind}
-    assert len(IntentKind) == 20
+    assert len(IntentKind) == 22
     assert set(schema["properties"]) == {"intent", "arguments"}
     assert set(schema["required"]) == set(schema["properties"])
     assert "price_text" not in json.dumps(INTENT_JSON_SCHEMA)
@@ -986,3 +986,40 @@ def test_attachment_examples_are_in_provider_prompt():
     assert 'transport_type="train" origin="Москва" destination="Воронеж"' in SYSTEM_PROMPT
     assert "ссылка на событие в формулировке пользователя" in SYSTEM_PROMPT
     assert "названия из хранилища тебе не передаются" in SYSTEM_PROMPT
+
+@pytest.mark.parametrize("text,intent", [
+    ("удали билет в Воронеж", "delete_event_attachment"),
+    ("удали обратный билет из Воронежа", "delete_event_attachment"),
+    ("удали ваучер к санаторию", "delete_event_attachment"),
+    ("у билета в Воронеж время отправления 23:50", "update_event_attachment"),
+    ("измени время прибытия билета в Воронеж на 09:40", "update_event_attachment"),
+    ("поменяй дату билета в Воронеж на 31 августа", "update_event_attachment"),
+    ("у обратного билета дата прибытия 5 сентября", "update_event_attachment"),
+])
+def test_attachment_mutation_prompt_prevents_event_intent_collision(text, intent):
+    assert text in SYSTEM_PROMPT or intent in SYSTEM_PROMPT
+    assert f"{intent}=" in SYSTEM_PROMPT
+    attachment_rule = SYSTEM_PROMPT[ SYSTEM_PROMPT.index("Для delete_event_attachment"): ]
+    assert "НИКОГДА не событие календаря/Афиши" in attachment_rule
+
+
+def test_decodes_delete_attachment_without_any_storage_identifiers():
+    parsed = decode_provider_envelope({"intent": "delete_event_attachment", "arguments": [
+        {"name": "semantic_type", "value": "transport_ticket"},
+        {"name": "destination", "value": "Воронеж"},
+    ]})
+    assert parsed.intent is IntentKind.DELETE_EVENT_ATTACHMENT
+    assert parsed.arguments["destination"] == "Воронеж"
+    assert not ({"id", "parent_id", "file_id"} & parsed.arguments.keys())
+
+
+def test_decodes_update_attachment_separating_identifier_and_change():
+    parsed = decode_provider_envelope({"intent": "update_event_attachment", "arguments": [
+        {"name": "semantic_type", "value": "transport_ticket"},
+        {"name": "destination", "value": "Воронеж"},
+        {"name": "new_arrival_time", "value": "09:40"},
+    ]})
+    assert parsed.intent is IntentKind.UPDATE_EVENT_ATTACHMENT
+    assert parsed.arguments["destination"] == "Воронеж"
+    assert parsed.arguments["new_destination"] is None
+    assert parsed.arguments["new_arrival_time"] == "09:40"
