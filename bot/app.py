@@ -12,9 +12,11 @@ from telegram.ext import (
     filters,
 )
 
-from bot.config import AI_INTENT_TIMEOUT_SECONDS, NOTIFICATION_CHECK_INTERVAL
+from bot.config import (AI_ATTACHMENT_MAX_BYTES, AI_ATTACHMENT_TIMEOUT_SECONDS,
+                        AI_INTENT_TIMEOUT_SECONDS, NOTIFICATION_CHECK_INTERVAL)
 from bot.handlers.nl_assistant import configure_nl_assistant, nl_callback_router, nl_clarification_handler, nl_query_callback_router, nl_text_handler
 from bot.services.polza_intent_parser import PolzaIntentParser
+from bot.services.ticket_enrichment import PolzaTicketEnricher
 from bot.handlers.afisha import (
     add_event_date,
     add_event_end_date,
@@ -86,7 +88,7 @@ from bot.handlers.tickets import (
     configure_tickets_handlers,
     tickets_callback_router,
 )
-from bot.handlers.event_attachments import (configure_event_attachment_handlers, event_attachment_router,
+from bot.handlers.event_attachments import (configure_event_attachment_handlers, discard_ticket_enrichment, event_attachment_router,
                                             receive_attachment_metadata, receive_file)
 from bot.handlers.nl_event_attachments import (attachment_event_title_handler, collect_attachment_handler, nl_attachment_callback_router,
                                                 orphan_attachment_handler)
@@ -138,6 +140,7 @@ from bot.states import (
     SELECTING_EVENT_ATTACHMENT_TRANSPORT,
     ENRICHING_EVENT_ATTACHMENT,
     EDITING_EVENT_ATTACHMENT_METADATA,
+    CONFIRMING_TICKET_ENRICHMENT,
     WAITING_FOR_NL_ATTACHMENTS,
     SELECTING_NL_ATTACHMENT_EVENT,
     CONFIRMING_NL_ATTACHMENT,
@@ -237,10 +240,17 @@ def build_app() -> Application:
         places_callback_router=places_callback_router,
     )
     configure_tickets_handlers(safe_edit_message=safe_edit_message)
-    configure_event_attachment_handlers(safe_edit_message=safe_edit_message)
-
     polza_key = os.getenv("POLZA_AI_API_KEY", "").strip()
     polza_model = os.getenv("POLZA_AI_MODEL", "").strip()
+    attachment_model = os.getenv("POLZA_ATTACHMENT_MODEL", "").strip()
+    ticket_enricher = (PolzaTicketEnricher(api_key=polza_key, model=attachment_model,
+        timeout_seconds=AI_ATTACHMENT_TIMEOUT_SECONDS) if polza_key and attachment_model else None)
+    configure_event_attachment_handlers(safe_edit_message=safe_edit_message, ticket_enricher=ticket_enricher,
+                                        attachment_max_bytes=AI_ATTACHMENT_MAX_BYTES)
+    if ticket_enricher is None:
+        logger.info("Ticket enrichment disabled: POLZA_AI_API_KEY or POLZA_ATTACHMENT_MODEL is missing")
+    else:
+        logger.info("Ticket enrichment enabled with configured attachment model")
     nl_enabled = bool(polza_key and polza_model)
     if nl_enabled:
         configure_nl_assistant(
@@ -274,6 +284,14 @@ def build_app() -> Application:
             MessageHandler(filters.Regex(rf"^{MAIN_MENU_TEXT}$"), quick_return_to_main_menu),
             MessageHandler(filters.TEXT & ~filters.COMMAND, handler),
         ]
+
+    async def ticket_enrichment_home(update, context):
+        discard_ticket_enrichment(context)
+        return await back_to_main(update, context)
+
+    async def ticket_enrichment_quick_home(update, context):
+        discard_ticket_enrichment(context)
+        return await quick_return_to_main_menu(update, context)
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
@@ -399,6 +417,11 @@ def build_app() -> Application:
                 CallbackQueryHandler(back_to_main, pattern=r"^(main|menu:main)$"),
                 CallbackQueryHandler(event_attachment_router, pattern=r"^att\|"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, receive_attachment_metadata),
+            ],
+            CONFIRMING_TICKET_ENRICHMENT: [
+                MessageHandler(filters.Regex(rf"^{MAIN_MENU_TEXT}$"), ticket_enrichment_quick_home),
+                CallbackQueryHandler(ticket_enrichment_home, pattern=r"^(main|menu:main)$"),
+                CallbackQueryHandler(event_attachment_router, pattern=r"^att\|"),
             ],
             WAITING_FOR_NL_ATTACHMENTS: [
                 MessageHandler(filters.Regex(rf"^{MAIN_MENU_TEXT}$"), quick_return_to_main_menu),

@@ -76,3 +76,6 @@ ENTERING_NL_ATTACHMENT_EVENT_TITLE = 72
 
 # Optional native enrichment and existing attachment metadata editing.
 ENRICHING_EVENT_ATTACHMENT, EDITING_EVENT_ATTACHMENT_METADATA = range(73, 75)
+
+# Smart ticket enrichment. Never renumber deployed states above.
+CONFIRMING_TICKET_ENRICHMENT = 75
