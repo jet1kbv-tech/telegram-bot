@@ -24,16 +24,20 @@ TICKET_SCHEMA = {
             "destination": {"type": ["string", "null"]},
             "date": {"type": ["string", "null"], "pattern": r"^\d{4}-\d{2}-\d{2}$"},
             "departure_time": {"type": ["string", "null"], "pattern": r"^\d{2}:\d{2}$"},
+            "arrival_date": {"type": ["string", "null"], "pattern": r"^\d{4}-\d{2}-\d{2}$"},
+            "arrival_time": {"type": ["string", "null"], "pattern": r"^\d{2}:\d{2}$"},
         },
-        "required": ["origin", "destination", "date", "departure_time"],
+        "required": ["origin", "destination", "date", "departure_time", "arrival_date", "arrival_time"],
     },
 }
 
 PROMPT = """Извлеки только данные ОДНОЙ поездки из транспортного билета.
-origin — город/станция/аэропорт отправления; destination — прибытия; date — именно дата
-ОТПРАВЛЕНИЯ YYYY-MM-DD; departure_time — именно время ОТПРАВЛЕНИЯ HH:MM. Не путай их с
-датой покупки, прибытием, посадкой или окончанием регистрации. Для ночного рейса используй
-дату отправления. Если значение не видно или сомнительно — null. Не выдумывай. Если документ
+origin — пункт отправления, destination — пункт прибытия так, как они указаны в билете.
+date и departure_time — явно указанные дата YYYY-MM-DD и время HH:MM ОТПРАВЛЕНИЯ.
+arrival_date и arrival_time — явно указанные дата YYYY-MM-DD и время HH:MM ПРИБЫТИЯ.
+Не путай их с датой покупки, временем посадки, check-in, датой создания купона или сроком возврата.
+Для ночной поездки сохрани разные даты отправления и прибытия. Не вычисляй прибытие по длительности.
+Если значение не видно или сомнительно — null. Не выдумывай. Если документ
 содержит несколько самостоятельных поездок/маршрутов — верни null для всех полей. Игнорируй
 имена пассажиров, паспортные данные, номера, места, цены, штрихкоды и QR."""
 
@@ -50,10 +54,13 @@ class TicketEnrichmentResult:
     destination: str | None
     date: str | None
     departure_time: str | None
+    arrival_date: str | None
+    arrival_time: str | None
 
     def as_dict(self) -> dict[str, str | None]:
         return {"origin": self.origin, "destination": self.destination,
-                "date": self.date, "departure_time": self.departure_time}
+                "date": self.date, "departure_time": self.departure_time,
+                "arrival_date": self.arrival_date, "arrival_time": self.arrival_time}
 
     @property
     def useful(self) -> bool:
@@ -63,7 +70,7 @@ class TicketEnrichmentResult:
 def decode_ticket_enrichment(raw: str) -> TicketEnrichmentResult:
     try: value = json.loads(raw)
     except (json.JSONDecodeError, TypeError) as exc: raise TicketEnrichmentInvalidOutput("malformed_json") from exc
-    fields = {"origin", "destination", "date", "departure_time"}
+    fields = {"origin", "destination", "date", "departure_time", "arrival_date", "arrival_time"}
     if not isinstance(value, dict) or set(value) != fields:
         raise TicketEnrichmentInvalidOutput("invalid_fields")
     cleaned: dict[str, str | None] = {}
@@ -73,13 +80,15 @@ def decode_ticket_enrichment(raw: str) -> TicketEnrichmentResult:
         item = item.strip() if isinstance(item, str) else None
         if item and len(item) > 120: raise TicketEnrichmentInvalidOutput("text_too_long")
         cleaned[field] = item or None
-    for field, fmt in (("date", "%Y-%m-%d"), ("departure_time", "%H:%M")):
+    for field, fmt in (("date", "%Y-%m-%d"), ("departure_time", "%H:%M"),
+                       ("arrival_date", "%Y-%m-%d"), ("arrival_time", "%H:%M")):
         item = value[field]
         if item is not None and not isinstance(item, str): raise TicketEnrichmentInvalidOutput(f"invalid_{field}")
-        if item is not None:
+        item = item.strip() if isinstance(item, str) else item
+        if item:
             try: item = datetime.strptime(item, fmt).strftime(fmt)
             except ValueError as exc: raise TicketEnrichmentInvalidOutput(f"invalid_{field}") from exc
-        cleaned[field] = item
+        cleaned[field] = item or None
     return TicketEnrichmentResult(**cleaned)
 
 

@@ -24,8 +24,8 @@ def _response(content, status=200):
 
 
 @pytest.mark.parametrize("raw", [
-    '{"origin":" Москва ","destination":"Воронеж","date":"2026-08-31","departure_time":"08:10"}',
-    '{"origin":null,"destination":"Воронеж","date":null,"departure_time":null}',
+    '{"origin":" Москва ","destination":"Воронеж","date":"2026-08-31","departure_time":"08:10","arrival_date":null,"arrival_time":null}',
+    '{"origin":null,"destination":"Воронеж","date":null,"departure_time":null,"arrival_date":null,"arrival_time":null}',
 ])
 def test_strict_decoder_valid_and_partial(raw):
     result = decode_ticket_enrichment(raw)
@@ -33,10 +33,29 @@ def test_strict_decoder_valid_and_partial(raw):
     assert result.origin in {"Москва", None}
 
 
+def test_production_overnight_ticket_contract():
+    result = decode_ticket_enrichment(json.dumps({
+        "origin": "Москва Казанская", "destination": "Придача Воронеж Южный",
+        "date": "2026-08-30", "departure_time": "23:38",
+        "arrival_date": "2026-08-31", "arrival_time": "09:33",
+    }))
+    assert result.as_dict() == {"origin": "Москва Казанская", "destination": "Придача Воронеж Южный",
+        "date": "2026-08-30", "departure_time": "23:38", "arrival_date": "2026-08-31", "arrival_time": "09:33"}
+
+
+@pytest.mark.parametrize("raw", [
+    '{"origin":null,"destination":null,"date":null,"departure_time":null}',
+    '{"origin":null,"destination":null,"date":null,"departure_time":null,"arrival_date":"2026-02-30","arrival_time":null}',
+    '{"origin":null,"destination":null,"date":null,"departure_time":null,"arrival_date":null,"arrival_time":"24:00"}',
+])
+def test_arrival_fields_are_required_and_strict(raw):
+    with pytest.raises(TicketEnrichmentInvalidOutput): decode_ticket_enrichment(raw)
+
+
 @pytest.mark.parametrize("raw", ["not json",
-    '{"origin":null,"destination":null,"date":"31.08.2026","departure_time":null}',
-    '{"origin":null,"destination":null,"date":null,"departure_time":"25:00"}',
-    '{"origin":null,"destination":null,"date":null,"departure_time":null,"seat":"1"}'])
+    '{"origin":null,"destination":null,"date":"31.08.2026","departure_time":null,"arrival_date":null,"arrival_time":null}',
+    '{"origin":null,"destination":null,"date":null,"departure_time":"25:00","arrival_date":null,"arrival_time":null}',
+    '{"origin":null,"destination":null,"date":null,"departure_time":null,"arrival_date":null,"arrival_time":null,"seat":"1"}'])
 def test_strict_decoder_rejects_malformed_dates_times_and_extra_fields(raw):
     with pytest.raises(TicketEnrichmentInvalidOutput): decode_ticket_enrichment(raw)
 
@@ -55,7 +74,7 @@ def test_multimodal_image_and_pdf_payloads_use_private_base64_parts():
 
 
 def test_provider_success_timeout_http_failure_and_private_logs(caplog):
-    valid = json.dumps({"origin": "SECRET_ROUTE", "destination": None, "date": "2026-08-31", "departure_time": None})
+    valid = json.dumps({"origin": "SECRET_ROUTE", "destination": None, "date": "2026-08-31", "departure_time": None, "arrival_date": None, "arrival_time": None})
     client = SimpleNamespace(post=AsyncMock(return_value=_response(valid)))
     enricher = PolzaTicketEnricher(api_key="key", model="vision", client=client)
     with caplog.at_level(logging.INFO):
@@ -118,11 +137,12 @@ def _update(callback):
 
 
 def test_explicit_consent_download_size_bound_and_existing_precedence(monkeypatch, tmp_path):
-    store = JsonStorage(tmp_path / "data.json"); store.save(_data())
+    initial = _data(); initial["event_attachments"][0]["arrival_date"] = "2026-09-01"
+    store = JsonStorage(tmp_path / "data.json"); store.save(initial)
     monkeypatch.setattr(handlers, "storage", store)
     monkeypatch.setattr(handlers, "ensure_access", AsyncMock(return_value=True)); monkeypatch.setattr(handlers, "remember_current_chat", AsyncMock())
     edit = AsyncMock(); provider = SimpleNamespace(enrich=AsyncMock(return_value=decode_ticket_enrichment(
-        '{"origin":"AI origin","destination":"Воронеж","date":"2026-08-31","departure_time":"08:10"}')))
+        '{"origin":"AI origin","destination":"Воронеж","date":"2026-08-31","departure_time":"08:10","arrival_date":"2026-08-31","arrival_time":"09:33"}')))
     tg_file = SimpleNamespace(file_size=3, download_as_bytearray=AsyncMock(return_value=bytearray(b"pdf")))
     ctx = SimpleNamespace(user_data={}, bot=SimpleNamespace(get_file=AsyncMock(return_value=tg_file)))
     handlers.configure_event_attachment_handlers(safe_edit_message=edit, ticket_enricher=provider, attachment_max_bytes=8)
@@ -133,11 +153,14 @@ def test_explicit_consent_download_size_bound_and_existing_precedence(monkeypatc
     assert state == handlers.CONFIRMING_TICKET_ENRICHMENT
     assert ctx.user_data["ticket_enrichment_proposal"]["changes"]["destination"] == "Воронеж"
     assert "origin" not in ctx.user_data["ticket_enrichment_proposal"]["changes"]
+    assert "arrival_date" not in ctx.user_data["ticket_enrichment_proposal"]["changes"]
+    assert ctx.user_data["ticket_enrichment_proposal"]["changes"]["arrival_time"] == "09:33"
     assert store.load()["event_attachments"][0]["destination"] is None
     asyncio.run(handlers.event_attachment_router(_update("att|saveai"), ctx))
     saved = store.load()["event_attachments"][0]
     assert saved["id"] == "att" and saved["parent_event_id"] == "cal" and saved["telegram_file_id"] == "PRIVATE_FILE_ID"
     assert saved["origin"] == "User origin" and saved["destination"] == "Воронеж"
+    assert saved["arrival_date"] == "2026-09-01" and saved["arrival_time"] == "09:33"
 
     large_file = SimpleNamespace(file_size=9, download_as_bytearray=AsyncMock())
     ctx.bot.get_file = AsyncMock(return_value=large_file); provider.enrich.reset_mock()
@@ -154,7 +177,9 @@ def test_unsupported_mime_and_telegram_failure_are_controlled(monkeypatch, tmp_p
     update = _update("att|recognize|att")
     asyncio.run(handlers.event_attachment_router(update, ctx)); ctx.bot.get_file.assert_not_awaited()
     store.save(_data()); asyncio.run(handlers.event_attachment_router(update, ctx))
-    assert "Telegram" in update.callback_query.message.reply_text.await_args_list[-1].args[0]
+    # The final controlled state replaces the progress message rather than adding another one.
+    assert update.callback_query.message.reply_text.await_count == 2
+    assert "Telegram" in update.callback_query.message.reply_text.return_value.edit_text.await_args.args[0]
     provider.enrich.assert_not_awaited()
 
 
@@ -170,7 +195,7 @@ def test_supported_media_routes_once_after_explicit_action(monkeypatch, tmp_path
     store = JsonStorage(tmp_path / "data.json"); store.save(data); monkeypatch.setattr(handlers, "storage", store)
     monkeypatch.setattr(handlers, "ensure_access", AsyncMock(return_value=True)); monkeypatch.setattr(handlers, "remember_current_chat", AsyncMock())
     provider = SimpleNamespace(enrich=AsyncMock(return_value=decode_ticket_enrichment(
-        '{"origin":null,"destination":"B","date":null,"departure_time":null}')))
+        '{"origin":null,"destination":"B","date":null,"departure_time":null,"arrival_date":null,"arrival_time":null}')))
     tg_file = SimpleNamespace(file_size=None, download_as_bytearray=AsyncMock(return_value=bytearray(b"content")))
     ctx = SimpleNamespace(user_data={}, bot=SimpleNamespace(get_file=AsyncMock(return_value=tg_file)))
     handlers.configure_event_attachment_handlers(safe_edit_message=AsyncMock(), ticket_enricher=provider,
@@ -205,7 +230,7 @@ def test_concurrent_duplicate_recognition_is_coalesced_and_confirmation_does_not
 
     async def enrich(*args, **kwargs):
         entered.set(); await release.wait()
-        return decode_ticket_enrichment('{"origin":null,"destination":"B","date":null,"departure_time":null}')
+        return decode_ticket_enrichment('{"origin":null,"destination":"B","date":null,"departure_time":null,"arrival_date":null,"arrival_time":null}')
 
     provider = SimpleNamespace(enrich=AsyncMock(side_effect=enrich))
     tg_file = SimpleNamespace(file_size=1, download_as_bytearray=AsyncMock(return_value=bytearray(b"x")))
@@ -235,7 +260,7 @@ def test_menu_transition_during_provider_call_discards_late_proposal(monkeypatch
 
     async def enrich(*args, **kwargs):
         entered.set(); await release.wait()
-        return decode_ticket_enrichment('{"origin":null,"destination":"B","date":null,"departure_time":null}')
+        return decode_ticket_enrichment('{"origin":null,"destination":"B","date":null,"departure_time":null,"arrival_date":null,"arrival_time":null}')
 
     provider = SimpleNamespace(enrich=AsyncMock(side_effect=enrich))
     tg_file = SimpleNamespace(file_size=1, download_as_bytearray=AsyncMock(return_value=bytearray(b"x")))
@@ -265,7 +290,7 @@ def test_all_null_reject_menu_and_projection_never_mutate_or_copy(monkeypatch, t
     store = JsonStorage(tmp_path / "data.json"); store.save(data); monkeypatch.setattr(handlers, "storage", store)
     monkeypatch.setattr(handlers, "ensure_access", AsyncMock(return_value=True)); monkeypatch.setattr(handlers, "remember_current_chat", AsyncMock())
     provider = SimpleNamespace(enrich=AsyncMock(return_value=decode_ticket_enrichment(
-        '{"origin":null,"destination":null,"date":null,"departure_time":null}')))
+        '{"origin":null,"destination":null,"date":null,"departure_time":null,"arrival_date":null,"arrival_time":null}')))
     tg_file = SimpleNamespace(file_size=1, download_as_bytearray=AsyncMock(return_value=bytearray(b"x")))
     ctx = SimpleNamespace(user_data={"event_attachment_parent": ("afisha", "afi")},
                           bot=SimpleNamespace(get_file=AsyncMock(return_value=tg_file)))

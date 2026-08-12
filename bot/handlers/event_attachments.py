@@ -133,6 +133,8 @@ async def show_detail(update: Update, context: ContextTypes.DEFAULT_TYPE, attach
 def _metadata_prompt(field: str) -> str:
     return {"origin": "Укажи пункт отправления", "destination": "Укажи пункт назначения",
             "date": "Укажи дату в формате ГГГГ-ММ-ДД", "departure_time": "Укажи время в формате ЧЧ:ММ",
+            "arrival_date": "Укажи дату прибытия в формате ГГГГ-ММ-ДД",
+            "arrival_time": "Укажи время прибытия в формате ЧЧ:ММ",
             "person": "Для кого: Вова, Саша или оба"}[field] + ". Отправь «-», чтобы очистить/пропустить."
 
 
@@ -149,12 +151,12 @@ async def receive_attachment_metadata(update: Update, context: ContextTypes.DEFA
             value.casefold() if value else "", value)
         if value not in {None, "vova", "sasha", "both"}:
             await update.message.reply_text("Выбери Вова, Саша, оба или «-»."); return EDITING_EVENT_ATTACHMENT_METADATA
-    if field == "date" and value:
+    if field in {"date", "arrival_date"} and value:
         from datetime import datetime
         try: value = datetime.strptime(value, "%Y-%m-%d").strftime("%Y-%m-%d")
         except ValueError:
             await update.message.reply_text("Неверная дата. Используй ГГГГ-ММ-ДД или «-»."); return flow["state"]
-    if field == "departure_time" and value:
+    if field in {"departure_time", "arrival_time"} and value:
         from datetime import datetime
         try: value = datetime.strptime(value, "%H:%M").strftime("%H:%M")
         except ValueError:
@@ -247,7 +249,7 @@ async def event_attachment_router(update: Update, context: ContextTypes.DEFAULT_
         attachment_id = proposal.get("attachment_id")
         _discard_ticket_proposal(context)
         if not attachment_id: return SECTION
-        fields = ["origin", "destination", "date", "departure_time"]
+        fields = ["origin", "destination", "date", "departure_time", "arrival_date", "arrival_time"]
         context.user_data["event_attachment_metadata_flow"] = {"mode": "edit", "fields": fields,
             "attachment_id": attachment_id, "state": EDITING_EVENT_ATTACHMENT_METADATA}
         await _edit()(query, _metadata_prompt(fields[0]))
@@ -256,7 +258,7 @@ async def event_attachment_router(update: Update, context: ContextTypes.DEFAULT_
         _save(context, "transport_ticket", context.user_data.pop("event_attachment_transport_type", "other"))
         return await event_attachment_router_return(update, context)
     if action == "enrich":
-        fields = ["origin", "destination", "date", "departure_time"]
+        fields = ["origin", "destination", "date", "departure_time", "arrival_date", "arrival_time"]
         context.user_data["event_attachment_metadata_flow"] = {"mode": "native", "fields": fields,
             "transport_type": context.user_data.pop("event_attachment_transport_type", "other"), "state": ENRICHING_EVENT_ATTACHMENT}
         rows = [[InlineKeyboardButton("❌ Отменить", callback_data="att|return")],
@@ -266,10 +268,11 @@ async def event_attachment_router(update: Update, context: ContextTypes.DEFAULT_
     if action == "edit":
         aid = parts[2]; item = get_event_attachment(storage.load(), aid)
         if not item: return SECTION
-        fields = ["origin", "destination", "date", "departure_time", "person"] if item.get("semantic_type") == "transport_ticket" else []
+        fields = ["origin", "destination", "date", "departure_time", "arrival_date", "arrival_time", "person"] if item.get("semantic_type") == "transport_ticket" else []
         rows = [[InlineKeyboardButton(label, callback_data=f"att|editfield|{aid}|{field}")] for field, label in
                 (("origin", "Откуда"), ("destination", "Куда"), ("date", "Дата"),
-                 ("departure_time", "Время отправления"), ("person", "Для кого")) if field in fields]
+                 ("departure_time", "Время отправления"), ("arrival_date", "Дата прибытия"),
+                 ("arrival_time", "Время прибытия"), ("person", "Для кого")) if field in fields]
         rows.append([InlineKeyboardButton("⬅️ Назад", callback_data=f"att|detail|{aid}")])
         await _edit()(query, "Что изменить?", reply_markup=InlineKeyboardMarkup(rows)); return SECTION
     if action == "editfield":
@@ -357,16 +360,24 @@ async def _recognize_ticket(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     operation = object()
     context.user_data["ticket_enrichment_in_progress"] = operation
     operation_active = False
-    await query.message.reply_text("🔎 Анализирую билет…")
+    progress = await query.message.reply_text("🔎 Анализирую билет…")
+    async def finish(text: str, reply_markup: InlineKeyboardMarkup | None = None) -> None:
+        """Replace the one progress message; never leave a second status behind."""
+        try:
+            await progress.edit_text(text, reply_markup=reply_markup)
+        except (TelegramError, AttributeError):
+            try: await progress.delete()
+            except (TelegramError, AttributeError): pass
+            await query.message.reply_text(text, reply_markup=reply_markup)
     try:
         telegram_file = await context.bot.get_file(item["telegram_file_id"])
         declared_size = getattr(telegram_file, "file_size", None)
         if declared_size is not None and declared_size > _attachment_max_bytes:
-            await query.message.reply_text("Файл слишком большой для автоматического распознавания. Данные можно добавить вручную.", reply_markup=fallback)
+            await finish("Файл слишком большой для автоматического распознавания. Данные можно добавить вручную.", fallback)
             return SECTION
         content = bytes(await telegram_file.download_as_bytearray())
         if len(content) > _attachment_max_bytes:
-            await query.message.reply_text("Файл слишком большой для автоматического распознавания. Данные можно добавить вручную.", reply_markup=fallback)
+            await finish("Файл слишком большой для автоматического распознавания. Данные можно добавить вручную.", fallback)
             return SECTION
         _, _, event = resolve_attachment_parent(data, item["parent_type"], item["parent_event_id"])
         result = await _ticket_enricher.enrich(content, media[0], mime_type=media[1],
@@ -374,10 +385,10 @@ async def _recognize_ticket(update: Update, context: ContextTypes.DEFAULT_TYPE, 
             event_date=event.get("date"))
     except TelegramError:
         logger.warning("ticket_enrichment_failed reason=telegram_download")
-        await query.message.reply_text("Не удалось загрузить файл из Telegram. Данные можно добавить вручную.", reply_markup=fallback)
+        await finish("Не удалось загрузить файл из Telegram. Данные можно добавить вручную.", fallback)
         return SECTION
     except TicketEnrichmentError:
-        await query.message.reply_text("Не удалось распознать билет. Данные можно добавить вручную.", reply_markup=fallback)
+        await finish("Не удалось распознать билет. Данные можно добавить вручную.", fallback)
         return SECTION
     finally:
         # No bytes, base64 or extracted text are retained by the application.
@@ -387,19 +398,21 @@ async def _recognize_ticket(update: Update, context: ContextTypes.DEFAULT_TYPE, 
             context.user_data.pop("ticket_enrichment_in_progress", None)
     # A menu/back transition invalidates the operation while it is awaiting Telegram/provider I/O.
     if not operation_active:
+        try: await progress.delete()
+        except (TelegramError, AttributeError): pass
         return SECTION
     if not result.useful:
-        await query.message.reply_text("Не удалось уверенно распознать данные билета. Их можно добавить вручную.", reply_markup=fallback)
+        await finish("Не удалось уверенно распознать данные билета. Их можно добавить вручную.", fallback)
         return SECTION
     # Explicit metadata wins: AI only fills currently empty canonical fields.
     changes = {key: value for key, value in result.as_dict().items() if value is not None and not item.get(key)}
     if not changes:
-        await query.message.reply_text("Все распознанные данные уже заполнены. При необходимости их можно изменить вручную.", reply_markup=fallback)
+        await finish("Все распознанные данные уже заполнены. При необходимости их можно изменить вручную.", fallback)
         return SECTION
     context.user_data["ticket_enrichment_proposal"] = {"attachment_id": item["id"], "changes": changes,
                                                         "created_at": time.monotonic()}
     rows = [[InlineKeyboardButton("✅ Сохранить", callback_data="att|saveai")],
             [InlineKeyboardButton("✏️ Изменить", callback_data="att|editai")],
             [InlineKeyboardButton("❌ Не сохранять", callback_data="att|rejectai")]]
-    await _edit()(query, _proposal_text(item, changes), reply_markup=InlineKeyboardMarkup(rows))
+    await finish(_proposal_text(item, changes), InlineKeyboardMarkup(rows))
     return CONFIRMING_TICKET_ENRICHMENT

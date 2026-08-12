@@ -61,9 +61,18 @@ def attachment_detail_text(item: dict[str, Any]) -> str:
         if origin and destination: lines += ["", f"{origin} → {destination}"]
         elif origin: lines += ["", f"Откуда: {origin}"]
         elif destination: lines += ["", f"Куда: {destination}"]
-        if item.get("date"):
-            parsed = date.fromisoformat(item["date"])
-            lines.append(f"{parsed.day} {MONTHS[parsed.month]} {parsed.year}")
-        if item.get("departure_time"): lines.append(f"Отправление: {item['departure_time']}")
+        departure = _date_time_text(item.get("date"), item.get("departure_time"))
+        if departure: lines += ["", "Отправление:", departure]
+        arrival = _date_time_text(item.get("arrival_date"), item.get("arrival_time"))
+        if arrival: lines += ["", "Прибытие:", arrival]
         if item.get("person"): lines.append(f"Для: {PERSON_LABELS.get(item['person'], item['person'])}")
     return "\n".join(lines)
+
+
+def _date_time_text(date_value: str | None, time_value: str | None) -> str:
+    parts = []
+    if date_value:
+        parsed = date.fromisoformat(date_value)
+        parts.append(f"{parsed.day} {MONTHS[parsed.month]} {parsed.year}")
+    if time_value: parts.append(time_value)
+    return " · ".join(parts)
