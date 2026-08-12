@@ -237,11 +237,6 @@ def item_keyboard(
                 if section == "afisha"
                 else []
             )
-            + (
-                [[InlineKeyboardButton("🎟 Билеты", callback_data=f"tickets:afisha:panel:{item_id}:{page}")]]
-                if section == "afisha"
-                else []
-            )
             + documents_row
             + [
                 [InlineKeyboardButton("🗑️ Удалить", callback_data=delete_confirm_callback)],

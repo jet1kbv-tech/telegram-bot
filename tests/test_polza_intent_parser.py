@@ -940,7 +940,7 @@ def test_production_unsupported_unknown_category_safely_collapses_to_catch_all()
 
 def test_attach_event_file_minimal_and_metadata_decode_strictly():
     minimal = {"target": "поездка в санаторий", "semantic_type": None, "transport_type": None,
-               "origin": None, "destination": None, "date_expression": None, "person": None}
+               "origin": None, "destination": None, "date_expression": None, "departure_time": None, "person": None}
     result = decode_intent({"intent": "attach_event_file", "arguments": minimal})
     assert result.intent is IntentKind.ATTACH_EVENT_FILE and result.arguments == minimal
     detailed = {**minimal, "semantic_type": "transport_ticket", "transport_type": "train",
@@ -948,10 +948,20 @@ def test_attach_event_file_minimal_and_metadata_decode_strictly():
     assert decode_intent({"intent": "attach_event_file", "arguments": detailed}).arguments == detailed
 
 
+def test_attach_event_file_departure_time_is_strict_at_canonical_boundary():
+    arguments = {"target": "санаторий", "semantic_type": "transport_ticket", "transport_type": "train",
+                 "origin": "Москва", "destination": "Воронеж", "date_expression": "31 августа",
+                 "departure_time": "08:10", "person": None}
+    assert decode_intent({"intent": "attach_event_file", "arguments": arguments}).arguments["departure_time"] == "08:10"
+    for invalid in ("8 утра", "24:00", "08:60"):
+        with pytest.raises(IntentParserInvalidOutput):
+            decode_intent({"intent": "attach_event_file", "arguments": {**arguments, "departure_time": invalid}})
+
+
 @pytest.mark.parametrize(("field", "value"), [("semantic_type", "receipt"), ("transport_type", "car"), ("person", "everyone")])
 def test_attach_event_file_invalid_enums_fail_closed(field, value):
     arguments = {"target": "Санаторий", "semantic_type": None, "transport_type": None,
-                 "origin": None, "destination": None, "date_expression": None, "person": None}
+                 "origin": None, "destination": None, "date_expression": None, "departure_time": None, "person": None}
     arguments[field] = value
     with pytest.raises(IntentParserInvalidOutput):
         decode_intent({"intent": "attach_event_file", "arguments": arguments})

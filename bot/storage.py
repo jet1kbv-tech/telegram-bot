@@ -665,6 +665,20 @@ def normalize_event_attachment(item: Any) -> dict[str, Any] | None:
         person = None
     if not file_id or not parent_event_id:
         return None
+    origin = str(item.get("origin") or "").strip() or None
+    destination = str(item.get("destination") or "").strip() or None
+    date_value = str(item.get("date") or "").strip() or None
+    time_value = str(item.get("departure_time") or "").strip() or None
+    try:
+        if date_value:
+            datetime.strptime(date_value, "%Y-%m-%d")
+    except ValueError:
+        date_value = None
+    try:
+        if time_value:
+            datetime.strptime(time_value, "%H:%M")
+    except ValueError:
+        time_value = None
     return {
         "id": str(item.get("id") or make_id()),
         "parent_type": parent_type,
@@ -676,9 +690,10 @@ def normalize_event_attachment(item: Any) -> dict[str, Any] | None:
         "mime_type": str(item.get("mime_type") or ""),
         "semantic_type": semantic_type,
         "transport_type": transport_type,
-        "origin": item.get("origin") or None,
-        "destination": item.get("destination") or None,
-        "date": item.get("date") or None,
+        "origin": origin,
+        "destination": destination,
+        "date": date_value,
+        "departure_time": time_value,
         "person": person,
         "comment": item.get("comment") or None,
         "created_by": str(item.get("created_by") or "unknown"),

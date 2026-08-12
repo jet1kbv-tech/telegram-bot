@@ -11,7 +11,7 @@ from bot.config import BOT_TIMEZONE
 from bot.handlers.event_attachments import TYPE_LABELS, extract_attachment_draft
 from bot.services.event_attachments import create_event_attachment, resolve_attachment_parent
 from bot.services.nl_attachment_context import append_file, clear_pending, create_pending, get_pending
-from bot.services.nl_dates import zoned_now
+from bot.services.nl_dates import DateExpressionError, resolve_date_expression, zoned_now
 from bot.services.nl_entity_resolution import EntityCandidate, resolve_attachment_events, upcoming_attachment_events
 from bot.states import (CONFIRMING_NL_ATTACHMENT, ENTERING_NL_ATTACHMENT_EVENT_TITLE,
                         SELECTING_NL_ATTACHMENT_EVENT, WAITING_FOR_NL_ATTACHMENTS)
@@ -123,8 +123,12 @@ async def begin_intent_attachment(update: Update, context: ContextTypes.DEFAULT_
                                   arguments: dict[str, Any], response: Any) -> int:
     now = zoned_now(BOT_TIMEZONE); message = update.effective_message
     draft = extract_attachment_draft(message)
+    metadata = {key: value for key, value in arguments.items() if key not in {"target", "date_expression"} and value is not None}
+    if arguments.get("date_expression"):
+        try: metadata["date"] = resolve_date_expression(arguments["date_expression"], now=now, timezone=BOT_TIMEZONE)
+        except DateExpressionError: pass
     operation = create_pending(context.user_data, actor_key=get_username(update), now=now,
-        metadata={key: value for key, value in arguments.items() if key != "target" and value is not None},
+        metadata=metadata,
         files=[draft] if draft else [])
     profile = get_allowed_profile(update) or {}; owner = str(profile.get("wishlist_owner") or "")
     candidates = resolve_attachment_events(storage.load(), arguments["target"], owner=owner, now=now, timezone=BOT_TIMEZONE)
@@ -262,7 +266,8 @@ async def nl_attachment_callback_router(update: Update, context: ContextTypes.DE
                     parent_event_id=operation.parent_id or "", semantic_type=operation.metadata.get("semantic_type") or "other",
                     transport_type=operation.metadata.get("transport_type"), origin=operation.metadata.get("origin"),
                     destination=operation.metadata.get("destination"), person=person,
-                    date_expression=operation.metadata.get("date_expression"), created_by=get_user_name(update), **draft)
+                    date=operation.metadata.get("date"), departure_time=operation.metadata.get("departure_time"),
+                    created_by=get_user_name(update), **draft)
                 created += int(was_created); duplicates += int(not was_created)
         except ValueError:
             # ``data`` is a detached load result; without save, no partial batch

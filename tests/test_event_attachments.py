@@ -11,7 +11,7 @@ from bot.handlers import event_attachments as handlers
 from bot.handlers import calendar as calendar_handlers
 from bot.handlers.afisha import apply_afisha_delete, apply_afisha_status_update
 from bot import runtime
-from bot.keyboards.common import item_keyboard
+from bot.keyboards.common import item_keyboard, main_menu_keyboard, section_menu_keyboard
 from bot.services.event_attachments import (
     AttachmentParentNotFound,
     create_event_attachment,
@@ -20,7 +20,9 @@ from bot.services.event_attachments import (
     get_attachments_for_event,
     get_event_attachment,
     list_event_attachments,
+    update_event_attachment_metadata,
 )
+from bot.services.event_attachment_display import attachment_detail_text, attachment_list_title, attachment_list_titles
 from bot.storage import JsonStorage
 from telegram.error import BadRequest
 
@@ -96,6 +98,111 @@ def test_documents_button_visible_on_event_cards_and_projection():
     assert "📎 Документы" in _labels(calendar_event_readonly_keyboard("vova", "afi1", 0))
     afisha = {"id": "afi1", "status": "active"}
     assert "📎 Документы" in _labels(item_keyboard("afisha", afisha, 0))
+    assert "🎟 Билеты" not in _labels(item_keyboard("afisha", afisha, 0))
+    assert not any(button.callback_data.startswith("tickets:") for row in item_keyboard("afisha", afisha, 0).inline_keyboard for button in row)
+
+
+def test_normal_current_menus_and_event_cards_expose_no_legacy_ticket_route():
+    markups = [main_menu_keyboard(), *(section_menu_keyboard(section) for section in
+        ("films", "wishlist", "afisha", "backlog", "leisure")),
+        calendar_event_keyboard("vova", "cal1", 0), calendar_event_readonly_keyboard("vova", "afi1", 0)]
+    for markup in markups:
+        buttons = [button for row in markup.inline_keyboard for button in row]
+        assert all(button.text not in {"🎟 Билеты", "➕ Добавить билет"} for button in buttons)
+        assert all(not (button.callback_data or "").startswith("tickets:") for button in buttons)
+
+
+def test_transport_display_titles_details_and_collisions():
+    train = {"semantic_type": "transport_ticket", "transport_type": "train", "origin": "Москва",
+             "destination": "Воронеж", "date": "2026-08-31", "departure_time": "08:10", "person": "both"}
+    assert attachment_list_title(train) == "🚆 Москва → Воронеж · 31.08"
+    assert attachment_list_title({**train, "transport_type": "plane", "destination": "Стамбул"}) == "✈️ Москва → Стамбул · 31.08"
+    assert attachment_list_title({**train, "date": None}) == "🚆 Москва → Воронеж"
+    assert attachment_list_title({**train, "origin": None, "date": None}) == "🚆 Билет · Воронеж"
+    fallback = {**train, "origin": None, "destination": None, "date": None}
+    assert attachment_list_title(fallback) == "🚆 Билет на поезд"
+    assert attachment_list_titles([fallback, fallback]) == ["🚆 Билет на поезд · #1", "🚆 Билет на поезд · #2"]
+    assert "08:10" not in attachment_list_title(train)
+    detail = attachment_detail_text(train)
+    assert "Москва → Воронеж" in detail and "31 августа 2026" in detail
+    assert "Отправление: 08:10" in detail and "Для: Вова и Саша" in detail
+    other = {"semantic_type": "insurance", "origin": "Секрет", "destination": "Секрет",
+             "date": "2026-08-31", "departure_time": "08:10", "person": "both"}
+    assert attachment_detail_text(other) == "🛡 Страховка"
+
+
+def test_three_collisions_and_mixed_titles_are_stable():
+    fallback = {"semantic_type": "transport_ticket", "transport_type": "train"}
+    voucher = {"semantic_type": "voucher"}
+    assert attachment_list_titles([fallback, voucher, fallback, fallback]) == [
+        "🚆 Билет на поезд · #1", "🏨 Ваучер / проживание",
+        "🚆 Билет на поезд · #2", "🚆 Билет на поезд · #3",
+    ]
+
+
+def test_metadata_update_is_allowlisted_validated_and_preserves_identity():
+    data = _data(); item, _ = _create(data); identity = {key: item[key] for key in
+        ("id", "parent_type", "parent_event_id", "telegram_file_id", "telegram_file_unique_id")}
+    update_event_attachment_metadata(data, item["id"], origin=" Москва ", destination="Воронеж",
+                                     date="2026-08-31", departure_time="08:10", person="both")
+    assert item["origin"] == "Москва" and item["destination"] == "Воронеж"
+    assert {key: item[key] for key in identity} == identity
+    update_event_attachment_metadata(data, item["id"], origin=None)
+    assert item["origin"] is None
+    with pytest.raises(ValueError): update_event_attachment_metadata(data, item["id"], date="31 августа")
+    with pytest.raises(ValueError): update_event_attachment_metadata(data, item["id"], telegram_file_id="changed")
+    with pytest.raises(ValueError): update_event_attachment_metadata(data, "missing", origin="Москва")
+
+
+def test_one_field_edit_and_clear_preserve_all_other_metadata():
+    data = _data(); item, _ = _create(data)
+    update_event_attachment_metadata(data, item["id"], origin="Москва", destination="Воронеж",
+                                     date="2026-08-31", departure_time="08:10", person="both")
+    update_event_attachment_metadata(data, item["id"], destination="Стамбул")
+    assert (item["origin"], item["destination"], item["date"], item["departure_time"], item["person"]) == (
+        "Москва", "Стамбул", "2026-08-31", "08:10", "both")
+    update_event_attachment_metadata(data, item["id"], origin=None)
+    assert (item["origin"], item["destination"], item["date"], item["departure_time"], item["person"]) == (
+        None, "Стамбул", "2026-08-31", "08:10", "both")
+
+
+def test_attachment_normalization_and_legacy_tickets_roundtrip(tmp_path):
+    store = JsonStorage(tmp_path / "data.json"); data = _data()
+    legacy = {"id": "old", "title": "Старый билет", "date": "2020-01-01", "time": "10:00",
+              "place_route": "Москва", "comment": "", "attachments": [{"kind": "document", "file_id": "legacy"}]}
+    data["tickets"] = {"active": [legacy], "used": []}
+    item, _ = _create(data); item.update({"date": "bad", "departure_time": "25:99"})
+    store.save(data); loaded = store.load()
+    assert loaded["event_attachments"][0]["date"] is None and loaded["event_attachments"][0]["departure_time"] is None
+    assert loaded["tickets"]["active"][0]["title"] == "Старый билет"
+
+
+def test_complete_legacy_ticket_structure_survives_roundtrip_without_migration(tmp_path):
+    store = JsonStorage(tmp_path / "data.json")
+    active = {"id": "active-id", "title": "Поезд", "date": "2026-08-31", "time": "08:10",
+              "place_route": "Москва → Воронеж", "comment": "верхняя полка", "afisha_id": "afi1",
+              "attachments": [{"kind": "document", "file_id": "doc", "file_name": "ticket.pdf",
+                               "mime_type": "application/pdf"}]}
+    used = {"id": "used-id", "title": "Автобус", "date": "2025-05-01", "time": "09:00",
+            "place_route": "A → B", "comment": "архив", "afisha_id": "",
+            "attachments": [{"kind": "photo", "file_id": "photo", "file_name": "", "mime_type": ""}]}
+    store.path.write_text(json.dumps({"tickets": {"active": [active], "used": [used]}}), encoding="utf-8")
+    loaded = store.load(); store.save(loaded); reloaded = store.load()
+    assert reloaded["tickets"] == {"active": [active], "used": [used]}
+    assert reloaded["event_attachments"] == []
+
+
+@pytest.mark.parametrize(("date_value", "time_value", "expected_date", "expected_time"), [
+    ("2024-02-29", "00:00", "2024-02-29", "00:00"),
+    ("2023-02-29", "24:00", None, None),
+    ("2026-08-31 ", " 08:10", "2026-08-31", "08:10"),
+])
+def test_attachment_metadata_normalization(date_value, time_value, expected_date, expected_time):
+    data = _data(); item, _ = create_event_attachment(data, parent_type="calendar", parent_event_id="cal1",
+        telegram_file_id="file", telegram_file_unique_id="unique", telegram_media_type="document",
+        origin=" Москва ", destination="  ", date=date_value, departure_time=time_value, person="invalid")
+    assert (item["origin"], item["destination"], item["date"], item["departure_time"], item["person"]) == (
+        "Москва", None, expected_date, expected_time, None)
 
 
 def _run(coro):
@@ -145,10 +252,63 @@ def test_semantic_transport_selection_and_duplicate_callback_are_idempotent(monk
         event_attachment_draft={"telegram_media_type": "document", "telegram_file_id": "id", "telegram_file_unique_id": "unique"})
     assert _run(handlers.event_attachment_router(_callback("att|type|transport_ticket"), ctx)) == handlers.SELECTING_EVENT_ATTACHMENT_TRANSPORT
     _run(handlers.event_attachment_router(_callback("att|transport|train"), ctx))
+    _run(handlers.event_attachment_router(_callback("att|skipenrich"), ctx))
     saved = store.load()["event_attachments"]
     assert len(saved) == 1 and saved[0]["semantic_type"] == "transport_ticket" and saved[0]["transport_type"] == "train"
     _run(handlers.event_attachment_router(_callback("att|transport|train"), ctx))
+    _run(handlers.event_attachment_router(_callback("att|skipenrich"), ctx))
     assert len(store.load()["event_attachments"]) == 1
+
+
+def test_native_optional_enrichment_stores_route_date_and_time(monkeypatch, tmp_path):
+    store = JsonStorage(tmp_path / "data.json"); store.save(_data()); monkeypatch.setattr(handlers, "storage", store)
+    handlers.configure_event_attachment_handlers(safe_edit_message=AsyncMock())
+    monkeypatch.setattr(handlers, "ensure_access", AsyncMock(return_value=True)); monkeypatch.setattr(handlers, "remember_current_chat", AsyncMock())
+    ctx = _context(event_attachment_parent=("calendar", "cal1"),
+        event_attachment_draft={"telegram_media_type": "document", "telegram_file_id": "id", "telegram_file_unique_id": "enriched"})
+    _run(handlers.event_attachment_router(_callback("att|transport|train"), ctx))
+    assert _run(handlers.event_attachment_router(_callback("att|enrich"), ctx)) == handlers.ENRICHING_EVENT_ATTACHMENT
+    for value in ("Москва", "Воронеж", "2026-08-31", "08:10"):
+        message = SimpleNamespace(text=value, reply_text=AsyncMock())
+        _run(handlers.receive_attachment_metadata(SimpleNamespace(message=message), ctx))
+    saved = store.load()["event_attachments"][0]
+    assert (saved["origin"], saved["destination"], saved["date"], saved["departure_time"]) == (
+        "Москва", "Воронеж", "2026-08-31", "08:10")
+
+
+def test_native_enrichment_has_cancel_and_menu_escape_and_invalid_input_keeps_draft(monkeypatch, tmp_path):
+    store = JsonStorage(tmp_path / "data.json"); store.save(_data()); monkeypatch.setattr(handlers, "storage", store)
+    edit = AsyncMock(); handlers.configure_event_attachment_handlers(safe_edit_message=edit)
+    monkeypatch.setattr(handlers, "ensure_access", AsyncMock(return_value=True)); monkeypatch.setattr(handlers, "remember_current_chat", AsyncMock())
+    draft = {"telegram_media_type": "document", "telegram_file_id": "id", "telegram_file_unique_id": "safe"}
+    ctx = _context(event_attachment_parent=("calendar", "cal1"), event_attachment_draft=draft.copy())
+    _run(handlers.event_attachment_router(_callback("att|transport|train"), ctx))
+    assert {"❌ Отменить", "🏠 В меню"} <= set(_labels(edit.await_args.kwargs["reply_markup"]))
+    _run(handlers.event_attachment_router(_callback("att|enrich"), ctx))
+    for value in ("Москва", "Воронеж"):
+        _run(handlers.receive_attachment_metadata(SimpleNamespace(message=SimpleNamespace(text=value, reply_text=AsyncMock())), ctx))
+    invalid = SimpleNamespace(text="31 августа", reply_text=AsyncMock())
+    assert _run(handlers.receive_attachment_metadata(SimpleNamespace(message=invalid), ctx)) == handlers.ENRICHING_EVENT_ATTACHMENT
+    assert ctx.user_data["event_attachment_draft"] == draft and store.load()["event_attachments"] == []
+
+
+def test_projection_and_source_share_enriched_attachment_and_edit(monkeypatch, tmp_path):
+    store = JsonStorage(tmp_path / "data.json"); data = _data()
+    item, _ = _create(data, "afisha", "afi1"); store.save(data); monkeypatch.setattr(handlers, "storage", store)
+    assert get_attachments_for_event(store.load(), "calendar", "projection")[0]["id"] == item["id"]
+    canonical = store.load(); projection_item = get_attachments_for_event(canonical, "calendar", "projection")[0]
+    update_event_attachment_metadata(canonical, projection_item["id"], destination="Воронеж"); store.save(canonical)
+    assert get_attachments_for_event(store.load(), "afisha", "afi1")[0]["destination"] == "Воронеж"
+    assert len(store.load()["event_attachments"]) == 1
+
+
+def test_detail_keeps_actions_and_adds_edit(monkeypatch, tmp_path):
+    store = JsonStorage(tmp_path / "data.json"); data = _data(); item, _ = _create(data); store.save(data)
+    edit = AsyncMock(); monkeypatch.setattr(handlers, "storage", store)
+    handlers.configure_event_attachment_handlers(safe_edit_message=edit)
+    _run(handlers.show_detail(_callback(f"att|detail|{item['id']}"), _context(), item["id"]))
+    assert {"📤 Отправить файл", "✏️ Изменить данные", "🗑 Удалить", "⬅️ Назад"} <= set(
+        _labels(edit.await_args.kwargs["reply_markup"]))
 
 
 @pytest.mark.parametrize(("media", "method"), [("document", "send_document"), ("photo", "send_photo")])

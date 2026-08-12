@@ -10,6 +10,8 @@ from typing import Any
 
 from bot.storage import find_item, make_id, normalize_event_attachment
 
+EDITABLE_METADATA = {"origin", "destination", "date", "departure_time", "person"}
+
 
 class AttachmentParentNotFound(ValueError):
     pass
@@ -84,6 +86,24 @@ def delete_event_attachment(data: dict[str, Any], attachment_id: str) -> bool:
             del items[index]
             return True
     return False
+
+
+def update_event_attachment_metadata(data: dict[str, Any], attachment_id: str, **changes: Any) -> dict[str, Any]:
+    """Validate and update the metadata allow-list without touching ownership/file fields."""
+    if not changes or not set(changes) <= EDITABLE_METADATA:
+        raise ValueError("Unsupported attachment metadata")
+    item = get_event_attachment(data, attachment_id)
+    if item is None:
+        raise ValueError("Event attachment does not exist")
+    candidate = normalize_event_attachment({**item, **changes})
+    if candidate is None:
+        raise ValueError("Invalid attachment metadata")
+    for field in ("date", "departure_time"):
+        supplied = changes.get(field)
+        if supplied not in {None, ""} and candidate[field] is None:
+            raise ValueError(f"Invalid {field}")
+    item.clear(); item.update(candidate)
+    return item
 
 
 def delete_attachments_for_event(data: dict[str, Any], parent_type: str, parent_event_id: str) -> int:
