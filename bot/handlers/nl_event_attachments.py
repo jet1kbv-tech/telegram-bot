@@ -5,16 +5,19 @@ from datetime import datetime
 from typing import Any
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.error import TelegramError
 from telegram.ext import ContextTypes, ConversationHandler
 
 from bot.config import BOT_TIMEZONE
-from bot.handlers.event_attachments import TYPE_LABELS, extract_attachment_draft
+from bot.handlers.event_attachments import (TYPE_LABELS, enrich_ticket_reference, extract_attachment_draft,
+    ticket_enrichment_available)
 from bot.services.event_attachments import create_event_attachment, resolve_attachment_parent
 from bot.services.nl_attachment_context import append_file, clear_pending, create_pending, get_pending
+from bot.services.ticket_enrichment import TicketEnrichmentError
 from bot.services.nl_dates import DateExpressionError, resolve_date_expression, zoned_now
 from bot.services.nl_entity_resolution import EntityCandidate, resolve_attachment_events, upcoming_attachment_events
 from bot.states import (CONFIRMING_NL_ATTACHMENT, ENTERING_NL_ATTACHMENT_EVENT_TITLE,
-                        SELECTING_NL_ATTACHMENT_EVENT, WAITING_FOR_NL_ATTACHMENTS)
+                        SELECTING_NL_ATTACHMENT_EVENT, WAITING_FOR_NL_ATTACHMENTS, EDITING_EVENT_ATTACHMENT_METADATA)
 from bot.storage import storage
 from bot.utils import ensure_access, get_allowed_profile, get_user_name, get_username
 
@@ -108,6 +111,17 @@ async def _after_event(message: Any, operation) -> int:
             operation.stage = "classify"
             await message.reply_text("Что это за документ?", reply_markup=_classification(operation.operation_id))
             return SELECTING_NL_ATTACHMENT_EVENT
+        if (len(operation.files) == 1 and operation.metadata.get("semantic_type") == "transport_ticket"
+                and operation.stage not in {"confirm", "proposal"}):
+            operation.stage = "enrichment_choice"
+            rows = []
+            if ticket_enrichment_available():
+                rows.append([InlineKeyboardButton("✨ Распознать данные", callback_data=f"nla:a:{operation.operation_id}")])
+            rows += [[InlineKeyboardButton("📎 Прикрепить без распознавания", callback_data=f"nla:s:{operation.operation_id}")],
+                     [InlineKeyboardButton("✏️ Ввести вручную", callback_data=f"nla:m:{operation.operation_id}")]]
+            rows += _cancel_menu(operation.operation_id)
+            await message.reply_text("Добавить данные билета перед прикреплением?", reply_markup=InlineKeyboardMarkup(rows))
+            return SELECTING_NL_ATTACHMENT_EVENT
         operation.stage = "confirm"
         await message.reply_text(_confirm_text(operation), reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("✅ Прикрепить", callback_data=f"nla:c:{operation.operation_id}")],
@@ -128,7 +142,7 @@ async def begin_intent_attachment(update: Update, context: ContextTypes.DEFAULT_
         try: metadata["date"] = resolve_date_expression(arguments["date_expression"], now=now, timezone=BOT_TIMEZONE)
         except DateExpressionError: pass
     operation = create_pending(context.user_data, actor_key=get_username(update), now=now,
-        metadata=metadata,
+        metadata={**metadata, "semantic_type": "voucher"} if metadata.get("semantic_type") == "accommodation" else metadata,
         files=[draft] if draft else [])
     profile = get_allowed_profile(update) or {}; owner = str(profile.get("wishlist_owner") or "")
     candidates = resolve_attachment_events(storage.load(), arguments["target"], owner=owner, now=now, timezone=BOT_TIMEZONE)
@@ -238,6 +252,52 @@ async def nl_attachment_callback_router(update: Update, context: ContextTypes.DE
     if action == "r":
         operation.metadata["transport_type"] = parts[3]
         return await _after_event(query.message, operation)
+    if action == "s":
+        operation.stage = "confirm"
+        return await _after_event(query.message, operation)
+    if action == "m":
+        # Reuse the native deterministic sequence; the draft remains in the pending operation.
+        from bot.handlers.event_attachments import _metadata_prompt
+        fields = ["origin", "destination", "date", "departure_time", "arrival_date", "arrival_time"]
+        context.user_data["event_attachment_metadata_flow"] = {"mode": "nl_create", "fields": fields,
+            "operation_id": operation.operation_id, "state": EDITING_EVENT_ATTACHMENT_METADATA}
+        await query.edit_message_text(_metadata_prompt(fields[0]), reply_markup=InlineKeyboardMarkup(_cancel_menu(operation_id)))
+        return EDITING_EVENT_ATTACHMENT_METADATA
+    if action == "a":
+        if len(operation.files) != 1 or operation.metadata.get("semantic_type") != "transport_ticket":
+            return SELECTING_NL_ATTACHMENT_EVENT
+        progress = await query.message.reply_text("🔎 Анализирую билет…")
+        fallback = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✏️ Ввести вручную", callback_data=f"nla:m:{operation_id}")],
+            [InlineKeyboardButton("📎 Прикрепить без распознавания", callback_data=f"nla:s:{operation_id}")],
+            [InlineKeyboardButton("❌ Отменить", callback_data=f"nla:x:{operation_id}")]])
+        async def finish(text, markup=None):
+            try: await progress.edit_text(text, reply_markup=markup)
+            except (TelegramError, AttributeError):
+                try: await progress.delete()
+                except (TelegramError, AttributeError): pass
+                await query.message.reply_text(text, reply_markup=markup)
+        try:
+            _, _, event = resolve_attachment_parent(storage.load(), operation.parent_type or "", operation.parent_id or "")
+            result = await enrich_ticket_reference(context, operation.files[0], event_date=event.get("date"))
+        except (TicketEnrichmentError, TelegramError, ValueError):
+            await finish("Не удалось распознать билет. Файл сохранён в черновике.", fallback)
+            return SELECTING_NL_ATTACHMENT_EVENT
+        current = get_pending(context.user_data, actor_key=get_username(update), now=zoned_now(BOT_TIMEZONE), operation_id=operation_id)
+        if current is not operation:
+            try: await progress.delete()
+            except (TelegramError, AttributeError): pass
+            return _idle(context)
+        if not result.useful:
+            await finish("Не удалось уверенно распознать данные. Файл сохранён в черновике.", fallback)
+            return SELECTING_NL_ATTACHMENT_EVENT
+        operation.metadata.update({k: v for k, v in result.as_dict().items() if v is not None and not operation.metadata.get(k)})
+        operation.stage = "proposal"
+        rows = [[InlineKeyboardButton("✅ Прикрепить", callback_data=f"nla:c:{operation_id}")],
+                [InlineKeyboardButton("✏️ Изменить", callback_data=f"nla:m:{operation_id}")],
+                [InlineKeyboardButton("❌ Отменить", callback_data=f"nla:x:{operation_id}")]]
+        await finish(_confirm_text(operation), InlineKeyboardMarkup(rows))
+        return CONFIRMING_NL_ATTACHMENT
     if action == "c":
         if operation.completed: return _idle(context)
         data = storage.load(); created = duplicates = 0
@@ -267,6 +327,7 @@ async def nl_attachment_callback_router(update: Update, context: ContextTypes.DE
                     transport_type=operation.metadata.get("transport_type"), origin=operation.metadata.get("origin"),
                     destination=operation.metadata.get("destination"), person=person,
                     date=operation.metadata.get("date"), departure_time=operation.metadata.get("departure_time"),
+                    arrival_date=operation.metadata.get("arrival_date"), arrival_time=operation.metadata.get("arrival_time"),
                     created_by=get_user_name(update), **draft)
                 created += int(was_created); duplicates += int(not was_created)
         except ValueError:

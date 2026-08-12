@@ -41,7 +41,7 @@ Query defaults: purchases status=planned priority=any buyer=any, operations list
 «у билета в Воронеж время отправления 23:50» -> update_event_attachment semantic_type="transport_ticket" destination="Воронеж" new_departure_time="23:50";
 «измени время прибытия билета в Воронеж на 09:40» -> update_event_attachment semantic_type="transport_ticket" destination="Воронеж" new_arrival_time="09:40";
 
-Для attach_event_file target — ссылка на событие в формулировке пользователя, а не гарантированное каноническое название в хранилище (названия из хранилища тебе не передаются). semantic_type: transport_ticket/voucher/accommodation/insurance/reservation/other; transport_type: train/plane/bus/other; person: current_user/other_user/both; departure_time только явно указанное время ЧЧ:ММ. Извлекай только явно сказанные метаданные, ничего не предполагай.
+Для attach_event_file target — ссылка на событие в формулировке пользователя, а не гарантированное каноническое название в хранилище (названия из хранилища тебе не передаются). semantic_type: transport_ticket/voucher/insurance/reservation/other; для ваучеров и проживания всегда voucher; transport_type: train/plane/bus/other; person: current_user/other_user/both; departure_time только явно указанное время ЧЧ:ММ. Извлекай только явно сказанные метаданные, ничего не предполагай.
 
 unsupported — только команда вне доменов, destructive/bulk или чужой календарь. category: destructive, other_user_calendar, bulk, unsupported_domain или conversation. no_action используй только для текста без команды. Обязательные поля выбранной ветки добавь в arguments; необязательные отсутствующие поля пропусти. Не объясняй ответ и не добавляй поля.
 

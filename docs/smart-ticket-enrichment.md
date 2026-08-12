@@ -28,3 +28,19 @@ manual editing. There is no OCR, public upload, background analysis, semantic cl
 automatic Phase 2A batch enrichment, attachment retrieval, QR processing, or general document
 understanding in this MVP. Logs contain only media/size buckets, result field counts, and bounded
 failure categories—not identifiers, filenames, content, raw responses, or extracted values.
+
+## Draft-first creation consolidation
+
+New transport tickets are held as Telegram-reference drafts until the user either
+confirms recognized metadata, completes deterministic manual entry, or explicitly
+chooses attachment without recognition. The same enrichment entry point accepts a
+safe Telegram reference for both drafts and canonical attachments; only existing
+attachments use metadata update after confirmation. Create proposals consume their
+operation state before the single create boundary, making repeated or stale callback
+confirmation harmless.
+
+Phase 2A offers this draft enrichment only for exactly one transport-ticket file.
+Multi-file batches intentionally retain the existing one-confirmation batch save and
+make no enrichment provider calls; each saved ticket may later be enriched from its
+detail card. This bounds provider use to one intent parse plus at most one ticket
+analysis for a single-file operation.

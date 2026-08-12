@@ -330,3 +330,38 @@ def test_missing_model_hides_actions_and_leaves_documents_operational(monkeypatc
     labels = [button.text for row in edit.await_args.kwargs["reply_markup"].inline_keyboard for button in row]
     assert "✨ Распознать данные" not in labels
     assert {"📤 Отправить файл", "✏️ Изменить данные", "🗑 Удалить"} <= set(labels)
+
+
+def test_native_draft_recognition_creates_only_after_confirmation_and_once(monkeypatch, tmp_path):
+    base = _data(); base["event_attachments"] = []
+    store = JsonStorage(tmp_path / "data.json"); store.save(base); monkeypatch.setattr(handlers, "storage", store)
+    monkeypatch.setattr(handlers, "ensure_access", AsyncMock(return_value=True)); monkeypatch.setattr(handlers, "remember_current_chat", AsyncMock())
+    provider = SimpleNamespace(enrich=AsyncMock(return_value=decode_ticket_enrichment(
+        '{"origin":"Москва","destination":"Воронеж","date":"2026-08-30","departure_time":"23:38","arrival_date":"2026-08-31","arrival_time":"09:33"}')))
+    tg_file = SimpleNamespace(file_size=3, download_as_bytearray=AsyncMock(return_value=bytearray(b"pdf")))
+    draft = {"telegram_media_type": "document", "telegram_file_id": "draft", "telegram_file_unique_id": "draft-u",
+             "file_name": "ticket.pdf", "mime_type": "application/pdf"}
+    ctx = SimpleNamespace(user_data={"event_attachment_parent": ("calendar", "cal"),
+        "event_attachment_transport_type": "train", "event_attachment_draft": draft},
+        bot=SimpleNamespace(get_file=AsyncMock(return_value=tg_file)))
+    handlers.configure_event_attachment_handlers(safe_edit_message=AsyncMock(), ticket_enricher=provider)
+    assert asyncio.run(handlers.event_attachment_router(_update("att|recognizenew"), ctx)) == handlers.CONFIRMING_TICKET_ENRICHMENT
+    assert store.load()["event_attachments"] == []
+    asyncio.run(handlers.event_attachment_router(_update("att|saveai"), ctx))
+    asyncio.run(handlers.event_attachment_router(_update("att|saveai"), ctx))
+    saved = store.load()["event_attachments"]
+    assert len(saved) == 1 and saved[0]["destination"] == "Воронеж" and saved[0]["arrival_time"] == "09:33"
+    provider.enrich.assert_awaited_once()
+
+
+def test_native_type_keyboard_has_one_canonical_voucher(monkeypatch):
+    monkeypatch.setattr(handlers, "ensure_access", AsyncMock(return_value=True)); monkeypatch.setattr(handlers, "remember_current_chat", AsyncMock())
+    message = SimpleNamespace(document=SimpleNamespace(file_id="id", file_unique_id="u", file_name="v.pdf", mime_type="application/pdf"),
+                              photo=[], reply_text=AsyncMock())
+    update = SimpleNamespace(message=message, effective_user=SimpleNamespace(username="wp_bvv"), effective_chat=SimpleNamespace(id=1))
+    ctx = SimpleNamespace(user_data={})
+    asyncio.run(handlers.receive_file(update, ctx))
+    buttons = [b for row in message.reply_text.await_args.kwargs["reply_markup"].inline_keyboard for b in row]
+    assert [b.text for b in buttons].count("🏨 Ваучер / проживание") == 1
+    voucher = next(b for b in buttons if b.text == "🏨 Ваучер / проживание")
+    assert voucher.callback_data == "att|type|voucher"

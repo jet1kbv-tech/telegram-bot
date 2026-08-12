@@ -418,12 +418,14 @@ def build_app() -> Application:
                 MessageHandler(filters.TEXT & ~filters.COMMAND, receive_attachment_metadata),
             ],
             EDITING_EVENT_ATTACHMENT_METADATA: [
+                CallbackQueryHandler(nl_attachment_callback_router, pattern=r"^nla:"),
                 MessageHandler(filters.Regex(rf"^{MAIN_MENU_TEXT}$"), quick_return_to_main_menu),
                 CallbackQueryHandler(back_to_main, pattern=r"^(main|menu:main)$"),
                 CallbackQueryHandler(event_attachment_router, pattern=r"^att\|"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, receive_attachment_metadata),
             ],
             CONFIRMING_TICKET_ENRICHMENT: [
+                CallbackQueryHandler(nl_attachment_callback_router, pattern=r"^nla:"),
                 MessageHandler(filters.Regex(rf"^{MAIN_MENU_TEXT}$"), ticket_enrichment_quick_home),
                 CallbackQueryHandler(ticket_enrichment_home, pattern=r"^(main|menu:main)$"),
                 CallbackQueryHandler(event_attachment_router, pattern=r"^att\|"),
