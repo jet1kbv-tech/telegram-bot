@@ -20,6 +20,8 @@ from bot.config import (
 
 PURCHASE_BUCKETS = ("planned", "bought")
 PURCHASE_PRIORITIES = {"high", "medium", "low", ""}
+FILM_REACTION_VALUES = frozenset({"like", "neutral", "dislike"})
+FILM_REACTION_ACTORS = frozenset({"vova", "sasha"})
 
 logger = logging.getLogger(__name__)
 DATA_FILE = Path(os.getenv("DATA_FILE", "data.json"))
@@ -440,6 +442,12 @@ def normalize_film(item: Any) -> dict[str, Any] | None:
                 external_rating = None
         metadata_provider = str(item.get("metadata_provider") or "")
         external_id = str(item.get("external_id") or "")
+        raw_reactions = item.get("reactions")
+        reactions = {
+            actor: reaction
+            for actor, reaction in raw_reactions.items()
+            if actor in FILM_REACTION_ACTORS and reaction in FILM_REACTION_VALUES
+        } if isinstance(raw_reactions, dict) else None
         raw_media_type = str(item.get("media_type") or "")
         if raw_media_type in {"movie", "tv"}:
             media_type = raw_media_type
@@ -465,6 +473,9 @@ def normalize_film(item: Any) -> dict[str, Any] | None:
             "genres": genres,
             "description": str(item.get("description") or ""),
             "external_rating": external_rating,
+            # Absence remains a valid legacy representation; invalid entries are
+            # never admitted to canonical state.
+            **({"reactions": reactions} if reactions is not None else {}),
             # Preserve the pre-split legacy key verbatim when it exists. The
             # canonical legacy_rating above keeps current code able to read it.
             **({"rating": item["rating"]} if "rating" in item else {}),

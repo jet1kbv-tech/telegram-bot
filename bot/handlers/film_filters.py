@@ -12,10 +12,10 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes, ConversationHandler
 
 from bot.config import PAGE_SIZE
-from bot.handlers.film_operations import delete_film, set_film_status
+from bot.handlers.film_operations import delete_film, set_film_reaction, set_film_status
 from bot.states import SECTION
 from bot.storage import find_item, storage
-from bot.utils import ensure_access, paginate_items
+from bot.utils import ensure_access, get_wishlist_owner_by_user, paginate_items
 
 GENRELESS_KEY = "none"
 GENRE_PAGE_SIZE = 10
@@ -240,6 +240,10 @@ async def film_filter_callback_router(update: Update, context: ContextTypes.DEFA
         return await _show_random_result(query, parts[2])
     if action in {"rs", "rc", "rd"} and len(parts) == 4:
         return await _handle_random_mutation(query, action, parts[2], parts[3])
+    if action == "fr" and len(parts) == 6:
+        return await _handle_filter_reaction(query, update, parts[2], _int(parts[3]), parts[4], parts[5])
+    if action == "rr" and len(parts) == 5:
+        return await _handle_filter_reaction(query, update, parts[2], -1, parts[3], parts[4])
     return await _show_stale_filter(query)
 
 
@@ -302,6 +306,8 @@ async def _handle_filtered_mutation(query: Any, action: str, key: str, page: int
     result = set_film_status(film_id, "watched") if action == "s" else delete_film(film_id)
     if not result.found:
         return await _show_filtered_list(query, key, page, "Фильм уже удалён или список изменился.", entry)
+    if action == "s":
+        return await _show_filter_reaction_prompt(query, film_id, f"fr:{key}:{page}", f"filmfilter:l:{key}:{page}")
     notice = "Фильм отмечен как просмотренный." if action == "s" else "Фильм удалён."
     return await _show_filtered_list(query, key, page, notice, entry)
 
@@ -351,6 +357,8 @@ async def _handle_random_mutation(query: Any, action: str, key: str, film_id: st
     notice = "Фильм отмечен как просмотренный." if action == "rs" else "Фильм удалён."
     if not result.found:
         notice = "Фильм уже удалён или список изменился."
+    elif action == "rs":
+        return await _show_filter_reaction_prompt(query, film_id, f"rr:{key}", f"filmfilter:x:{key}")
     elif entry is not None and not random_candidates(storage.load().get("films", []), entry):
         return await _show_empty_genre(query, entry)
     genre_mode = key != "any"
@@ -361,6 +369,34 @@ async def _handle_random_mutation(query: Any, action: str, key: str, film_id: st
         [InlineKeyboardButton("🏠 В меню", callback_data="menu:main")],
     ]
     await _safe_edit_message(query, notice, reply_markup=InlineKeyboardMarkup(rows))
+    return SECTION
+
+
+async def _show_filter_reaction_prompt(query: Any, film_id: str, route: str, back_callback: str) -> int:
+    rows = [
+        [InlineKeyboardButton("❤️ Понравилось", callback_data=_cb(f"filmfilter:{route}:{film_id}:like"))],
+        [InlineKeyboardButton("😐 Нормально", callback_data=_cb(f"filmfilter:{route}:{film_id}:neutral"))],
+        [InlineKeyboardButton("👎 Не понравилось", callback_data=_cb(f"filmfilter:{route}:{film_id}:dislike"))],
+        [InlineKeyboardButton("Пропустить", callback_data=_cb(back_callback))],
+    ]
+    await _safe_edit_message(query, "Как тебе фильм?", reply_markup=InlineKeyboardMarkup(rows))
+    return SECTION
+
+
+async def _handle_filter_reaction(
+    query: Any, update: Update, key: str, page: int, film_id: str, reaction: str,
+) -> int:
+    result = set_film_reaction(film_id, get_wishlist_owner_by_user(update), reaction)
+    back = f"filmfilter:l:{key}:{page}" if page >= 0 else f"filmfilter:x:{key}"
+    if not result.found:
+        await _safe_edit_message(query, "Фильм не найден.", reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("⬅️ Вернуться", callback_data=_cb(back))]
+        ]))
+        return SECTION
+    await _safe_edit_message(query, _build_item_text("films", result.film), reply_markup=InlineKeyboardMarkup([
+        [InlineKeyboardButton("⬅️ Продолжить", callback_data=_cb(back))],
+        [InlineKeyboardButton("🏠 В меню", callback_data="menu:main")],
+    ]))
     return SECTION
 
 

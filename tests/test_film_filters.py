@@ -119,6 +119,7 @@ def test_menu_order_and_new_random_callback():
         ("🎭 По жанрам", "filmfilter:g:b:0"),
         ("🎲 Выбрать случайный", "filmfilter:r"),
         ("✅ Просмотренные", "list|films|watched|0"),
+        ("⭐ Оценить просмотренные", "film_backlog|start"),
         ("🔄 Обновить данные", "filmenrich:open"),
         ("🏠 В меню", "menu:main"),
     ]
@@ -149,12 +150,14 @@ def test_status_recomputes_clamps_and_last_film_is_empty(monkeypatch):
 
     monkeypatch.setattr(filters, "set_film_status", mark)
     asyncio.run(filters.film_filter_callback_router(update(f"filmfilter:s:{key}:1:10"), SimpleNamespace()))
-    assert "Показаны 1–10" in safe_edit.await_args.args[1]
+    assert safe_edit.await_args.args[1] == "Как тебе фильм?"
+    assert f"filmfilter:l:{key}:1" in callbacks(safe_edit.await_args.kwargs["reply_markup"])
     assert store.data["films"][-1]["status"] == "watched"
 
     store.data["films"] = [film("only", "Only", genres=["Драма"])]
     asyncio.run(filters.film_filter_callback_router(update(f"filmfilter:s:{key}:0:only"), SimpleNamespace()))
-    assert "больше нет фильмов" in safe_edit.await_args.args[1]
+    assert safe_edit.await_args.args[1] == "Как тебе фильм?"
+    assert f"filmfilter:l:{key}:0" in callbacks(safe_edit.await_args.kwargs["reply_markup"])
 
 
 def test_delete_confirmation_context_reclamps_and_last_is_empty(monkeypatch):
@@ -214,7 +217,26 @@ def test_random_zero_one_and_random_mutation_navigation(monkeypatch):
 
     monkeypatch.setattr(filters, "set_film_status", lambda item_id, status: FilmOperationResult(True))
     asyncio.run(filters.film_filter_callback_router(update("filmfilter:rs:any:one"), SimpleNamespace()))
-    assert "отмечен" in safe_edit.await_args.args[1]
+    assert safe_edit.await_args.args[1] == "Как тебе фильм?"
+    assert "filmfilter:x:any" in callbacks(safe_edit.await_args.kwargs["reply_markup"])
+
+
+def test_filtered_and_random_reactions_use_actor_and_return_context(monkeypatch):
+    target = film("one", "One", status="watched", genres=["Драма"])
+    _, safe_edit = configured(monkeypatch, [target])
+    key = filters.genre_key("драма")
+    recorded = []
+    monkeypatch.setattr(filters, "get_wishlist_owner_by_user", lambda update: "vova")
+    monkeypatch.setattr(filters, "set_film_reaction", lambda film_id, actor, reaction: (
+        recorded.append((film_id, actor, reaction)) or FilmOperationResult(True, {**target, "reactions": {actor: reaction}})
+    ))
+
+    asyncio.run(filters.film_filter_callback_router(update(f"filmfilter:fr:{key}:2:one:like"), SimpleNamespace()))
+    assert recorded[-1] == ("one", "vova", "like")
+    assert f"filmfilter:l:{key}:2" in callbacks(safe_edit.await_args.kwargs["reply_markup"])
+
+    asyncio.run(filters.film_filter_callback_router(update("filmfilter:rr:any:one:neutral"), SimpleNamespace()))
+    assert recorded[-1] == ("one", "vova", "neutral")
     assert "filmfilter:x:any" in callbacks(safe_edit.await_args.kwargs["reply_markup"])
 
 
@@ -267,5 +289,5 @@ def test_historical_rate_start_uses_shared_operation(monkeypatch):
 
     asyncio.run(runtime.section_router(update("rate_start|films|legacy|want|0"), SimpleNamespace(user_data={})))
 
-    assert "Legacy" in safe_edit.await_args.args[1]
-    assert "list|films|watched|0" in callbacks(safe_edit.await_args.kwargs["reply_markup"])
+    assert safe_edit.await_args.args[1] == "Как тебе фильм?"
+    assert "film_reaction_skip|legacy|watched|0" in callbacks(safe_edit.await_args.kwargs["reply_markup"])
