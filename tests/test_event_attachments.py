@@ -23,7 +23,7 @@ from bot.services.event_attachments import (
     update_event_attachment_metadata,
 )
 from bot.services.event_attachment_display import attachment_detail_text, attachment_list_title, attachment_list_titles
-from bot.storage import JsonStorage
+from bot.storage import JsonStorage, normalize_event_attachment
 from telegram.error import BadRequest
 
 
@@ -125,7 +125,7 @@ def test_transport_display_titles_details_and_collisions():
     assert "08:10" not in attachment_list_title(train)
     detail = attachment_detail_text(train)
     assert "Москва → Воронеж" in detail and "31 августа 2026" in detail
-    assert "Отправление: 08:10" in detail and "Для: Вова и Саша" in detail
+    assert "Отправление:\n31 августа 2026 · 08:10" in detail and "Для: Вова и Саша" in detail
     other = {"semantic_type": "insurance", "origin": "Секрет", "destination": "Секрет",
              "date": "2026-08-31", "departure_time": "08:10", "person": "both"}
     assert attachment_detail_text(other) == "🛡 Страховка"
@@ -268,12 +268,36 @@ def test_native_optional_enrichment_stores_route_date_and_time(monkeypatch, tmp_
         event_attachment_draft={"telegram_media_type": "document", "telegram_file_id": "id", "telegram_file_unique_id": "enriched"})
     _run(handlers.event_attachment_router(_callback("att|transport|train"), ctx))
     assert _run(handlers.event_attachment_router(_callback("att|enrich"), ctx)) == handlers.ENRICHING_EVENT_ATTACHMENT
-    for value in ("Москва", "Воронеж", "2026-08-31", "08:10"):
+    for value in ("Москва", "Воронеж", "2026-08-31", "08:10", "-", "-"):
         message = SimpleNamespace(text=value, reply_text=AsyncMock())
         _run(handlers.receive_attachment_metadata(SimpleNamespace(message=message), ctx))
     saved = store.load()["event_attachments"][0]
     assert (saved["origin"], saved["destination"], saved["date"], saved["departure_time"]) == (
         "Москва", "Воронеж", "2026-08-31", "08:10")
+
+
+def test_arrival_storage_update_and_partial_detail_are_safe():
+    data = _data(); item, _ = _create(data)
+    item["semantic_type"] = "transport_ticket"; item["transport_type"] = "train"
+    assert item["arrival_date"] is None and item["arrival_time"] is None
+    update_event_attachment_metadata(data, item["id"], arrival_date=" 2026-09-01 ", arrival_time=" 09:33 ")
+    identity = (item["id"], item["parent_event_id"], item["telegram_file_id"], item["origin"])
+    assert (item["arrival_date"], item["arrival_time"]) == ("2026-09-01", "09:33")
+    update_event_attachment_metadata(data, item["id"], arrival_date=None)
+    assert item["arrival_date"] is None and item["arrival_time"] == "09:33"
+    assert (item["id"], item["parent_event_id"], item["telegram_file_id"], item["origin"]) == identity
+    assert "Прибытие:\n09:33" in attachment_detail_text(item)
+    update_event_attachment_metadata(data, item["id"], arrival_time=None, arrival_date="2026-09-01")
+    assert "Прибытие:\n1 сентября 2026" in attachment_detail_text(item)
+    assert "09:33" not in attachment_list_title(item)
+
+
+def test_invalid_arrival_metadata_normalizes_and_update_rejects():
+    data = _data(); item, _ = _create(data)
+    item.update(arrival_date="2026-02-30", arrival_time="24:00")
+    normalized = normalize_event_attachment(item)
+    assert normalized["arrival_date"] is None and normalized["arrival_time"] is None
+    with pytest.raises(ValueError): update_event_attachment_metadata(data, item["id"], arrival_date="bad")
 
 
 def test_native_enrichment_has_cancel_and_menu_escape_and_invalid_input_keeps_draft(monkeypatch, tmp_path):

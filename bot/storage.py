@@ -669,6 +669,8 @@ def normalize_event_attachment(item: Any) -> dict[str, Any] | None:
     destination = str(item.get("destination") or "").strip() or None
     date_value = str(item.get("date") or "").strip() or None
     time_value = str(item.get("departure_time") or "").strip() or None
+    arrival_date = str(item.get("arrival_date") or "").strip() or None
+    arrival_time = str(item.get("arrival_time") or "").strip() or None
     try:
         if date_value:
             datetime.strptime(date_value, "%Y-%m-%d")
@@ -679,6 +681,14 @@ def normalize_event_attachment(item: Any) -> dict[str, Any] | None:
             datetime.strptime(time_value, "%H:%M")
     except ValueError:
         time_value = None
+    for value_name, value, fmt in (("arrival_date", arrival_date, "%Y-%m-%d"),
+                                   ("arrival_time", arrival_time, "%H:%M")):
+        try:
+            if value:
+                datetime.strptime(value, fmt)
+        except ValueError:
+            if value_name == "arrival_date": arrival_date = None
+            else: arrival_time = None
     return {
         "id": str(item.get("id") or make_id()),
         "parent_type": parent_type,
@@ -694,6 +704,8 @@ def normalize_event_attachment(item: Any) -> dict[str, Any] | None:
         "destination": destination,
         "date": date_value,
         "departure_time": time_value,
+        "arrival_date": arrival_date,
+        "arrival_time": arrival_time,
         "person": person,
         "comment": item.get("comment") or None,
         "created_by": str(item.get("created_by") or "unknown"),

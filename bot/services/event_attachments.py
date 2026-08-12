@@ -10,7 +10,7 @@ from typing import Any
 
 from bot.storage import find_item, make_id, normalize_event_attachment
 
-EDITABLE_METADATA = {"origin", "destination", "date", "departure_time", "person"}
+EDITABLE_METADATA = {"origin", "destination", "date", "departure_time", "arrival_date", "arrival_time", "person"}
 
 
 class AttachmentParentNotFound(ValueError):
@@ -98,7 +98,7 @@ def update_event_attachment_metadata(data: dict[str, Any], attachment_id: str, *
     candidate = normalize_event_attachment({**item, **changes})
     if candidate is None:
         raise ValueError("Invalid attachment metadata")
-    for field in ("date", "departure_time"):
+    for field in ("date", "departure_time", "arrival_date", "arrival_time"):
         supplied = changes.get(field)
         if supplied not in {None, ""} and candidate[field] is None:
             raise ValueError(f"Invalid {field}")
