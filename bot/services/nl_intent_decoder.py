@@ -38,6 +38,12 @@ _FIELDS: dict[IntentKind, dict[str, tuple[type, ...]]] = {
         "origin": (str, type(None)), "destination": (str, type(None)),
         "date_expression": (str, type(None)), "departure_time": (str, type(None)), "person": (str, type(None)),
     },
+    IntentKind.QUERY_EVENT_ATTACHMENTS: {
+        "target": (str, type(None)), "semantic_type": (str, type(None)),
+        "transport_type": (str, type(None)), "origin": (str, type(None)),
+        "destination": (str, type(None)), "date": (str, type(None)),
+        "person": (str, type(None)), "direction": (str, type(None)), "return_all": (bool,),
+    },
     IntentKind.QUERY_PURCHASES: {"status": (str,), "priority": (str,), "buyer": (str,), "operation": (str,)},
     IntentKind.QUERY_FILMS: {"status": (str,), "media_type": (str,), "genre": (str, type(None)), "operation": (str,)},
     IntentKind.QUERY_CALENDAR: {"date_from": (str, type(None)), "date_to": (str, type(None)), "target": (str, type(None)), "operation": (str,)},
@@ -49,6 +55,7 @@ _FIELDS: dict[IntentKind, dict[str, tuple[type, ...]]] = {
 _OPTIONAL_NULL_FIELDS = {
     "price", "priority", "link", "comment", "buyer", "date_expression", "time_expression",
     "end_time_expression", "departure_time", "place", "end_date_expression", "title", "status", "genre", "date_from", "date_to", "target",
+    "semantic_type", "transport_type", "origin", "destination", "date", "person", "direction",
 }
 _UNSUPPORTED = {"destructive", "other_user_calendar", "bulk", "unsupported_domain", "conversation"}
 _PROVIDER_PRICE = re.compile(
@@ -78,6 +85,7 @@ _PROVIDER_TECHNICAL_DEFAULTS: dict[IntentKind, dict[str, Any]] = {
     },
     IntentKind.QUERY_CALENDAR: {"operation": "list"},
     IntentKind.QUERY_AFISHA: {"operation": "list"},
+    IntentKind.QUERY_EVENT_ATTACHMENTS: {"return_all": False},
 }
 
 
@@ -103,7 +111,7 @@ def decode_intent(raw: str | dict[str, Any]) -> ParsedIntent:
     for name, types in fields.items():
         item = supplied[name]
         # bool is an int subclass, but is never a valid monetary value.
-        if isinstance(item, bool) or not isinstance(item, types):
+        if (isinstance(item, bool) and bool not in types) or not isinstance(item, types):
             raise IntentParserInvalidOutput(f"invalid_{name}")
         if isinstance(item, str):
             item = item.strip()
@@ -154,6 +162,18 @@ def decode_intent(raw: str | dict[str, Any]) -> ParsedIntent:
                 arguments["departure_time"] = datetime.strptime(arguments["departure_time"], "%H:%M").strftime("%H:%M")
             except ValueError as exc:
                 raise IntentParserInvalidOutput("invalid_departure_time") from exc
+    if kind is IntentKind.QUERY_EVENT_ATTACHMENTS:
+        if arguments["semantic_type"] not in {None, "transport_ticket", "voucher", "reservation", "insurance", "other"}:
+            raise IntentParserInvalidOutput("invalid_semantic_type")
+        if arguments["transport_type"] not in {None, "train", "plane", "bus", "other"}:
+            raise IntentParserInvalidOutput("invalid_transport_type")
+        if arguments["person"] not in {None, "current_user", "other_user", "both"}:
+            raise IntentParserInvalidOutput("invalid_person")
+        if arguments["direction"] not in {None, "outbound", "return"}:
+            raise IntentParserInvalidOutput("invalid_direction")
+        if arguments["date"] is not None:
+            try: arguments["date"] = datetime.strptime(arguments["date"], "%Y-%m-%d").strftime("%Y-%m-%d")
+            except ValueError as exc: raise IntentParserInvalidOutput("invalid_date") from exc
     return ParsedIntent(kind, arguments)
 
 
@@ -191,6 +211,15 @@ _BRANCH_PROPERTIES: dict[IntentKind, dict[str, Any]] = {
         "date_expression": {"type": ["string", "null"]},
         "departure_time": {"type": ["string", "null"]},
         "person": {"type": ["string", "null"], "enum": ["current_user", "other_user", "both", None]},
+    },
+    IntentKind.QUERY_EVENT_ATTACHMENTS: {
+        "target": {"type": ["string", "null"]},
+        "semantic_type": {"type": ["string", "null"], "enum": ["transport_ticket", "voucher", "reservation", "insurance", "other", None]},
+        "transport_type": {"type": ["string", "null"], "enum": ["train", "plane", "bus", "other", None]},
+        "origin": {"type": ["string", "null"]}, "destination": {"type": ["string", "null"]},
+        "date": {"type": ["string", "null"]}, "person": {"type": ["string", "null"], "enum": ["current_user", "other_user", "both", None]},
+        "direction": {"type": ["string", "null"], "enum": ["outbound", "return", None]},
+        "return_all": {"type": "boolean"},
     },
     IntentKind.QUERY_PURCHASES: {"status": {"type": "string", "enum": ["planned", "bought", "any"]}, "priority": {"type": "string", "enum": ["high", "medium", "low", "any"]}, "buyer": {"type": "string", "enum": ["current_user", "other_user", "unassigned", "any"]}, "operation": {"type": "string", "enum": ["list", "count", "sum"]}},
     IntentKind.QUERY_FILMS: {"status": {"type": "string", "enum": ["want", "watched", "any"]}, "media_type": {"type": "string", "enum": ["movie", "tv", "any"]}, "genre": {"type": ["string", "null"]}, "operation": {"type": "string", "enum": ["list", "count", "random"]}},
@@ -308,6 +337,10 @@ def normalize_provider_envelope(raw: str | dict[str, Any]) -> dict[str, Any]:
         numeric = re.sub(r"[ _\u00a0]", "", match.group(0))
         numeric = re.sub(r"\s*(?:₽|руб\.?|рублей)$", "", numeric, flags=re.IGNORECASE)
         arguments["price"] = int(numeric)
+    if kind is IntentKind.QUERY_EVENT_ATTACHMENTS and "return_all" in supplied:
+        if supplied["return_all"].casefold() not in {"true", "false"}:
+            raise IntentParserInvalidOutput("invalid_return_all")
+        arguments["return_all"] = supplied["return_all"].casefold() == "true"
     # Unsupported is non-mutating.  Collapsing an unfamiliar taxonomy label to
     # the canonical catch-all cannot authorize an action and avoids coupling the
     # provider's wording to internal UI categories.

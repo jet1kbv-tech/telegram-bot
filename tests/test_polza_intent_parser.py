@@ -219,10 +219,24 @@ def test_purchase_unknown_missing_and_wrong_typed_fields_remain_rejected(payload
 def test_schema_discriminates_every_intent_and_matches_decoder_contract():
     schema = INTENT_JSON_SCHEMA["schema"]
     assert set(schema["properties"]["intent"]["enum"]) == {kind.value for kind in IntentKind}
-    assert len(IntentKind) == 19
+    assert len(IntentKind) == 20
     assert set(schema["properties"]) == {"intent", "arguments"}
     assert set(schema["required"]) == set(schema["properties"])
     assert "price_text" not in json.dumps(INTENT_JSON_SCHEMA)
+
+
+def test_decodes_attachment_retrieval_contract():
+    parsed = decode_provider_envelope({"intent": "query_event_attachments", "arguments": [
+        {"name": "semantic_type", "value": "transport_ticket"},
+        {"name": "origin", "value": "Москва"},
+        {"name": "destination", "value": "Воронеж"},
+        {"name": "direction", "value": "return"},
+        {"name": "return_all", "value": "true"},
+    ]})
+    assert parsed.intent is IntentKind.QUERY_EVENT_ATTACHMENTS
+    assert parsed.arguments == {"target": None, "semantic_type": "transport_ticket",
+        "transport_type": None, "origin": "Москва", "destination": "Воронеж",
+        "date": None, "person": None, "direction": "return", "return_all": True}
 
 
 def test_gpt4o_provider_schema_has_supported_root_and_no_discriminator_oneof_or_const():

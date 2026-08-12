@@ -79,3 +79,6 @@ ENRICHING_EVENT_ATTACHMENT, EDITING_EVENT_ATTACHMENT_METADATA = range(73, 75)
 
 # Smart ticket enrichment. Never renumber deployed states above.
 CONFIRMING_TICKET_ENRICHMENT = 75
+
+# Read-only NL event attachment retrieval.
+SELECTING_NL_ATTACHMENT_QUERY = 76
