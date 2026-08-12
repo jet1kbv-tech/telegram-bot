@@ -519,6 +519,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
     _, section = query.data.split("|", 1)
     clear_film_rating_session(context)
+    context.user_data.pop("film_recommendation_session", None)
     context.user_data["active_section"] = section
     return await show_section_menu(update, section)
 

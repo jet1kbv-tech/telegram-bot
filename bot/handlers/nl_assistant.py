@@ -13,6 +13,7 @@ from bot.handlers.afisha import build_afisha_item_text
 from bot.handlers.calendar import build_calendar_event_text
 from bot.handlers.event_attachments import extract_attachment_draft
 from bot.handlers.films import begin_film_search
+from bot.handlers.film_recommendations import start_from_nl
 from bot.services.actions.afisha import create_afisha_event
 from bot.services.actions.calendar import create_personal_calendar_event
 from bot.services.actions.purchases import create_purchase
@@ -304,6 +305,8 @@ async def nl_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             return await begin_intent_attachment(update, context, parsed.arguments, response)
         if parsed.intent is IntentKind.QUERY_EVENT_ATTACHMENTS:
             return await begin_attachment_query(update, context, parsed.arguments, response)
+        if parsed.intent is IntentKind.RECOMMEND_FILM:
+            return await start_from_nl(update, context, parsed.arguments, response)
         if parsed.intent in {IntentKind.DELETE_EVENT_ATTACHMENT, IntentKind.UPDATE_EVENT_ATTACHMENT}:
             return await begin_attachment_mutation(update, context, parsed.intent.value, parsed.arguments, response)
         arguments, missing = _prepare(parsed.intent, parsed.arguments, now)

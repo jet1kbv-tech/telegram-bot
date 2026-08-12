@@ -8,6 +8,8 @@ from bot.services.nl_intent import IntentKind, IntentParserInvalidOutput
 from bot.services.nl_intent_decoder import decode_intent
 from bot.storage import JsonStorage
 
+FIXED_NOW = datetime(2026, 8, 10, 12, 0, tzinfo=timezone.utc)
+
 
 def base_data():
     data = JsonStorage.__new__(JsonStorage).default_data()
@@ -69,7 +71,9 @@ def test_normalized_duplicate_titles_remain_ambiguous():
 
 @pytest.mark.parametrize("target", ["стоматолог", "СТОМАТОЛОГ"])
 def test_calendar_matching_is_case_insensitive(target):
-    assert len(resolve_entities(base_data(), IntentKind.UPDATE_CALENDAR_EVENT, target, owner="vova")) == 1
+    assert len(resolve_entities(
+        base_data(), IntentKind.UPDATE_CALENDAR_EVENT, target, owner="vova", now=FIXED_NOW, timezone="UTC",
+    )) == 1
 
 
 def test_afisha_matching_is_case_insensitive():
@@ -88,12 +92,18 @@ def test_film_matching_is_case_insensitive_without_changing_canonical_title(targ
 def test_ambiguity_and_calendar_owner_isolation():
     data = base_data()
     data["calendars"]["vova"].append({**data["calendars"]["vova"][0], "id": "c3", "date": "2026-08-19"})
-    assert len(resolve_entities(data, IntentKind.DELETE_CALENDAR_EVENT, "стоматолог", owner="vova")) == 2
-    assert {candidate.item_id for candidate in resolve_entities(data, IntentKind.DELETE_CALENDAR_EVENT, "стоматолог", owner="sasha")} == {"c2"}
+    assert len(resolve_entities(
+        data, IntentKind.DELETE_CALENDAR_EVENT, "стоматолог", owner="vova", now=FIXED_NOW, timezone="UTC",
+    )) == 2
+    assert {
+        candidate.item_id for candidate in resolve_entities(
+            data, IntentKind.DELETE_CALENDAR_EVENT, "стоматолог", owner="sasha", now=FIXED_NOW, timezone="UTC",
+        )
+    } == {"c2"}
 
 
 def test_calendar_mutation_resolution_filters_past_and_sorts():
-    now = datetime(2026, 8, 10, 12, 0, tzinfo=timezone.utc)
+    now = FIXED_NOW
     event = {"owner": "vova", "title": "Стоматолог", "end_time": "", "source": "manual"}
     rows = [
         {**event, "id": "months", "date": "2026-02-01", "start_time": "10:00"},

@@ -14,6 +14,12 @@ from bot.services.movie_metadata import MovieMetadataUnavailable
 
 class TmdbCandidateProvider:
     BASE_URL = "https://api.themoviedb.org/3"
+    GENRES = {12: "adventure", 14: "fantasy", 16: "animation", 18: "drama", 27: "horror",
+              28: "action", 35: "comedy", 36: "history", 37: "western", 53: "thriller",
+              80: "crime", 99: "documentary", 878: "science_fiction", 9648: "mystery",
+              10402: "music", 10749: "romance", 10751: "family", 10752: "war",
+              10759: "action_adventure", 10762: "kids", 10763: "news", 10764: "reality",
+              10765: "science_fiction_fantasy", 10766: "soap", 10767: "talk", 10768: "war_politics"}
 
     def __init__(self, token: str, *, client: httpx.AsyncClient | None = None, cache_ttl: float = 300,
                  cache_size: int = 64, max_pages: int = 3) -> None:
@@ -56,9 +62,11 @@ class TmdbCandidateProvider:
         date_key = "primary_release_date" if media_type == "movie" else "first_air_date"
         if c.min_year is not None: params[f"{date_key}.gte"] = f"{c.min_year}-01-01"
         if c.max_year is not None: params[f"{date_key}.lte"] = f"{c.max_year}-12-31"
-        # TMDB discover accepts numeric genre IDs; callers may pass those as strings.
-        numeric = sorted(g for g in c.include_genres if str(g).isdigit())
+        reverse = {name: str(identifier) for identifier, name in self.GENRES.items()}
+        numeric = sorted(reverse.get(str(g), str(g)) for g in c.include_genres if str(g) in reverse or str(g).isdigit())
         if numeric: params["with_genres"] = ",".join(numeric)
+        excluded = sorted(reverse.get(str(g), str(g)) for g in c.exclude_genres if str(g) in reverse or str(g).isdigit())
+        if excluded: params["without_genres"] = ",".join(excluded)
         return params
 
     async def get_details(self, media_type: str, external_id: str) -> RecommendationCandidate:
@@ -94,7 +102,7 @@ class TmdbCandidateProvider:
         try: year = int(date[:4]) if isinstance(date, str) and len(date) >= 4 else None
         except ValueError: year = None
         raw_genres = raw.get("genres") if details else raw.get("genre_ids")
-        genres = tuple(str(x.get("name")) for x in raw_genres if isinstance(x, dict) and x.get("name")) if details and isinstance(raw_genres, list) else tuple(str(x) for x in raw_genres if isinstance(x, int)) if isinstance(raw_genres, list) else ()
+        genres = tuple(str(x.get("name")) for x in raw_genres if isinstance(x, dict) and x.get("name")) if details and isinstance(raw_genres, list) else tuple(TmdbCandidateProvider.GENRES.get(x, str(x)) for x in raw_genres if isinstance(x, int)) if isinstance(raw_genres, list) else ()
         runtime = raw.get("runtime") if movie else (raw.get("episode_run_time") or [None])[0]
         return RecommendationCandidate(str(raw["id"]), media_type, title.strip(), str(raw.get("original_title" if movie else "original_name") or ""),
             year, genres, str(raw.get("overview") or ""), _number(raw.get("vote_average")), _integer(raw.get("vote_count")),
