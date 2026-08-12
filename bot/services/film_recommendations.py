@@ -144,8 +144,9 @@ def _candidate_taste(candidate: RecommendationCandidate, profile: FilmPreference
     reasons: list[str] = []
     positives = [g for g in candidate.genres if (ev := profile.genres.get(_normal(g))) and ev.score > 0 and ev.evidence_count >= 1]
     negatives = [g for g in candidate.genres if (ev := profile.genres.get(_normal(g))) and ev.score < 0 and ev.evidence_count >= 1]
+    actor_label = {"vova": "Вова", "sasha": "Саша"}[profile.actor_key]
     if positives:
-        reasons.append(f"{profile.actor_key.capitalize()} положительно оценивал(а) жанр: {positives[0]}.")
+        reasons.append(f"{actor_label} положительно оценивал(а) жанр: {positives[0]}.")
     if negatives:
         reasons.append(f"Есть отрицательный сигнал по жанру: {negatives[0]}.")
     return taste, genre_fit, media_fit, reasons

@@ -77,7 +77,7 @@ def test_actor_specific_unknown_count_and_legacy_numeric_is_unknown():
     ]
     assert [item["id"] for item in runtime.unrated_watched_films(films, "vova")] == ["s", "legacy"]
     assert [item["id"] for item in runtime.unrated_watched_films(films, "sasha")] == ["v", "legacy"]
-    label = section_menu_keyboard("films", unrated_watched_count=2).inline_keyboard[5][0].text
+    label = section_menu_keyboard("films", unrated_watched_count=2).inline_keyboard[6][0].text
     assert label == "⭐ Оценить просмотренные · 2"
 
 

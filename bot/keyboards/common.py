@@ -25,6 +25,7 @@ def section_menu_keyboard(section: str, *, unrated_watched_count: int | None = N
     if section == "films":
         rows = [
             [InlineKeyboardButton("➕ Добавить фильм или сериал", callback_data="add|films")],
+            [InlineKeyboardButton("✨ Что посмотреть?", callback_data="filmrec:start")],
             [InlineKeyboardButton("📋 Хотим посмотреть", callback_data="list|films|want|0")],
             [InlineKeyboardButton("🎭 По жанрам", callback_data="filmfilter:g:b:0")],
             [InlineKeyboardButton("🎲 Выбрать случайный", callback_data="filmfilter:r")],

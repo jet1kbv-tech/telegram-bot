@@ -7,10 +7,37 @@ from typing import Any
 
 from bot.services.nl_intent import IntentKind, IntentParserInvalidOutput, ParsedIntent
 
+GENRE_ALIASES = {
+    "comedy": "comedy", "комедия": "comedy", "комедию": "comedy", "смешное": "comedy",
+    "horror": "horror", "ужасы": "horror", "триллер": "thriller", "thriller": "thriller",
+    "фантастика": "science_fiction", "science_fiction": "science_fiction",
+    "мелодрама": "romance", "романтика": "romance", "romance": "romance",
+    "мультфильм": "animation", "анимация": "animation", "animation": "animation",
+    "драма": "drama", "drama": "drama", "боевик": "action", "action": "action",
+    "детектив": "mystery", "mystery": "mystery", "криминал": "crime", "crime": "crime",
+    "документальный": "documentary", "documentary": "documentary", "семейный": "family", "family": "family",
+    "приключения": "adventure", "adventure": "adventure", "фэнтези": "fantasy", "fantasy": "fantasy",
+}
+
+
+def normalize_recommendation_genres(values: list[str]) -> list[str]:
+    """Allow-list provider genre output; unsupported values are ignored."""
+    result = []
+    for value in values:
+        canonical = GENRE_ALIASES.get(value.strip().casefold().replace("ё", "е"))
+        if canonical and canonical not in result: result.append(canonical)
+    return result
+
 # This is the canonical provider/domain boundary.  The schema below is generated
 # from the same definitions that the decoder uses, so the two cannot silently
 # acquire different fields.
 _FIELDS: dict[IntentKind, dict[str, tuple[type, ...]]] = {
+    IntentKind.RECOMMEND_FILM: {
+        "actor": (str, type(None)), "source": (str, type(None)), "media_type": (str, type(None)),
+        "include_genres": (list,), "exclude_genres": (list,), "min_year": (int, type(None)),
+        "max_year": (int, type(None)), "min_rating": (int, float, type(None)),
+        "max_runtime": (int, type(None)), "language": (str, type(None)), "country": (str, type(None)),
+    },
     IntentKind.ADD_MOVIE_OR_TV: {"query": (str,)},
     IntentKind.ADD_PURCHASE: {
         "title": (str,), "price": (int, type(None)), "priority": (str, type(None)),
@@ -90,6 +117,8 @@ _PURCHASE_PRIORITY_ALIASES = {
 # native purchase flow represents a skipped priority as no priority (``None``
 # at the canonical boundary and an empty string in storage).
 _PROVIDER_TECHNICAL_DEFAULTS: dict[IntentKind, dict[str, Any]] = {
+    IntentKind.RECOMMEND_FILM: {"actor": "self", "source": "external", "media_type": "any",
+        "include_genres": [], "exclude_genres": []},
     IntentKind.ADD_PURCHASE: {"priority": None},
     IntentKind.QUERY_PURCHASES: {
         "status": "planned", "priority": "any", "buyer": "any", "operation": "list",
@@ -141,6 +170,17 @@ def decode_intent(raw: str | dict[str, Any]) -> ParsedIntent:
             raise IntentParserInvalidOutput("invalid_priority")
         if arguments["buyer"] not in {None, "current_user"}:
             raise IntentParserInvalidOutput("invalid_buyer")
+    if kind is IntentKind.RECOMMEND_FILM:
+        if arguments["actor"] not in {None, "self", "vova", "sasha", "both"} or arguments["source"] not in {None, "external", "want"} or arguments["media_type"] not in {None, "movie", "tv", "any"}:
+            raise IntentParserInvalidOutput("invalid_recommendation_mode")
+        for key in ("include_genres", "exclude_genres"):
+            if not isinstance(arguments[key], list) or any(not isinstance(x, str) for x in arguments[key]): raise IntentParserInvalidOutput("invalid_genres")
+            arguments[key] = normalize_recommendation_genres(arguments[key])
+        if arguments["min_year"] is not None and not 1888 <= arguments["min_year"] <= 2100: raise IntentParserInvalidOutput("invalid_min_year")
+        if arguments["max_year"] is not None and not 1888 <= arguments["max_year"] <= 2100: raise IntentParserInvalidOutput("invalid_max_year")
+        if arguments["min_year"] and arguments["max_year"] and arguments["min_year"] > arguments["max_year"]: raise IntentParserInvalidOutput("invalid_year_range")
+        if arguments["min_rating"] is not None and not 0 <= arguments["min_rating"] <= 10: raise IntentParserInvalidOutput("invalid_min_rating")
+        if arguments["max_runtime"] is not None and not 1 <= arguments["max_runtime"] <= 600: raise IntentParserInvalidOutput("invalid_max_runtime")
     if kind is IntentKind.UPDATE_PURCHASE:
         if arguments["price"] is not None and not 0 <= arguments["price"] <= 1_000_000_000:
             raise IntentParserInvalidOutput("invalid_price")
@@ -194,6 +234,16 @@ def decode_intent(raw: str | dict[str, Any]) -> ParsedIntent:
 
 
 _BRANCH_PROPERTIES: dict[IntentKind, dict[str, Any]] = {
+    IntentKind.RECOMMEND_FILM: {
+        "actor": {"type": ["string", "null"], "enum": ["self", "vova", "sasha", "both", None]},
+        "source": {"type": ["string", "null"], "enum": ["external", "want", None]},
+        "media_type": {"type": ["string", "null"], "enum": ["movie", "tv", "any", None]},
+        "include_genres": {"type": "array", "items": {"type": "string"}},
+        "exclude_genres": {"type": "array", "items": {"type": "string"}},
+        "min_year": {"type": ["integer", "null"]}, "max_year": {"type": ["integer", "null"]},
+        "min_rating": {"type": ["number", "null"]}, "max_runtime": {"type": ["integer", "null"]},
+        "language": {"type": ["string", "null"]}, "country": {"type": ["string", "null"]},
+    },
     IntentKind.ADD_MOVIE_OR_TV: {"query": {"type": "string"}},
     IntentKind.ADD_PURCHASE: {
         "title": {"type": "string"}, "price": {"type": ["integer", "null"], "minimum": 0, "maximum": 1_000_000_000},
@@ -346,6 +396,17 @@ def normalize_provider_envelope(raw: str | dict[str, Any]) -> dict[str, Any]:
     for name, default in _PROVIDER_TECHNICAL_DEFAULTS.get(kind, {}).items():
         if name not in supplied:
             arguments[name] = default
+    if kind is IntentKind.RECOMMEND_FILM:
+        for name in ("include_genres", "exclude_genres"):
+            raw_genres = supplied.get(name, "")
+            arguments[name] = [part.strip() for part in raw_genres.split(",") if part.strip()] if isinstance(raw_genres, str) else []
+        for name in ("min_year", "max_year", "max_runtime"):
+            if name in supplied:
+                try: arguments[name] = int(supplied[name])
+                except ValueError as exc: raise IntentParserInvalidOutput(f"invalid_{name}") from exc
+        if "min_rating" in supplied:
+            try: arguments["min_rating"] = float(supplied["min_rating"].replace(",", "."))
+            except ValueError as exc: raise IntentParserInvalidOutput("invalid_min_rating") from exc
     if supplied.get("priority") == "null" and kind in {
         IntentKind.ADD_PURCHASE, IntentKind.UPDATE_PURCHASE,
     }:

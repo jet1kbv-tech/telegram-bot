@@ -46,6 +46,11 @@ Query defaults: purchases status=planned priority=any buyer=any, operations list
 unsupported — только команда вне доменов, destructive/bulk или чужой календарь. category: destructive, other_user_calendar, bulk, unsupported_domain или conversation. no_action используй только для текста без команды. Обязательные поля выбранной ветки добавь в arguments; необязательные отсутствующие поля пропусти. Не объясняй ответ и не добавляй поля.
 
 Граничные примеры:
+«посоветуй комедию на вечер» -> recommend_film actor="self", source="external", media_type="movie", include_genres="comedy";
+«что нам с Сашей посмотреть?» -> recommend_film actor="both", source="external", media_type="any";
+«посоветуй Саше сериал» -> recommend_film actor="sasha", source="external", media_type="tv";
+«выбери нам фильм из сохранённых» -> recommend_film actor="both", source="want", media_type="movie";
+«фильм не длиннее двух часов после 2020 года» -> recommend_film actor="self", source="external", media_type="movie", min_year="2020", max_runtime="120";
 «добавь стоматолог в календарь 17.08» -> add_personal_calendar_event, title="стоматолог", date_expression="17.08", owner="current_user";
 «добавь кофемашину в покупки за 35 тысяч» -> add_purchase;
 «добавь Во все тяжкие в фильмы» -> add_movie_or_tv;

@@ -7,6 +7,7 @@ from typing import Any, Protocol, TypeAlias
 
 
 class IntentKind(str, Enum):
+    RECOMMEND_FILM = "recommend_film"
     ADD_MOVIE_OR_TV = "add_movie_or_tv"
     ADD_PURCHASE = "add_purchase"
     ADD_PERSONAL_CALENDAR_EVENT = "add_personal_calendar_event"

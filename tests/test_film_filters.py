@@ -115,6 +115,7 @@ def test_menu_order_and_new_random_callback():
     markup = section_menu_keyboard("films")
     assert [(row[0].text, row[0].callback_data) for row in markup.inline_keyboard] == [
         ("➕ Добавить фильм или сериал", "add|films"),
+        ("✨ Что посмотреть?", "filmrec:start"),
         ("📋 Хотим посмотреть", "list|films|want|0"),
         ("🎭 По жанрам", "filmfilter:g:b:0"),
         ("🎲 Выбрать случайный", "filmfilter:r"),

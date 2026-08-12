@@ -13,7 +13,7 @@ from telegram.ext import (
 )
 
 from bot.config import (AI_ATTACHMENT_MAX_BYTES, AI_ATTACHMENT_TIMEOUT_SECONDS,
-                        AI_INTENT_TIMEOUT_SECONDS, NOTIFICATION_CHECK_INTERVAL)
+                        AI_INTENT_TIMEOUT_SECONDS, NOTIFICATION_CHECK_INTERVAL, TMDB_API_TOKEN)
 from bot.handlers.nl_assistant import configure_nl_assistant, nl_callback_router, nl_clarification_handler, nl_query_callback_router, nl_text_handler
 from bot.services.polza_intent_parser import PolzaIntentParser
 from bot.services.ticket_enrichment import PolzaTicketEnricher
@@ -53,6 +53,7 @@ from bot.handlers.film_enrichment import (
     film_enrichment_manual_query,
 )
 from bot.handlers.film_filters import configure_film_filter_handlers, film_filter_callback_router
+from bot.handlers.film_recommendations import configure_film_recommendations, film_recommendation_callback_router
 from bot.handlers.leisure import add_leisure_comment, add_leisure_title, configure_leisure_handlers
 from bot.handlers.purchases import (
     add_purchase_comment,
@@ -182,6 +183,8 @@ from bot.runtime import (
 )
 from bot.ui.common import build_item_text
 from bot.services.tmdb_movie_metadata import TmdbMovieMetadataProvider
+from bot.services.tmdb_candidate_provider import TmdbCandidateProvider
+from bot.services.movie_recommendation_service import MovieRecommendationService
 
 logger = logging.getLogger(__name__)
 MAIN_MENU_TEXT = "🏠 В меню"
@@ -221,6 +224,9 @@ def build_app() -> Application:
     )
     configure_film_enrichment_handlers(safe_edit_message=safe_edit_message, metadata_provider=metadata_provider)
     configure_film_filter_handlers(safe_edit_message=safe_edit_message, build_item_text=build_item_text)
+    recommendation_provider = TmdbCandidateProvider(TMDB_API_TOKEN) if TMDB_API_TOKEN else None
+    configure_film_recommendations(service=MovieRecommendationService(recommendation_provider),
+        safe_edit_message=safe_edit_message, build_item_text=build_item_text, item_keyboard=item_keyboard)
     configure_leisure_handlers(build_item_text=build_item_text, item_keyboard=item_keyboard)
     configure_spark_handlers(safe_edit_message=safe_edit_message)
     configure_wishlist_handlers(
@@ -305,6 +311,7 @@ def build_app() -> Application:
                 MessageHandler(quick_commands_filter, quick_text_command_router),
                 *attachment_callback_handlers,
                 *ai_callback_handlers,
+                CallbackQueryHandler(film_recommendation_callback_router, pattern=r"^filmrec:"),
                 CallbackQueryHandler(back_to_main, pattern=r"^(main|menu:main)$"),
                 CallbackQueryHandler(menu_router, pattern=r"^menu\|(films|wishlist|leisure|afisha|backlog)$"),
                 CallbackQueryHandler(places_callback_router, pattern=r"^places:"),
@@ -318,6 +325,7 @@ def build_app() -> Application:
                 MessageHandler(quick_commands_filter, quick_text_command_router),
                 *attachment_callback_handlers,
                 *ai_callback_handlers,
+                CallbackQueryHandler(film_recommendation_callback_router, pattern=r"^filmrec:"),
                 CallbackQueryHandler(noop, pattern=r"^noop$"),
                 CallbackQueryHandler(film_metadata_callback_router, pattern=r"^filmmeta:"),
                 CallbackQueryHandler(film_enrichment_callback_router, pattern=r"^filmenrich:"),
