@@ -151,6 +151,8 @@ def test_exact_match_canonicalizes_date_and_time_for_every_batch_file(monkeypatc
         "departure_time": "08:10",
     }, response))
     operation = context.user_data[KEY]; operation.files.append(draft("second"))
+    assert state == handler.SELECTING_NL_ATTACHMENT_EVENT
+    state = run(handler.nl_attachment_callback_router(callback(f"nla:s:{operation.operation_id}"), context))
     assert state == handler.CONFIRMING_NL_ATTACHMENT
     assert operation.metadata["date"] == "2026-08-31" and "date_expression" not in operation.metadata
     run(handler.nl_attachment_callback_router(callback(f"nla:c:{operation.operation_id}"), context))
