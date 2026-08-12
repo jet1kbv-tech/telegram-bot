@@ -86,7 +86,8 @@ from bot.handlers.tickets import (
     configure_tickets_handlers,
     tickets_callback_router,
 )
-from bot.handlers.event_attachments import configure_event_attachment_handlers, event_attachment_router, receive_file
+from bot.handlers.event_attachments import (configure_event_attachment_handlers, event_attachment_router,
+                                            receive_attachment_metadata, receive_file)
 from bot.handlers.nl_event_attachments import (attachment_event_title_handler, collect_attachment_handler, nl_attachment_callback_router,
                                                 orphan_attachment_handler)
 from bot.handlers.wishlist import (
@@ -135,6 +136,8 @@ from bot.states import (
     ADDING_EVENT_ATTACHMENT_FILE,
     SELECTING_EVENT_ATTACHMENT_TYPE,
     SELECTING_EVENT_ATTACHMENT_TRANSPORT,
+    ENRICHING_EVENT_ATTACHMENT,
+    EDITING_EVENT_ATTACHMENT_METADATA,
     WAITING_FOR_NL_ATTACHMENTS,
     SELECTING_NL_ATTACHMENT_EVENT,
     CONFIRMING_NL_ATTACHMENT,
@@ -385,6 +388,18 @@ def build_app() -> Application:
             ],
             SELECTING_EVENT_ATTACHMENT_TYPE: [CallbackQueryHandler(event_attachment_router, pattern=r"^att\|")],
             SELECTING_EVENT_ATTACHMENT_TRANSPORT: [CallbackQueryHandler(event_attachment_router, pattern=r"^att\|")],
+            ENRICHING_EVENT_ATTACHMENT: [
+                MessageHandler(filters.Regex(rf"^{MAIN_MENU_TEXT}$"), quick_return_to_main_menu),
+                CallbackQueryHandler(back_to_main, pattern=r"^(main|menu:main)$"),
+                CallbackQueryHandler(event_attachment_router, pattern=r"^att\|"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_attachment_metadata),
+            ],
+            EDITING_EVENT_ATTACHMENT_METADATA: [
+                MessageHandler(filters.Regex(rf"^{MAIN_MENU_TEXT}$"), quick_return_to_main_menu),
+                CallbackQueryHandler(back_to_main, pattern=r"^(main|menu:main)$"),
+                CallbackQueryHandler(event_attachment_router, pattern=r"^att\|"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_attachment_metadata),
+            ],
             WAITING_FOR_NL_ATTACHMENTS: [
                 MessageHandler(filters.Regex(rf"^{MAIN_MENU_TEXT}$"), quick_return_to_main_menu),
                 CallbackQueryHandler(back_to_main, pattern=r"^(main|menu:main)$"),

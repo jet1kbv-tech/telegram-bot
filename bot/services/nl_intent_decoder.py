@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime
 from typing import Any
 
 from bot.services.nl_intent import IntentKind, IntentParserInvalidOutput, ParsedIntent
@@ -35,7 +36,7 @@ _FIELDS: dict[IntentKind, dict[str, tuple[type, ...]]] = {
     IntentKind.ATTACH_EVENT_FILE: {
         "target": (str,), "semantic_type": (str, type(None)), "transport_type": (str, type(None)),
         "origin": (str, type(None)), "destination": (str, type(None)),
-        "date_expression": (str, type(None)), "person": (str, type(None)),
+        "date_expression": (str, type(None)), "departure_time": (str, type(None)), "person": (str, type(None)),
     },
     IntentKind.QUERY_PURCHASES: {"status": (str,), "priority": (str,), "buyer": (str,), "operation": (str,)},
     IntentKind.QUERY_FILMS: {"status": (str,), "media_type": (str,), "genre": (str, type(None)), "operation": (str,)},
@@ -47,7 +48,7 @@ _FIELDS: dict[IntentKind, dict[str, tuple[type, ...]]] = {
 
 _OPTIONAL_NULL_FIELDS = {
     "price", "priority", "link", "comment", "buyer", "date_expression", "time_expression",
-    "end_time_expression", "place", "end_date_expression", "title", "status", "genre", "date_from", "date_to", "target",
+    "end_time_expression", "departure_time", "place", "end_date_expression", "title", "status", "genre", "date_from", "date_to", "target",
 }
 _UNSUPPORTED = {"destructive", "other_user_calendar", "bulk", "unsupported_domain", "conversation"}
 _PROVIDER_PRICE = re.compile(
@@ -148,6 +149,11 @@ def decode_intent(raw: str | dict[str, Any]) -> ParsedIntent:
             raise IntentParserInvalidOutput("invalid_transport_type")
         if arguments["person"] not in {None, "current_user", "other_user", "both"}:
             raise IntentParserInvalidOutput("invalid_person")
+        if arguments["departure_time"] is not None:
+            try:
+                arguments["departure_time"] = datetime.strptime(arguments["departure_time"], "%H:%M").strftime("%H:%M")
+            except ValueError as exc:
+                raise IntentParserInvalidOutput("invalid_departure_time") from exc
     return ParsedIntent(kind, arguments)
 
 
@@ -183,6 +189,7 @@ _BRANCH_PROPERTIES: dict[IntentKind, dict[str, Any]] = {
         "transport_type": {"type": ["string", "null"], "enum": ["train", "plane", "bus", "other", None]},
         "origin": {"type": ["string", "null"]}, "destination": {"type": ["string", "null"]},
         "date_expression": {"type": ["string", "null"]},
+        "departure_time": {"type": ["string", "null"]},
         "person": {"type": ["string", "null"], "enum": ["current_user", "other_user", "both", None]},
     },
     IntentKind.QUERY_PURCHASES: {"status": {"type": "string", "enum": ["planned", "bought", "any"]}, "priority": {"type": "string", "enum": ["high", "medium", "low", "any"]}, "buyer": {"type": "string", "enum": ["current_user", "other_user", "unassigned", "any"]}, "operation": {"type": "string", "enum": ["list", "count", "sum"]}},

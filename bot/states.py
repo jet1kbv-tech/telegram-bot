@@ -73,3 +73,6 @@ WAITING_FOR_NL_ATTACHMENTS, SELECTING_NL_ATTACHMENT_EVENT, CONFIRMING_NL_ATTACHM
 
 # Exact-title fallback for the bounded orphan-file event chooser.
 ENTERING_NL_ATTACHMENT_EVENT_TITLE = 72
+
+# Optional native enrichment and existing attachment metadata editing.
+ENRICHING_EVENT_ATTACHMENT, EDITING_EVENT_ATTACHMENT_METADATA = range(73, 75)

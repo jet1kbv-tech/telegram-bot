@@ -142,6 +142,45 @@ def test_metadata_survives_fallback_and_later_file_needs_no_provider(monkeypatch
     assert len(operation.files) == 1
 
 
+def test_exact_match_canonicalizes_date_and_time_for_every_batch_file(monkeypatch):
+    source = production_data(); store = SimpleNamespace(load=Mock(return_value=source), save=Mock())
+    configure(monkeypatch, store); context = SimpleNamespace(user_data={}); update, response = intent_update(with_file=True)
+    state = run(handler.begin_intent_attachment(update, context, {
+        "target": "санаторий", "semantic_type": "transport_ticket", "transport_type": "train",
+        "origin": "Москва", "destination": "Воронеж", "date_expression": "31 августа",
+        "departure_time": "08:10",
+    }, response))
+    operation = context.user_data[KEY]; operation.files.append(draft("second"))
+    assert state == handler.CONFIRMING_NL_ATTACHMENT
+    assert operation.metadata["date"] == "2026-08-31" and "date_expression" not in operation.metadata
+    run(handler.nl_attachment_callback_router(callback(f"nla:c:{operation.operation_id}"), context))
+    saved = store.save.call_args.args[0]["event_attachments"]
+    assert len(saved) == 2
+    assert {(item["date"], item["departure_time"], item["origin"], item["destination"]) for item in saved} == {
+        ("2026-08-31", "08:10", "Москва", "Воронеж")}
+    assert all("date_expression" not in item for item in saved)
+
+
+def test_zero_candidate_fallback_keeps_canonical_date_and_drops_unparseable_expression(monkeypatch):
+    source = production_data(); store = SimpleNamespace(load=Mock(return_value=source), save=Mock())
+    configure(monkeypatch, store); context = SimpleNamespace(user_data={}); update, response = intent_update(with_file=True)
+    run(handler.begin_intent_attachment(update, context, {
+        "target": "поездка в санаторий", "semantic_type": "transport_ticket",
+        "date_expression": "завтра", "departure_time": "08:10",
+    }, response))
+    operation = context.user_data[KEY]
+    assert operation.metadata["date"] and "date_expression" not in operation.metadata
+    run(handler.nl_attachment_callback_router(callback(f"nla:e:{operation.operation_id}:0"), context))
+    run(handler.nl_attachment_callback_router(callback(f"nla:c:{operation.operation_id}"), context))
+    assert store.save.call_args.args[0]["event_attachments"][0]["date"] == operation.metadata["date"]
+
+    context = SimpleNamespace(user_data={}); update, response = intent_update()
+    run(handler.begin_intent_attachment(update, context, {
+        "target": "санаторий", "semantic_type": "transport_ticket", "date_expression": "когда-нибудь",
+    }, response))
+    assert "date" not in context.user_data[KEY].metadata and "date_expression" not in context.user_data[KEY].metadata
+
+
 def test_zero_match_and_no_upcoming_events_enters_exact_title_without_losing_operation(monkeypatch):
     source = production_data(upcoming=False); store = SimpleNamespace(load=lambda: source); configure(monkeypatch, store)
     context = SimpleNamespace(user_data={}); update, response = intent_update(with_file=True)
