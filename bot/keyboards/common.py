@@ -21,7 +21,7 @@ def main_menu_row() -> list[InlineKeyboardButton]:
     return [main_menu_button()]
 
 
-def section_menu_keyboard(section: str) -> InlineKeyboardMarkup:
+def section_menu_keyboard(section: str, *, unrated_watched_count: int | None = None) -> InlineKeyboardMarkup:
     if section == "films":
         rows = [
             [InlineKeyboardButton("➕ Добавить фильм или сериал", callback_data="add|films")],
@@ -29,6 +29,10 @@ def section_menu_keyboard(section: str) -> InlineKeyboardMarkup:
             [InlineKeyboardButton("🎭 По жанрам", callback_data="filmfilter:g:b:0")],
             [InlineKeyboardButton("🎲 Выбрать случайный", callback_data="filmfilter:r")],
             [InlineKeyboardButton("✅ Просмотренные", callback_data="list|films|watched|0")],
+            [InlineKeyboardButton(
+                "⭐ Оценить просмотренные" + (f" · {unrated_watched_count}" if unrated_watched_count is not None else ""),
+                callback_data="film_backlog|start",
+            )],
             [InlineKeyboardButton("🔄 Обновить данные", callback_data="filmenrich:open")],
         ]
     elif section == "wishlist":
@@ -191,6 +195,7 @@ def item_keyboard(
     page: int,
     owner: str | None = None,
     status_filter: str | None = None,
+    actor_key: str | None = None,
 ) -> InlineKeyboardMarkup:
     item_id = item["id"]
 
@@ -229,9 +234,22 @@ def item_keyboard(
 
     back_callback = build_back_to_list_callback(section, page, owner, status_filter)
 
+    reaction_rows = []
+    if section == "films" and item.get("status") == "watched" and actor_key in {"vova", "sasha"}:
+        reaction_rows = [
+            [
+                InlineKeyboardButton("❤️", callback_data=f"film_reaction|{item_id}|like|{status_filter or 'watched'}|{page}"),
+                InlineKeyboardButton("😐", callback_data=f"film_reaction|{item_id}|neutral|{status_filter or 'watched'}|{page}"),
+                InlineKeyboardButton("👎", callback_data=f"film_reaction|{item_id}|dislike|{status_filter or 'watched'}|{page}"),
+            ],
+        ]
+        if actor_key in (item.get("reactions") or {}):
+            reaction_rows.append([InlineKeyboardButton("Убрать оценку", callback_data=f"film_reaction|{item_id}|clear|{status_filter or 'watched'}|{page}")])
+
     return InlineKeyboardMarkup(
         (
             [[InlineKeyboardButton(toggle_text, callback_data=status_callback)]]
+            + reaction_rows
             + (
                 [[InlineKeyboardButton("✏️ Редактировать", callback_data=f"af_edit|{item_id}|{page}")]]
                 if section == "afisha"

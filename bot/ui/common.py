@@ -4,6 +4,12 @@ from bot.config import PAGE_SIZE, SECTION_CONFIG
 from bot.handlers.afisha import build_afisha_item_text
 from bot.utils import item_status_label, owner_label
 
+FILM_REACTION_LABELS = {
+    "like": "❤️ Понравилось",
+    "neutral": "😐 Нормально",
+    "dislike": "👎 Не понравилось",
+}
+
 
 def build_item_text(section: str, item: dict[str, Any]) -> str:
     if section == "films":
@@ -37,6 +43,14 @@ def build_item_text(section: str, item: dict[str, Any]) -> str:
         ])
         if item.get("comment"):
             lines.append(f"Комментарий: {item['comment']}")
+        if item.get("status") == "watched":
+            reactions = item.get("reactions") if isinstance(item.get("reactions"), dict) else {}
+            lines.extend([
+                "",
+                "Оценки:",
+                f"Вова: {FILM_REACTION_LABELS.get(reactions.get('vova'), '—')}",
+                f"Саша: {FILM_REACTION_LABELS.get(reactions.get('sasha'), '—')}",
+            ])
         return "\n".join(lines)
 
     if section == "wishlist":

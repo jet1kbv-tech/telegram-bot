@@ -45,7 +45,7 @@ from bot.handlers.films import (
     configure_films_handlers,
     show_random_film,
 )
-from bot.handlers.film_operations import delete_film, set_film_status
+from bot.handlers.film_operations import clear_film_reaction, delete_film, set_film_reaction, set_film_status
 from bot.handlers.leisure import add_leisure_comment, add_leisure_title, configure_leisure_handlers
 from bot.handlers.afisha import (
     afisha_empty_list_keyboard,
@@ -137,6 +137,7 @@ from bot.utils import (
     ensure_access,
     get_user_name,
     get_username,
+    get_wishlist_owner_by_user,
     owner_label,
     paginate_items,
     remember_current_chat,
@@ -168,7 +169,71 @@ async def safe_edit_message(query, text: str, reply_markup: InlineKeyboardMarkup
 
 async def show_section_menu(update: Update, section: str) -> int:
     query = update.callback_query
-    await safe_edit_message(query, f"{SECTION_CONFIG[section]['title']}\n\nВыберите действие:", reply_markup=section_menu_keyboard(section))
+    unrated_count = None
+    if section == "films":
+        actor_key = get_wishlist_owner_by_user(update)
+        unrated_count = len(unrated_watched_films(storage.load().get("films", []), actor_key))
+    await safe_edit_message(
+        query,
+        f"{SECTION_CONFIG[section]['title']}\n\nВыберите действие:",
+        reply_markup=section_menu_keyboard(section, unrated_watched_count=unrated_count),
+    )
+    return SECTION
+
+
+FILM_RATING_SESSION_KEY = "film_rating_session"
+
+
+def unrated_watched_films(films: list[dict[str, Any]], actor_key: str) -> list[dict[str, Any]]:
+    """Return the actor's watched+unknown films in stable storage order."""
+    return [
+        film for film in films
+        if film.get("status") == "watched"
+        and actor_key not in (film.get("reactions") if isinstance(film.get("reactions"), dict) else {})
+    ]
+
+
+def clear_film_rating_session(context: ContextTypes.DEFAULT_TYPE) -> None:
+    context.user_data.pop(FILM_RATING_SESSION_KEY, None)
+
+
+def film_backlog_keyboard(film_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("❤️ Понравилось", callback_data=f"film_backlog|react|{film_id}|like")],
+        [InlineKeyboardButton("😐 Нормально", callback_data=f"film_backlog|react|{film_id}|neutral")],
+        [InlineKeyboardButton("👎 Не понравилось", callback_data=f"film_backlog|react|{film_id}|dislike")],
+        [InlineKeyboardButton("⏭ Пропустить", callback_data=f"film_backlog|skip|{film_id}")],
+        [InlineKeyboardButton("❌ Закончить", callback_data="film_backlog|finish")],
+        [InlineKeyboardButton("🏠 В меню", callback_data="menu:main")],
+    ])
+
+
+async def show_next_film_backlog_item(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    actor_key = get_wishlist_owner_by_user(update)
+    session = context.user_data.get(FILM_RATING_SESSION_KEY)
+    if not isinstance(session, dict) or session.get("actor_key") != actor_key:
+        session = {"actor_key": actor_key, "visited_ids": [], "rated_count": 0, "offered_count": 0}
+        context.user_data[FILM_RATING_SESSION_KEY] = session
+    visited = set(session["visited_ids"])
+    candidates = unrated_watched_films(storage.load().get("films", []), actor_key)
+    film = next((item for item in candidates if item.get("id") not in visited), None)
+    if film is None:
+        rated_count = int(session.get("rated_count", 0))
+        clear_film_rating_session(context)
+        text = "Ты уже оценил все просмотренные фильмы." if int(session.get("offered_count", 0)) == 0 else f"Готово. Оценено: {rated_count}"
+        await safe_edit_message(query, text, reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("⬅️ К фильмам", callback_data="menu|films")],
+            [InlineKeyboardButton("🏠 В меню", callback_data="menu:main")],
+        ]))
+        return SECTION
+    session["offered_count"] = int(session.get("offered_count", 0)) + 1
+    session["current_film_id"] = str(film["id"])
+    await safe_edit_message(
+        query,
+        "⭐ Оценка просмотренных\n\n" + build_item_text("films", film),
+        reply_markup=film_backlog_keyboard(str(film["id"])),
+    )
     return SECTION
 
 
@@ -226,8 +291,19 @@ async def show_item(update: Update, section: str, item_id: str, page: int, owner
         )
         return SECTION
 
-    await safe_edit_message(query, build_item_text(section, item), reply_markup=item_keyboard(section, item, page, owner, status_filter))
+    actor_key = get_wishlist_owner_by_user(update) if section == "films" else None
+    await safe_edit_message(query, build_item_text(section, item), reply_markup=item_keyboard(section, item, page, owner, status_filter, actor_key))
     return SECTION
+
+
+def film_reaction_followup_keyboard(item_id: str, status_filter: str, page: int) -> InlineKeyboardMarkup:
+    """Optional post-watch preference prompt using the shared reaction callbacks."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("❤️ Понравилось", callback_data=f"film_reaction|{item_id}|like|{status_filter}|{page}")],
+        [InlineKeyboardButton("😐 Нормально", callback_data=f"film_reaction|{item_id}|neutral|{status_filter}|{page}")],
+        [InlineKeyboardButton("👎 Не понравилось", callback_data=f"film_reaction|{item_id}|dislike|{status_filter}|{page}")],
+        [InlineKeyboardButton("Пропустить", callback_data=f"film_reaction_skip|{item_id}|{status_filter}|{page}")],
+    ])
 
 
 async def notify_other_user_about_wishlist_item(context: ContextTypes.DEFAULT_TYPE, update: Update, item: dict[str, Any]) -> None:
@@ -442,6 +518,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     await query.answer()
 
     _, section = query.data.split("|", 1)
+    clear_film_rating_session(context)
     context.user_data["active_section"] = section
     return await show_section_menu(update, section)
 
@@ -456,7 +533,79 @@ async def section_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     parts = query.data.split("|")
     action = parts[0]
 
+    if action == "film_backlog":
+        operation = parts[1] if len(parts) > 1 else ""
+        actor_key = get_wishlist_owner_by_user(update)
+        if operation == "start":
+            clear_film_rating_session(context)
+            context.user_data[FILM_RATING_SESSION_KEY] = {
+                "actor_key": actor_key, "visited_ids": [], "rated_count": 0, "offered_count": 0,
+            }
+            return await show_next_film_backlog_item(update, context)
+        session = context.user_data.get(FILM_RATING_SESSION_KEY)
+        if not isinstance(session, dict) or session.get("actor_key") != actor_key:
+            clear_film_rating_session(context)
+            await safe_edit_message(query, "Сессия оценки устарела.", reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("⭐ Начать заново", callback_data="film_backlog|start")],
+                [InlineKeyboardButton("⬅️ К фильмам", callback_data="menu|films")],
+            ]))
+            return SECTION
+        if operation == "finish":
+            rated_count = int(session.get("rated_count", 0))
+            clear_film_rating_session(context)
+            await safe_edit_message(query, f"Готово. Оценено: {rated_count}", reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("⬅️ К фильмам", callback_data="menu|films")],
+                [InlineKeyboardButton("🏠 В меню", callback_data="menu:main")],
+            ]))
+            return SECTION
+        if operation in {"react", "skip"} and len(parts) >= 3:
+            film_id = parts[2]
+            visited_ids = session.setdefault("visited_ids", [])
+            eligible_ids = {str(item.get("id")) for item in unrated_watched_films(storage.load().get("films", []), actor_key)}
+            if film_id != session.get("current_film_id") or film_id in visited_ids or film_id not in eligible_ids:
+                return await show_next_film_backlog_item(update, context)
+            if operation == "react":
+                reaction = parts[3] if len(parts) > 3 else ""
+                if reaction not in {"like", "neutral", "dislike"}:
+                    return await show_next_film_backlog_item(update, context)
+                result = set_film_reaction(film_id, actor_key, reaction)
+                if result.found:
+                    session["rated_count"] = int(session.get("rated_count", 0)) + 1
+            visited_ids.append(film_id)
+            session.pop("current_film_id", None)
+            return await show_next_film_backlog_item(update, context)
+        return await show_next_film_backlog_item(update, context)
+
+    if action == "film_reaction":
+        _, item_id, reaction, status_filter, page_raw = parts
+        actor_key = get_wishlist_owner_by_user(update)
+        result = clear_film_reaction(item_id, actor_key) if reaction == "clear" else set_film_reaction(item_id, actor_key, reaction)
+        if not result.found:
+            await safe_edit_message(query, "Фильм не найден.", reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("⬅️ К списку", callback_data=f"list|films|{status_filter}|{page_raw}")]
+            ]))
+            return SECTION
+        item = result.film
+        await safe_edit_message(
+            query,
+            build_item_text("films", item),
+            reply_markup=item_keyboard("films", item, int(page_raw), status_filter=status_filter, actor_key=actor_key),
+        )
+        return SECTION
+
+    if action == "film_reaction_skip":
+        _, item_id, status_filter, page_raw = parts
+        item = find_item(storage.load().get("films", []), item_id)
+        if not item:
+            return await show_list(update, "films", int(page_raw), status_filter=status_filter)
+        actor_key = get_wishlist_owner_by_user(update)
+        await safe_edit_message(query, build_item_text("films", item), reply_markup=item_keyboard(
+            "films", item, int(page_raw), status_filter="watched", actor_key=actor_key,
+        ))
+        return SECTION
+
     if action in {"main", "menu:main"}:
+        clear_film_rating_session(context)
         return await back_to_main(update, context)
 
     if query.data == "activity:menu":
@@ -464,6 +613,7 @@ async def section_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return SECTION
 
     if action == "menu":
+        clear_film_rating_session(context)
         section = parts[1]
         context.user_data["active_section"] = section
         return await show_section_menu(update, section)
@@ -612,7 +762,7 @@ async def section_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
         result = set_film_status(item_id, "watched")
         item = result.film or item
-        await safe_edit_message(query, build_item_text("films", item), reply_markup=item_keyboard("films", item, page, status_filter="watched"))
+        await safe_edit_message(query, "Как тебе фильм?", reply_markup=film_reaction_followup_keyboard(item_id, "watched", page))
         return SECTION
 
     if action == "status":
@@ -652,7 +802,11 @@ async def section_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             apply_afisha_status_update(data, item, new_status)
         if section != "films":
             storage.save(data)
-        await safe_edit_message(query, build_item_text(section, item), reply_markup=item_keyboard(section, item, page, owner, status_filter))
+        if section == "films" and new_status == "watched":
+            await safe_edit_message(query, "Как тебе фильм?", reply_markup=film_reaction_followup_keyboard(item_id, "watched", page))
+            return SECTION
+        actor_key = get_wishlist_owner_by_user(update) if section == "films" else None
+        await safe_edit_message(query, build_item_text(section, item), reply_markup=item_keyboard(section, item, page, owner, status_filter, actor_key))
         return SECTION
 
     if action == "delete_confirm":
