@@ -25,6 +25,7 @@ from bot.services.nl_intent import (
 from bot.services.nl_proposals import ActionProposal, active_proposal, create_proposal, discard_proposal, get_proposal
 from bot.services.nl_entity_resolution import EntityCandidate, resolve_entities
 from bot.handlers.nl_event_attachments import begin_intent_attachment, orphan_attachment_handler
+from bot.handlers.nl_attachment_retrieval import begin_attachment_query
 from bot.services.nl_query_contexts import create_query_context, get_query_context
 from bot.services.queries import choose_random, next_event, query_afisha, query_calendar, query_films, query_purchases
 from bot.states import (
@@ -300,6 +301,8 @@ async def nl_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             return _idle_state(context)
         if parsed.intent is IntentKind.ATTACH_EVENT_FILE:
             return await begin_intent_attachment(update, context, parsed.arguments, response)
+        if parsed.intent is IntentKind.QUERY_EVENT_ATTACHMENTS:
+            return await begin_attachment_query(update, context, parsed.arguments, response)
         arguments, missing = _prepare(parsed.intent, parsed.arguments, now)
         if parsed.intent in _QUERY_KINDS:
             await _answer_query(response, context, parsed.intent, arguments, update, now)
