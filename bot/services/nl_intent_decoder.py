@@ -44,6 +44,19 @@ _FIELDS: dict[IntentKind, dict[str, tuple[type, ...]]] = {
         "destination": (str, type(None)), "date": (str, type(None)),
         "person": (str, type(None)), "direction": (str, type(None)), "return_all": (bool,),
     },
+    IntentKind.DELETE_EVENT_ATTACHMENT: {
+        "target": (str, type(None)), "semantic_type": (str, type(None)), "transport_type": (str, type(None)),
+        "origin": (str, type(None)), "destination": (str, type(None)), "date": (str, type(None)),
+        "person": (str, type(None)), "direction": (str, type(None)),
+    },
+    IntentKind.UPDATE_EVENT_ATTACHMENT: {
+        "target": (str, type(None)), "semantic_type": (str, type(None)), "transport_type": (str, type(None)),
+        "origin": (str, type(None)), "destination": (str, type(None)), "date": (str, type(None)),
+        "person": (str, type(None)), "direction": (str, type(None)),
+        "new_origin": (str, type(None)), "new_destination": (str, type(None)), "new_date": (str, type(None)),
+        "new_departure_time": (str, type(None)), "new_arrival_date": (str, type(None)),
+        "new_arrival_time": (str, type(None)), "new_person": (str, type(None)),
+    },
     IntentKind.QUERY_PURCHASES: {"status": (str,), "priority": (str,), "buyer": (str,), "operation": (str,)},
     IntentKind.QUERY_FILMS: {"status": (str,), "media_type": (str,), "genre": (str, type(None)), "operation": (str,)},
     IntentKind.QUERY_CALENDAR: {"date_from": (str, type(None)), "date_to": (str, type(None)), "target": (str, type(None)), "operation": (str,)},
@@ -56,6 +69,7 @@ _OPTIONAL_NULL_FIELDS = {
     "price", "priority", "link", "comment", "buyer", "date_expression", "time_expression",
     "end_time_expression", "departure_time", "place", "end_date_expression", "title", "status", "genre", "date_from", "date_to", "target",
     "semantic_type", "transport_type", "origin", "destination", "date", "person", "direction",
+    "new_origin", "new_destination", "new_date", "new_departure_time", "new_arrival_date", "new_arrival_time", "new_person",
 }
 _UNSUPPORTED = {"destructive", "other_user_calendar", "bulk", "unsupported_domain", "conversation"}
 _PROVIDER_PRICE = re.compile(
@@ -162,7 +176,7 @@ def decode_intent(raw: str | dict[str, Any]) -> ParsedIntent:
                 arguments["departure_time"] = datetime.strptime(arguments["departure_time"], "%H:%M").strftime("%H:%M")
             except ValueError as exc:
                 raise IntentParserInvalidOutput("invalid_departure_time") from exc
-    if kind is IntentKind.QUERY_EVENT_ATTACHMENTS:
+    if kind in {IntentKind.QUERY_EVENT_ATTACHMENTS, IntentKind.DELETE_EVENT_ATTACHMENT, IntentKind.UPDATE_EVENT_ATTACHMENT}:
         if arguments["semantic_type"] not in {None, "transport_ticket", "voucher", "reservation", "insurance", "other"}:
             raise IntentParserInvalidOutput("invalid_semantic_type")
         if arguments["transport_type"] not in {None, "train", "plane", "bus", "other"}:
@@ -171,9 +185,11 @@ def decode_intent(raw: str | dict[str, Any]) -> ParsedIntent:
             raise IntentParserInvalidOutput("invalid_person")
         if arguments["direction"] not in {None, "outbound", "return"}:
             raise IntentParserInvalidOutput("invalid_direction")
-        if arguments["date"] is not None:
+        if kind is not IntentKind.UPDATE_EVENT_ATTACHMENT and arguments["date"] is not None:
             try: arguments["date"] = datetime.strptime(arguments["date"], "%Y-%m-%d").strftime("%Y-%m-%d")
             except ValueError as exc: raise IntentParserInvalidOutput("invalid_date") from exc
+        if kind is IntentKind.UPDATE_EVENT_ATTACHMENT and arguments["new_person"] not in {None, "current_user", "other_user", "both"}:
+            raise IntentParserInvalidOutput("invalid_new_person")
     return ParsedIntent(kind, arguments)
 
 
@@ -227,6 +243,19 @@ _BRANCH_PROPERTIES: dict[IntentKind, dict[str, Any]] = {
     IntentKind.QUERY_AFISHA: {"date_from": {"type": ["string", "null"]}, "date_to": {"type": ["string", "null"]}, "target": {"type": ["string", "null"]}, "operation": {"type": "string", "enum": ["list", "count", "next"]}},
     IntentKind.NO_ACTION: {},
     IntentKind.UNSUPPORTED: {"category": {"type": "string", "enum": sorted(_UNSUPPORTED)}},
+}
+
+_ATTACHMENT_IDENTIFY_SCHEMA = {
+    key: value for key, value in _BRANCH_PROPERTIES[IntentKind.QUERY_EVENT_ATTACHMENTS].items()
+    if key != "return_all"
+}
+_BRANCH_PROPERTIES[IntentKind.DELETE_EVENT_ATTACHMENT] = dict(_ATTACHMENT_IDENTIFY_SCHEMA)
+_BRANCH_PROPERTIES[IntentKind.UPDATE_EVENT_ATTACHMENT] = {
+    **_ATTACHMENT_IDENTIFY_SCHEMA,
+    "new_origin": {"type": ["string", "null"]}, "new_destination": {"type": ["string", "null"]},
+    "new_date": {"type": ["string", "null"]}, "new_departure_time": {"type": ["string", "null"]},
+    "new_arrival_date": {"type": ["string", "null"]}, "new_arrival_time": {"type": ["string", "null"]},
+    "new_person": {"type": ["string", "null"], "enum": ["current_user", "other_user", "both", None]},
 }
 
 _PROVIDER_FIELD_NAMES = sorted({name for properties in _BRANCH_PROPERTIES.values() for name in properties})
