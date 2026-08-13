@@ -28,21 +28,27 @@ class TmdbCandidateProvider:
         self._cache: OrderedDict[tuple[Any, ...], tuple[float, list[RecommendationCandidate]]] = OrderedDict()
         self._timeout = httpx.Timeout(8.0, connect=3.0, read=6.0, write=3.0, pool=3.0)
 
-    async def discover_movies(self, constraints: RecommendationConstraints, *, pages: int = 1) -> list[RecommendationCandidate]:
-        return await self._discover("movie", constraints, pages)
+    async def discover_movies(self, constraints: RecommendationConstraints, *, pages: int = 1,
+                              start_page: int = 1, sort_by: str = "popularity.desc") -> list[RecommendationCandidate]:
+        return await self._discover("movie", constraints, pages, start_page, sort_by)
 
-    async def discover_tv(self, constraints: RecommendationConstraints, *, pages: int = 1) -> list[RecommendationCandidate]:
-        return await self._discover("tv", constraints, pages)
+    async def discover_tv(self, constraints: RecommendationConstraints, *, pages: int = 1,
+                          start_page: int = 1, sort_by: str = "popularity.desc") -> list[RecommendationCandidate]:
+        return await self._discover("tv", constraints, pages, start_page, sort_by)
 
-    async def _discover(self, media_type: str, constraints: RecommendationConstraints, pages: int) -> list[RecommendationCandidate]:
+    async def _discover(self, media_type: str, constraints: RecommendationConstraints, pages: int,
+                        start_page: int, sort_by: str) -> list[RecommendationCandidate]:
         pages = max(1, min(pages, self._max_pages))
-        key = (media_type, constraints, pages)
+        start_page = max(1, min(start_page, 500))
+        if sort_by not in {"popularity.desc", "vote_average.desc"}:
+            raise ValueError("unsupported deterministic discovery sort")
+        key = (media_type, constraints, pages, start_page, sort_by)
         cached = self._cache.get(key)
         if cached and time.monotonic() - cached[0] < self._ttl:
             self._cache.move_to_end(key); return list(cached[1])
         values: list[RecommendationCandidate] = []
-        for page in range(1, pages + 1):
-            params = self._params(media_type, constraints, page)
+        for page in range(start_page, start_page + pages):
+            params = self._params(media_type, constraints, page, sort_by)
             payload = await self._request(f"/discover/{media_type}", params)
             raw_results = payload.get("results")
             if not isinstance(raw_results, list): raise MovieMetadataUnavailable("TMDB returned malformed discovery results")
@@ -52,8 +58,9 @@ class TmdbCandidateProvider:
         while len(self._cache) > self._cache_size: self._cache.popitem(last=False)
         return list(unique)
 
-    def _params(self, media_type: str, c: RecommendationConstraints, page: int) -> dict[str, str]:
-        params = {"language": "ru-RU", "sort_by": "popularity.desc", "page": str(page),
+    def _params(self, media_type: str, c: RecommendationConstraints, page: int,
+                sort_by: str = "popularity.desc") -> dict[str, str]:
+        params = {"language": "ru-RU", "sort_by": sort_by, "page": str(page),
                   "vote_count.gte": str(c.min_vote_count), "include_adult": "false"}
         if c.min_rating is not None: params["vote_average.gte"] = str(c.min_rating)
         if c.language: params["with_original_language"] = c.language

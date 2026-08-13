@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable, Literal, Protocol
 
 REACTION_WEIGHTS = {"like": 1.0, "neutral": 0.0, "dislike": -1.0}
+WANT_INTEREST_WEIGHT = 0.20
 PROFILE_SHRINKAGE = 2.0
 MIN_VOTE_COUNT = 100
 TASTE_WEIGHT = 0.70
@@ -69,6 +70,9 @@ class FilmPreferenceProfile:
     dislike_count: int
     unknown_watched_count: int
     reacted_count: int
+    want_genres: dict[str, FeatureEvidence] = field(default_factory=dict)
+    want_media_types: dict[str, FeatureEvidence] = field(default_factory=dict)
+    want_interest_count: int = 0
 
     @property
     def is_cold_start(self) -> bool:
@@ -90,8 +94,10 @@ class CandidateScore:
 
 
 class MovieCandidateProvider(Protocol):
-    async def discover_movies(self, constraints: RecommendationConstraints, *, pages: int = 1) -> list[RecommendationCandidate]: ...
-    async def discover_tv(self, constraints: RecommendationConstraints, *, pages: int = 1) -> list[RecommendationCandidate]: ...
+    async def discover_movies(self, constraints: RecommendationConstraints, *, pages: int = 1,
+                              start_page: int = 1, sort_by: str = "popularity.desc") -> list[RecommendationCandidate]: ...
+    async def discover_tv(self, constraints: RecommendationConstraints, *, pages: int = 1,
+                          start_page: int = 1, sort_by: str = "popularity.desc") -> list[RecommendationCandidate]: ...
     async def get_details(self, media_type: str, external_id: str) -> RecommendationCandidate: ...
 
 
@@ -102,15 +108,35 @@ def _feature_map(values: dict[str, list[float]]) -> dict[str, FeatureEvidence]:
     }
 
 
-def build_film_preference_profile(films: Iterable[dict[str, Any]], actor_key: str) -> FilmPreferenceProfile:
+def build_film_preference_profile(films: Iterable[dict[str, Any]], actor_key: str, *, include_want: bool = True) -> FilmPreferenceProfile:
     if actor_key not in {"vova", "sasha"}:
         raise ValueError("actor_key must be vova or sasha")
     counts = {key: 0 for key in REACTION_WEIGHTS}
     unknown = 0
     genre_values: dict[str, list[float]] = {}
     type_values: dict[str, list[float]] = {}
+    want_genres: dict[str, list[float]] = {}
+    want_types: dict[str, list[float]] = {}
+    want_count = 0
     for film in films:
-        if not isinstance(film, dict) or film.get("status") != "watched":
+        if not isinstance(film, dict):
+            continue
+        if film.get("status") == "want":
+            # Stored ownership is the human-readable canonical author. Unknown
+            # legacy authors are intentionally not guessed.
+            owner = {"Вова": "vova", "Саша": "sasha", "vova": "vova", "sasha": "sasha"}.get(film.get("added_by"))
+            if include_want and owner == actor_key:
+                reliable_genres = film.get("genres") if isinstance(film.get("genres"), (list, tuple)) else ()
+                media_type = film.get("media_type")
+                if reliable_genres or media_type in {"movie", "tv"}:
+                    want_count += 1
+                for genre in reliable_genres:
+                    if isinstance(genre, str) and (key := _normal(genre)):
+                        want_genres.setdefault(key, []).append(WANT_INTEREST_WEIGHT)
+                if media_type in {"movie", "tv"}:
+                    want_types.setdefault(media_type, []).append(WANT_INTEREST_WEIGHT)
+            continue
+        if film.get("status") != "watched":
             continue
         reactions = film.get("reactions") if isinstance(film.get("reactions"), dict) else {}
         reaction = reactions.get(actor_key)
@@ -127,7 +153,8 @@ def build_film_preference_profile(films: Iterable[dict[str, Any]], actor_key: st
             type_values.setdefault(media_type, []).append(weight)
     reacted = sum(counts.values())
     return FilmPreferenceProfile(actor_key, _feature_map(genre_values), _feature_map(type_values),
-                                 counts["like"], counts["neutral"], counts["dislike"], unknown, reacted)
+                                 counts["like"], counts["neutral"], counts["dislike"], unknown, reacted,
+                                 _feature_map(want_genres), _feature_map(want_types), want_count)
 
 
 def _normal(value: str) -> str:
@@ -137,7 +164,11 @@ def _normal(value: str) -> str:
 
 def _candidate_taste(candidate: RecommendationCandidate, profile: FilmPreferenceProfile) -> tuple[float, float, float, list[str]]:
     genre_evidence = [profile.genres[_normal(g)] for g in candidate.genres if _normal(g) in profile.genres]
-    genre_fit = sum(value.score for value in genre_evidence) / len(genre_evidence) if genre_evidence else 0.0
+    explicit_genre_fit = sum(value.score for value in genre_evidence) / len(genre_evidence) if genre_evidence else 0.0
+    want_evidence = [profile.want_genres[_normal(g)] for g in candidate.genres if _normal(g) in profile.want_genres]
+    want_genre_fit = sum(value.score for value in want_evidence) / len(want_evidence) if want_evidence else 0.0
+    # Additive weak evidence cannot average away a strong explicit dislike.
+    genre_fit = explicit_genre_fit + want_genre_fit
     media = profile.media_types.get(candidate.media_type)
     media_fit = media.score if media and media.evidence_count >= 3 else 0.0
     taste = genre_fit * 0.85 + media_fit * 0.15
@@ -147,6 +178,9 @@ def _candidate_taste(candidate: RecommendationCandidate, profile: FilmPreference
     actor_label = {"vova": "Вова", "sasha": "Саша"}[profile.actor_key]
     if positives:
         reasons.append(f"{actor_label} положительно оценивал(а) жанр: {positives[0]}.")
+    elif want_evidence:
+        saved = next(g for g in candidate.genres if _normal(g) in profile.want_genres)
+        reasons.append(f"У {actor_label} в сохранённых встречается жанр: {saved}.")
     if negatives:
         reasons.append(f"Есть отрицательный сигнал по жанру: {negatives[0]}.")
     return taste, genre_fit, media_fit, reasons
@@ -223,9 +257,9 @@ def _single_score(candidate: RecommendationCandidate, profile: FilmPreferencePro
 def _joint_score(candidate: RecommendationCandidate, profiles: tuple[FilmPreferenceProfile, FilmPreferenceProfile]) -> CandidateScore:
     parts = [_candidate_taste(candidate, p) for p in profiles]
     tastes = [part[0] for part in parts]
-    active = [score for score, profile in zip(tastes, profiles) if profile.reacted_count]
+    active = [score for score, profile in zip(tastes, profiles) if profile.reacted_count or profile.want_interest_count]
     base = sum(active) / len(active) if active else 0.0
-    disagreement = abs(tastes[0] - tastes[1]) * JOINT_DISAGREEMENT_PENALTY if all(p.reacted_count for p in profiles) else 0.0
+    disagreement = abs(tastes[0] - tastes[1]) * JOINT_DISAGREEMENT_PENALTY if all(p.reacted_count or p.want_interest_count for p in profiles) else 0.0
     negative = abs(min(0.0, min(tastes))) * JOINT_NEGATIVE_PENALTY
     joint_taste = base - disagreement - negative
     quality, popularity = _quality(candidate)
@@ -240,7 +274,37 @@ def _joint_score(candidate: RecommendationCandidate, profiles: tuple[FilmPrefere
                           tuple((profile.actor_key, taste) for profile, taste in zip(profiles, tastes)))
 
 
-def _diversify(scores: list[CandidateScore], limit: int) -> list[CandidateScore]:
+_SEQUEL_WORDS = {"part", "часть", "chapter", "глава", "volume", "том"}
+_NUMERAL = re.compile(r"^(?:\d+|[ivxlcdm]+|one|two|three|four|five|первая|вторая|трет(?:ья|ий))$")
+
+
+def title_family(title: str) -> str:
+    """Return a conservative family only when a sequel marker can be removed."""
+    tokens = _normal(re.sub(r"\(?(?:19|20)\d{2}\)?", " ", title)).split()
+    original = tuple(tokens)
+    while tokens and _NUMERAL.match(tokens[-1]):
+        tokens.pop()
+    if tokens and tokens[-1] in _SEQUEL_WORDS:
+        tokens.pop()
+    # Subtitle sequel markers ("Dune: Part Two") are handled by trimming from
+    # the marker; ordinary subtitles remain distinct.
+    for index, token in enumerate(tokens):
+        if token in _SEQUEL_WORDS and index > 0:
+            tokens = tokens[:index]
+            break
+    if tuple(tokens) == original or not tokens or len("".join(tokens)) < 4:
+        return ""
+    return " ".join(tokens)
+
+
+def _related(left: RecommendationCandidate, right: RecommendationCandidate) -> bool:
+    lf, rf = title_family(left.title), title_family(right.title)
+    if lf and (lf == rf or lf == _normal(right.title)):
+        return True
+    return bool(rf and rf == _normal(left.title))
+
+
+def _diversify(scores: list[CandidateScore], limit: int, *, allow_related: bool = False) -> list[CandidateScore]:
     selected: list[CandidateScore] = []
     remaining = scores[:]
     while remaining and len(selected) < limit:
@@ -248,11 +312,14 @@ def _diversify(scores: list[CandidateScore], limit: int) -> list[CandidateScore]
         for index, score in enumerate(remaining):
             primary = _normal(score.candidate.genres[0]) if score.candidate.genres else ""
             repeated = sum(bool(primary and s.candidate.genres and _normal(s.candidate.genres[0]) == primary) for s in selected)
-            adjusted = score.total - repeated * 0.04
+            related = any(_related(score.candidate, s.candidate) for s in selected)
+            adjusted = score.total - repeated * 0.04 - (0.20 if related and not allow_related else 0.0)
             current = remaining[best_index]
             current_primary = _normal(current.candidate.genres[0]) if current.candidate.genres else ""
             current_repeated = sum(bool(current_primary and s.candidate.genres and _normal(s.candidate.genres[0]) == current_primary) for s in selected)
-            if (adjusted, score.candidate.title.casefold(), score.candidate.external_id) > (current.total - current_repeated * .04, current.candidate.title.casefold(), current.candidate.external_id):
+            current_related = any(_related(current.candidate, s.candidate) for s in selected)
+            current_adjusted = current.total - current_repeated * .04 - (0.20 if current_related and not allow_related else 0.0)
+            if (adjusted, score.candidate.title.casefold(), score.candidate.external_id) > (current_adjusted, current.candidate.title.casefold(), current.candidate.external_id):
                 best_index = index
         selected.append(remaining.pop(best_index))
     return selected
@@ -268,9 +335,9 @@ def rank_candidates(candidates: Iterable[Any], profile: FilmPreferenceProfile | 
     return _diversify(scores, max(1, constraints.limit))
 
 
-def profiles_for_actor(films: Iterable[dict[str, Any]], actor: str) -> FilmPreferenceProfile | tuple[FilmPreferenceProfile, FilmPreferenceProfile]:
+def profiles_for_actor(films: Iterable[dict[str, Any]], actor: str, *, include_want: bool = True) -> FilmPreferenceProfile | tuple[FilmPreferenceProfile, FilmPreferenceProfile]:
     films = list(films)
     if actor == "both":
-        return build_film_preference_profile(films, "vova"), build_film_preference_profile(films, "sasha")
+        return build_film_preference_profile(films, "vova", include_want=include_want), build_film_preference_profile(films, "sasha", include_want=include_want)
     if actor not in {"vova", "sasha"}: raise ValueError("actor must be vova, sasha, or both")
-    return build_film_preference_profile(films, actor)
+    return build_film_preference_profile(films, actor, include_want=include_want)
