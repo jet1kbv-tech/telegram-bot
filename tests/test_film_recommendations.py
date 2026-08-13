@@ -1,6 +1,7 @@
 from bot.services.film_recommendations import (
     RecommendationCandidate as C, RecommendationConstraints as Constraints,
     build_film_preference_profile, filter_candidates, profiles_for_actor, rank_candidates,
+    title_family,
 )
 
 
@@ -92,3 +93,59 @@ def test_diversity_promotes_close_different_primary_genre():
     values.append(candidate("x", genres=("Драма",), popularity=90))
     ranked = rank_candidates(values, profile, constraints=Constraints(limit=3))
     assert any(x.candidate.external_id == "x" for x in ranked)
+
+
+def test_want_is_weak_owned_interest_and_never_legacy_taste():
+    items = [film(None, status="want", added_by="Вова", genres=["Комедия"]),
+             film(None, status="want", added_by="Саша", genres=["Драма"]),
+             film(None, status="want", added_by="unknown", genres=["Ужасы"]),
+             film(None, rating=10)]
+    vova = build_film_preference_profile(items, "vova")
+    sasha = build_film_preference_profile(items, "sasha")
+    assert vova.want_interest_count == 1 and set(vova.want_genres) == {"комедия"}
+    assert sasha.want_interest_count == 1 and set(sasha.want_genres) == {"драма"}
+    assert vova.reacted_count == 0 and vova.unknown_watched_count == 1
+
+
+def test_explicit_like_beats_want_and_dislike_dominates_it():
+    wanted = film(None, status="want", added_by="Вова", genres=["Комедия"])
+    liked = build_film_preference_profile([film("like")], "vova")
+    weak = build_film_preference_profile([wanted], "vova")
+    assert rank_candidates([candidate()], liked)[0].taste_score > rank_candidates([candidate()], weak)[0].taste_score > 0
+    conflict = build_film_preference_profile([film("dislike", genres=["Ужасы"]), wanted], "vova")
+    scored = rank_candidates([candidate(genres=("Комедия", "Ужасы"))], conflict)[0]
+    assert scored.taste_score < 0
+
+
+def test_joint_want_signals_are_independent_and_explicit_dislike_wins():
+    items = [film(None, status="want", added_by="Вова", genres=["Комедия"]),
+             film(None, status="want", added_by="Саша", genres=["Драма"]),
+             film("dislike", actor="sasha", genres=["Комедия"])]
+    score = rank_candidates([candidate(genres=("Комедия",))], profiles_for_actor(items, "both"))[0]
+    assert dict(score.actor_scores)["vova"] > 0 > dict(score.actor_scores)["sasha"]
+    assert score.taste_score < 0
+
+
+def test_current_want_mode_can_disable_circular_interest_stably():
+    items = [film(None, status="want", added_by="Вова", genres=["Комедия"]), film("like", genres=["Драма"])]
+    profile = profiles_for_actor(items, "vova", include_want=False)
+    values = [candidate("c", genres=("Комедия",)), candidate("d", genres=("Драма",))]
+    first = rank_candidates(values, profile, constraints=Constraints(limit=2, exclude_want=False))
+    second = rank_candidates(reversed(values), profile, constraints=Constraints(limit=2, exclude_want=False))
+    assert profile.want_interest_count == 0
+    assert [x.candidate.external_id for x in first] == ["d", "c"]
+    assert [x.candidate.external_id for x in first] == [x.candidate.external_id for x in second]
+
+
+def test_franchise_family_diversity_and_fallback():
+    profile = build_film_preference_profile([], "vova")
+    values = [candidate("s1", title="Spider-Man", popularity=100),
+              candidate("s2", title="Spider-Man 2", popularity=99),
+              candidate("s3", title="Spider-Man 3", popularity=98),
+              candidate("other", title="Arrival", genres=("Драма",), popularity=90)]
+    ranked = rank_candidates(values, profile, constraints=Constraints(limit=3))
+    assert sum(x.candidate.external_id.startswith("s") for x in ranked) < 3
+    assert title_family("Дюна: Часть вторая") == "дюна"
+    assert title_family("Love Actually") == ""
+    fallback = rank_candidates(values[:3], profile, constraints=Constraints(limit=3))
+    assert len(fallback) == 3

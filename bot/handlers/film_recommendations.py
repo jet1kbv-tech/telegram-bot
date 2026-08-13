@@ -102,19 +102,19 @@ async def start_from_nl(update: Update, context: ContextTypes.DEFAULT_TYPE, args
 
 async def _run(update: Update, context: ContextTypes.DEFAULT_TYPE, actor: str, source: str,
                constraints: RecommendationConstraints, response: Any | None = None,
-               shown: set[tuple[str, str, str]] | None = None) -> int:
+               shown: set[tuple[str, str, str]] | None = None, generation: int = 0) -> int:
     films = storage.load().get("films", [])
     try:
         if source == "want":
             candidates = [c for f in films if f.get("status") == "want" if (c := stored_film_to_candidate(f))]
             local = RecommendationConstraints(**{**asdict(constraints), "exclude_want": False, "min_vote_count": 0})
-            scores = rank_candidates(candidates, profiles_for_actor(films, actor), (), (), local)
+            # Current Want candidates do not boost themselves: this mode uses
+            # explicit watched reactions only.
+            scores = rank_candidates(candidates, profiles_for_actor(films, actor, include_want=False), (), (), local)
         else:
             if _service is None: raise RecommendationUnavailable()
-            scores = await _service.recommend(films, actor=actor, constraints=constraints)
-            if shown:
-                scores = [score for score in scores if (score.candidate.provider, score.candidate.media_type,
-                                                          score.candidate.external_id) not in shown]
+            scores = await _service.recommend(films, actor=actor, constraints=constraints,
+                                              shown=shown, generation=generation)
     except Exception:
         keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Попробовать снова", callback_data="filmrec:retry")],
             [InlineKeyboardButton("📚 Из нашего списка", callback_data="filmrec:want")],
@@ -123,15 +123,21 @@ async def _run(update: Update, context: ContextTypes.DEFAULT_TYPE, actor: str, s
         if response: await response.reply_text(text, reply_markup=keyboard)
         else: await _edit(update.callback_query, text, keyboard)
         return SECTION
+    selected = scores[:RESULT_LIMIT]
+    all_shown = set(shown or ())
+    all_shown.update((score.candidate.provider, score.candidate.media_type, score.candidate.external_id) for score in selected)
     session = {"id": _token(), "actor": actor, "source": source, "constraints": constraints,
-               "scores": scores[:RESULT_LIMIT], "index": 0, "shown": set(shown or ()), "expires": time.time() + SESSION_TTL}
+               "scores": selected, "index": 0, "shown": all_shown, "generation": generation,
+               "expires": time.time() + SESSION_TTL}
     context.user_data[SESSION_KEY] = session
     if not scores:
         keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Ослабить фильтры", callback_data=f"filmrec:relax:{session['id']}")],
             [InlineKeyboardButton("✨ Новая подборка", callback_data="filmrec:start")],
             [InlineKeyboardButton("📚 Из нашего списка", callback_data="filmrec:want")],
             [InlineKeyboardButton("❌ Закрыть", callback_data="filmrec:close")]])
-        text = "По этим условиям ничего подходящего не нашлось." if source == "external" else "В списке «Хотим посмотреть» пока нет подходящих фильмов."
+        text = ("Других подходящих вариантов пока не нашлось." if source == "external" and shown else
+                "По этим условиям ничего подходящего не нашлось." if source == "external" else
+                "В списке «Хотим посмотреть» пока нет подходящих фильмов.")
         if response: await response.reply_text(text, reply_markup=keyboard)
         else: await _edit(update.callback_query, text, keyboard)
         return SECTION
@@ -142,7 +148,6 @@ async def _run(update: Update, context: ContextTypes.DEFAULT_TYPE, actor: str, s
 
 def _card(session: dict[str, Any]) -> str:
     score: CandidateScore = session["scores"][session["index"]]; c = score.candidate
-    session["shown"].add((c.provider, c.media_type, c.external_id))
     icon, label = ("📺", "Сериал") if c.media_type == "tv" else ("🎬", "Фильм")
     head = "📚 Из вашего списка\n\n" if session["source"] == "want" else ""
     lines = [f"{head}{icon} {c.title}" + (f" ({c.year})" if c.year else ""), label]
@@ -202,7 +207,8 @@ async def film_recommendation_callback_router(update: Update, context: ContextTy
     if not s: return await _stale(q)
     if action == "next":
         s["index"]=(s["index"]+1)%len(s["scores"]); await _edit(q, _card(s), _result_keyboard(s)); return SECTION
-    if action == "more": return await _run(update, context, s["actor"], s["source"], s["constraints"], shown=s["shown"])
+    if action == "more": return await _run(update, context, s["actor"], s["source"], s["constraints"],
+                                            shown=s["shown"], generation=s.get("generation", 0) + 1)
     if action == "relax": return await _run(update, context, s["actor"], s["source"], relax_constraints(s["constraints"]))
     if action == "add":
         score=s["scores"][s["index"]]; result=create_want_film(score.candidate, added_by=get_user_name(update))

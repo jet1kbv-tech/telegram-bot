@@ -145,3 +145,83 @@ unsupported; only an explicit deterministic synonym such as “смешное”
 is mapped. TV runtime is omitted when unavailable. Sessions and shown identities
 do not survive restart, and there is no persisted recommendation history,
 automatic enrichment, synopsis generation, or general conversational recommender.
+
+# Recommendation Quality v1.1
+
+## Signal hierarchy and ownership
+
+The ranking hierarchy is now explicit: watched titles with an explicit reaction
+are strong evidence (`like=+1`, `neutral=0`, `dislike=-1`); a canonical
+`status=want` title is weak positive interest (`WANT_INTEREST_WEIGHT=+0.20`);
+and watched titles without a reaction provide no taste signal. Legacy numeric
+ratings remain ignored. All watched titles, plus current Want titles during
+external discovery, remain exclusions.
+
+Want is a shared list but authorship is personal evidence. `added_by=Вова`
+contributes only to Vova's profile and `added_by=Саша` only to Sasha's. The
+canonical lower-case keys are accepted for compatibility. Missing, `unknown`,
+or otherwise unreliable authors are not assigned. Only stored genre/media-type
+metadata contributes; titles are never used to infer metadata and storage is
+not enriched as a side effect. Profiles keep reaction and Want genre/media maps
+and counts separate, so explanations say that a genre occurs in saved titles,
+not that the person likes it. Strong explicit evidence is explained first.
+
+Explicit and Want genre fits are additive after independent conservative
+shrinkage. Consequently the small positive Want value cannot average away an
+explicit dislike. Joint ranking activates each actor independently from either
+reaction or Want evidence, then retains disagreement and most-negative-fit
+penalties. One actor's explicit dislike therefore dominates the other's weak
+saved interest.
+
+## Bounded diversified discovery and exploration
+
+A broad operation makes **at most six provider requests**, each for one page:
+
+1. one popularity-sorted base pool for each requested media type;
+2. one `vote_average.desc` quality pool per requested media type, with a minimum
+   of 500 votes;
+3. remaining budget (if any) goes to deterministic, deduplicated top positive
+   reaction genres followed by top Want-interest genres.
+
+For `media_type=any`, the two base plus two quality requests leave at most two
+genre-guided requests. A movie-only or TV-only request can use up to four guided
+requests. An explicit included genre makes exactly one base request per
+requested media type and never injects unrelated profile genres. Excluded genres
+remain in every pool and are checked again locally. Pools merge by provider,
+media type, and external ID before ranking. Empty profiles use only base and
+quality pools. No random order is used.
+
+The process-local TTL/LRU cache remains enabled. Its key now includes the page
+and deterministic sort variant. Shown filtering happens after cached pool
+retrieval. The ephemeral Telegram session stores a bounded generation counter
+and identities for the entire visible three-card batch. **More** requests the
+next page for every bounded pool, removes all previously shown identities before
+ranking, and advances deterministically. Exhaustion reports “Других подходящих
+вариантов пока не нашлось.” rather than recycling a title. Nothing is persisted
+to `data.json`.
+
+## Diversity, cold start, and local Want mode
+
+A conservative title-family guard normalizes punctuation/year and recognizes
+only removable sequel numerals or explicit part/chapter/volume markers. Thus
+`Spider-Man 2` relates to `Spider-Man`, and `Дюна: Часть вторая` relates to
+`Дюна`; ordinary similar or generic titles without sequel syntax are not
+collapsed. A `0.20` soft family penalty normally keeps one family member in the
+top three, while fallback still fills the result limit when alternatives do not
+exist. Existing primary-genre diversity remains a modest `0.04` adjustment, so
+relevance is not displaced aggressively. Discover responses expose no reliable
+collection metadata, and no details request is added per candidate.
+
+Cold start is gradual: Want-only profiles use weak fit plus quality/popularity;
+profiles with neither signal use quality/popularity; joint mode can combine one
+actor's reactions with the other's Want evidence; and explicit reactions
+continue to dominate when available. When ranking the current Want list itself,
+Want evidence is disabled entirely to prevent circular self-boost; watched
+reactions still apply, ranking stays local, and no TMDB discovery occurs.
+
+Structural logs contain only reacted/Want-interest counts, pool/raw/unique/
+unseen/shown/result counts, and actor mode. They do not contain titles, lists,
+reactions, or actor-bound preference values. Known limitations are conservative
+heuristic franchise detection, absent taste evidence on metadata-poor Want
+records, ephemeral exploration state, and TMDB's deterministic catalogue/page
+coverage.

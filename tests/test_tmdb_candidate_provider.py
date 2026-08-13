@@ -52,3 +52,19 @@ def test_missing_configuration_and_details():
             item = await TmdbCandidateProvider("token", client=client).get_details("movie", "3")
         assert item.runtime_minutes == 95 and item.genres == ("Drama",)
     asyncio.run(run())
+
+
+def test_quality_sort_and_start_page_are_cache_keys():
+    async def run():
+        calls = []
+        async def handler(request):
+            calls.append(request)
+            return response({"results": []})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="https://test") as client:
+            provider = TmdbCandidateProvider("token", client=client)
+            await provider.discover_movies(RecommendationConstraints(min_vote_count=500), start_page=3, sort_by="vote_average.desc")
+            await provider.discover_movies(RecommendationConstraints(min_vote_count=500), start_page=3, sort_by="vote_average.desc")
+        assert len(calls) == 1
+        assert calls[0].url.params["page"] == "3" and calls[0].url.params["sort_by"] == "vote_average.desc"
+        assert calls[0].url.params["vote_count.gte"] == "500"
+    asyncio.run(run())
