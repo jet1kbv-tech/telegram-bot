@@ -50,7 +50,7 @@ def test_missing_configuration_and_details():
             return response({"id": 3, "title": "Film", "release_date": "2022-01-01", "genres": [{"id": 1, "name": "Drama"}], "runtime": 95, "vote_count": 200})
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="https://test") as client:
             item = await TmdbCandidateProvider("token", client=client).get_details("movie", "3")
-        assert item.runtime_minutes == 95 and item.genres == ("Drama",)
+        assert item.runtime_minutes == 95 and item.genres == ("drama",)
     asyncio.run(run())
 
 

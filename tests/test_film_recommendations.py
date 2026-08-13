@@ -23,14 +23,14 @@ def test_profile_reaction_semantics_evidence_isolation_and_legacy_rating():
     profile = build_film_preference_profile(films, "vova")
     assert (profile.like_count, profile.neutral_count, profile.dislike_count) == (1, 1, 1)
     assert profile.reacted_count == 3 and profile.unknown_watched_count == 2
-    assert profile.genres["комедия"].weighted_sum == 0
-    assert "драма" not in profile.genres
+    assert profile.genres["comedy"].weighted_sum == 0
+    assert "drama" not in profile.genres
 
 
 def test_sparse_profile_is_shrunk_and_unknown_is_cold_start():
     assert build_film_preference_profile([film(None)], "vova").is_cold_start
     profile = build_film_preference_profile([film("like")], "vova")
-    assert 0 < profile.genres["комедия"].score < 0.5
+    assert 0 < profile.genres["comedy"].score < 0.5
 
 
 def test_filter_excludes_watched_external_fallback_want_and_constraints():
@@ -102,8 +102,8 @@ def test_want_is_weak_owned_interest_and_never_legacy_taste():
              film(None, rating=10)]
     vova = build_film_preference_profile(items, "vova")
     sasha = build_film_preference_profile(items, "sasha")
-    assert vova.want_interest_count == 1 and set(vova.want_genres) == {"комедия"}
-    assert sasha.want_interest_count == 1 and set(sasha.want_genres) == {"драма"}
+    assert vova.want_interest_count == 1 and set(vova.want_genres) == {"comedy"}
+    assert sasha.want_interest_count == 1 and set(sasha.want_genres) == {"drama"}
     assert vova.reacted_count == 0 and vova.unknown_watched_count == 1
 
 
