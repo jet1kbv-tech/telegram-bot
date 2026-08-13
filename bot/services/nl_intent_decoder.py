@@ -6,27 +6,12 @@ from datetime import datetime
 from typing import Any
 
 from bot.services.nl_intent import IntentKind, IntentParserInvalidOutput, ParsedIntent
-
-GENRE_ALIASES = {
-    "comedy": "comedy", "комедия": "comedy", "комедию": "comedy", "смешное": "comedy",
-    "horror": "horror", "ужасы": "horror", "триллер": "thriller", "thriller": "thriller",
-    "фантастика": "science_fiction", "science_fiction": "science_fiction",
-    "мелодрама": "romance", "романтика": "romance", "romance": "romance",
-    "мультфильм": "animation", "анимация": "animation", "animation": "animation",
-    "драма": "drama", "drama": "drama", "боевик": "action", "action": "action",
-    "детектив": "mystery", "mystery": "mystery", "криминал": "crime", "crime": "crime",
-    "документальный": "documentary", "documentary": "documentary", "семейный": "family", "family": "family",
-    "приключения": "adventure", "adventure": "adventure", "фэнтези": "fantasy", "fantasy": "fantasy",
-}
+from bot.services.genre_vocabulary import canonicalize_genres
 
 
 def normalize_recommendation_genres(values: list[str]) -> list[str]:
     """Allow-list provider genre output; unsupported values are ignored."""
-    result = []
-    for value in values:
-        canonical = GENRE_ALIASES.get(value.strip().casefold().replace("ё", "е"))
-        if canonical and canonical not in result: result.append(canonical)
-    return result
+    return list(canonicalize_genres(values))
 
 # This is the canonical provider/domain boundary.  The schema below is generated
 # from the same definitions that the decoder uses, so the two cannot silently

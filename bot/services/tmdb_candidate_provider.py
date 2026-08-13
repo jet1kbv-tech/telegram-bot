@@ -9,6 +9,7 @@ from typing import Any
 import httpx
 
 from bot.services.film_recommendations import RecommendationCandidate, RecommendationConstraints
+from bot.services.genre_vocabulary import canonicalize_genre, canonicalize_genres
 from bot.services.movie_metadata import MovieMetadataUnavailable
 
 
@@ -70,9 +71,9 @@ class TmdbCandidateProvider:
         if c.min_year is not None: params[f"{date_key}.gte"] = f"{c.min_year}-01-01"
         if c.max_year is not None: params[f"{date_key}.lte"] = f"{c.max_year}-12-31"
         reverse = {name: str(identifier) for identifier, name in self.GENRES.items()}
-        numeric = sorted(reverse.get(str(g), str(g)) for g in c.include_genres if str(g) in reverse or str(g).isdigit())
+        numeric = sorted(reverse[g] for value in c.include_genres if (g := canonicalize_genre(value)) in reverse)
         if numeric: params["with_genres"] = ",".join(numeric)
-        excluded = sorted(reverse.get(str(g), str(g)) for g in c.exclude_genres if str(g) in reverse or str(g).isdigit())
+        excluded = sorted(reverse[g] for value in c.exclude_genres if (g := canonicalize_genre(value)) in reverse)
         if excluded: params["without_genres"] = ",".join(excluded)
         return params
 
@@ -109,7 +110,8 @@ class TmdbCandidateProvider:
         try: year = int(date[:4]) if isinstance(date, str) and len(date) >= 4 else None
         except ValueError: year = None
         raw_genres = raw.get("genres") if details else raw.get("genre_ids")
-        genres = tuple(str(x.get("name")) for x in raw_genres if isinstance(x, dict) and x.get("name")) if details and isinstance(raw_genres, list) else tuple(TmdbCandidateProvider.GENRES.get(x, str(x)) for x in raw_genres if isinstance(x, int)) if isinstance(raw_genres, list) else ()
+        genre_values = tuple(str(x.get("name")) for x in raw_genres if isinstance(x, dict) and x.get("name")) if details and isinstance(raw_genres, list) else tuple(TmdbCandidateProvider.GENRES.get(x, str(x)) for x in raw_genres if isinstance(x, int)) if isinstance(raw_genres, list) else ()
+        genres = canonicalize_genres(genre_values)
         runtime = raw.get("runtime") if movie else (raw.get("episode_run_time") or [None])[0]
         return RecommendationCandidate(str(raw["id"]), media_type, title.strip(), str(raw.get("original_title" if movie else "original_name") or ""),
             year, genres, str(raw.get("overview") or ""), _number(raw.get("vote_average")), _integer(raw.get("vote_count")),

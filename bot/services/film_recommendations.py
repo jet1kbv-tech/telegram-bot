@@ -7,6 +7,8 @@ import unicodedata
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Literal, Protocol
 
+from bot.services.genre_vocabulary import canonicalize_genre, canonicalize_genres, genre_display_label
+
 REACTION_WEIGHTS = {"like": 1.0, "neutral": 0.0, "dislike": -1.0}
 WANT_INTEREST_WEIGHT = 0.20
 PROFILE_SHRINKAGE = 2.0
@@ -130,9 +132,8 @@ def build_film_preference_profile(films: Iterable[dict[str, Any]], actor_key: st
                 media_type = film.get("media_type")
                 if reliable_genres or media_type in {"movie", "tv"}:
                     want_count += 1
-                for genre in reliable_genres:
-                    if isinstance(genre, str) and (key := _normal(genre)):
-                        want_genres.setdefault(key, []).append(WANT_INTEREST_WEIGHT)
+                for key in canonicalize_genres(reliable_genres):
+                    want_genres.setdefault(key, []).append(WANT_INTEREST_WEIGHT)
                 if media_type in {"movie", "tv"}:
                     want_types.setdefault(media_type, []).append(WANT_INTEREST_WEIGHT)
             continue
@@ -145,9 +146,9 @@ def build_film_preference_profile(films: Iterable[dict[str, Any]], actor_key: st
             continue
         counts[reaction] += 1
         weight = REACTION_WEIGHTS[reaction]
-        for genre in film.get("genres", ()) if isinstance(film.get("genres"), (list, tuple)) else ():
-            if isinstance(genre, str) and (key := _normal(genre)):
-                genre_values.setdefault(key, []).append(weight)
+        reliable_genres = film.get("genres", ()) if isinstance(film.get("genres"), (list, tuple)) else ()
+        for key in canonicalize_genres(reliable_genres):
+            genre_values.setdefault(key, []).append(weight)
         media_type = film.get("media_type")
         if media_type in {"movie", "tv"}:
             type_values.setdefault(media_type, []).append(weight)
@@ -163,9 +164,10 @@ def _normal(value: str) -> str:
 
 
 def _candidate_taste(candidate: RecommendationCandidate, profile: FilmPreferenceProfile) -> tuple[float, float, float, list[str]]:
-    genre_evidence = [profile.genres[_normal(g)] for g in candidate.genres if _normal(g) in profile.genres]
+    genres = canonicalize_genres(candidate.genres)
+    genre_evidence = [profile.genres[g] for g in genres if g in profile.genres]
     explicit_genre_fit = sum(value.score for value in genre_evidence) / len(genre_evidence) if genre_evidence else 0.0
-    want_evidence = [profile.want_genres[_normal(g)] for g in candidate.genres if _normal(g) in profile.want_genres]
+    want_evidence = [profile.want_genres[g] for g in genres if g in profile.want_genres]
     want_genre_fit = sum(value.score for value in want_evidence) / len(want_evidence) if want_evidence else 0.0
     # Additive weak evidence cannot average away a strong explicit dislike.
     genre_fit = explicit_genre_fit + want_genre_fit
@@ -173,16 +175,16 @@ def _candidate_taste(candidate: RecommendationCandidate, profile: FilmPreference
     media_fit = media.score if media and media.evidence_count >= 3 else 0.0
     taste = genre_fit * 0.85 + media_fit * 0.15
     reasons: list[str] = []
-    positives = [g for g in candidate.genres if (ev := profile.genres.get(_normal(g))) and ev.score > 0 and ev.evidence_count >= 1]
-    negatives = [g for g in candidate.genres if (ev := profile.genres.get(_normal(g))) and ev.score < 0 and ev.evidence_count >= 1]
+    positives = [g for g in genres if (ev := profile.genres.get(g)) and ev.score > 0 and ev.evidence_count >= 1]
+    negatives = [g for g in genres if (ev := profile.genres.get(g)) and ev.score < 0 and ev.evidence_count >= 1]
     actor_label = {"vova": "Вова", "sasha": "Саша"}[profile.actor_key]
     if positives:
-        reasons.append(f"{actor_label} положительно оценивал(а) жанр: {positives[0]}.")
+        reasons.append(f"{actor_label} положительно оценивал(а) жанр: {genre_display_label(positives[0]).capitalize()}.")
     elif want_evidence:
-        saved = next(g for g in candidate.genres if _normal(g) in profile.want_genres)
-        reasons.append(f"У {actor_label} в сохранённых встречается жанр: {saved}.")
+        saved = next(g for g in genres if g in profile.want_genres)
+        reasons.append(f"У {actor_label} в сохранённых встречается жанр: {genre_display_label(saved).capitalize()}.")
     if negatives:
-        reasons.append(f"Есть отрицательный сигнал по жанру: {negatives[0]}.")
+        reasons.append(f"Есть отрицательный сигнал по жанру: {genre_display_label(negatives[0]).capitalize()}.")
     return taste, genre_fit, media_fit, reasons
 
 
@@ -201,9 +203,9 @@ def _valid_candidate(candidate: Any, constraints: RecommendationConstraints) -> 
         return False
     if constraints.media_type != "any" and candidate.media_type != constraints.media_type:
         return False
-    genres = {_normal(value) for value in candidate.genres}
-    includes = {_normal(value) for value in constraints.include_genres}
-    excludes = {_normal(value) for value in constraints.exclude_genres}
+    genres = set(canonicalize_genres(candidate.genres))
+    includes = {canonicalize_genre(value) or _normal(value) for value in constraints.include_genres}
+    excludes = {canonicalize_genre(value) or _normal(value) for value in constraints.exclude_genres}
     if includes and not includes.issubset(genres) or excludes & genres:
         return False
     if constraints.min_year is not None and (candidate.year is None or candidate.year < constraints.min_year): return False

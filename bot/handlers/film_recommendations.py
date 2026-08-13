@@ -10,6 +10,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes, ConversationHandler
 
 from bot.services.film_catalog import create_want_film, stored_film_to_candidate
+from bot.services.genre_vocabulary import genre_display_label
 from bot.services.film_recommendations import (CandidateScore, RecommendationConstraints,
     profiles_for_actor, rank_candidates)
 from bot.services.movie_recommendation_service import MovieRecommendationService, RecommendationUnavailable
@@ -20,10 +21,6 @@ from bot.utils import ensure_access, get_user_name, get_wishlist_owner_by_user
 SESSION_KEY = "film_recommendation_session"
 SESSION_TTL = 15 * 60
 RESULT_LIMIT = 3
-GENRE_LABELS = {"comedy": "Комедия", "drama": "Драма", "horror": "Ужасы", "thriller": "Триллер",
-                "science_fiction": "Фантастика", "romance": "Мелодрама", "animation": "Анимация",
-                "action": "Боевик", "adventure": "Приключения", "fantasy": "Фэнтези", "mystery": "Детектив",
-                "crime": "Криминал", "documentary": "Документальный", "family": "Семейный"}
 _service: MovieRecommendationService | None = None
 _safe_edit: Callable[..., Any] | None = None
 _build_item: Callable[..., str] | None = None
@@ -151,7 +148,7 @@ def _card(session: dict[str, Any]) -> str:
     icon, label = ("📺", "Сериал") if c.media_type == "tv" else ("🎬", "Фильм")
     head = "📚 Из вашего списка\n\n" if session["source"] == "want" else ""
     lines = [f"{head}{icon} {c.title}" + (f" ({c.year})" if c.year else ""), label]
-    if c.genres: lines.append("Жанры: " + " · ".join(GENRE_LABELS.get(g, g) for g in c.genres))
+    if c.genres: lines.append("Жанры: " + " · ".join(genre_display_label(g).capitalize() for g in c.genres))
     if c.external_rating is not None: lines.append(f"⭐ TMDb {c.external_rating:g}")
     if c.runtime_minutes: lines.append(f"⏱ {c.runtime_minutes // 60} ч {c.runtime_minutes % 60:02d} мин")
     if c.overview: lines.extend(["", c.overview])
