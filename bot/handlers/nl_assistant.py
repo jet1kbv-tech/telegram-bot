@@ -309,6 +309,15 @@ async def nl_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             return await start_from_nl(update, context, parsed.arguments, response)
         if parsed.intent in {IntentKind.DELETE_EVENT_ATTACHMENT, IntentKind.UPDATE_EVENT_ATTACHMENT}:
             return await begin_attachment_mutation(update, context, parsed.intent.value, parsed.arguments, response)
+        if parsed.intent is IntentKind.ADD_MOVIE_OR_TV:
+            # Polza only identifies the intent and preserves the user's search
+            # wording.  Catalogue identity and metadata are resolved by the
+            # same provider-backed flow as a native Films add.
+            title = str(parsed.arguments.get("query") or "").strip()
+            if not title:
+                raise ValueError("missing_movie_query")
+            await response.discard()
+            return await begin_film_search(update, context, title)
         arguments, missing = _prepare(parsed.intent, parsed.arguments, now)
         if parsed.intent in _QUERY_KINDS:
             await _answer_query(response, context, parsed.intent, arguments, update, now)

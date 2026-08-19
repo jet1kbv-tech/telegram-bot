@@ -293,6 +293,27 @@ def test_fuzzy_single_and_incomplete_exact_do_not_auto_open(monkeypatch) -> None
         assert asyncio.run(films.add_film_title(SimpleNamespace(message=message), SimpleNamespace(user_data={}))) == SELECTING_FILM_METADATA
 
 
+def test_partial_title_preserves_provider_order_and_requires_selection(monkeypatch) -> None:
+    provider = ResultsProvider([
+        search_result("movie", "Ничего хорошего в отеле «Эль Рояль»", "el-royale", year=2018),
+        search_result("movie", "Отель", "hotel", year=2022),
+    ])
+    store = FakeStorage()
+    configure(monkeypatch, store, provider)
+    message = SimpleNamespace(text="ничего хорошего в отеле", reply_text=AsyncMock())
+
+    state = asyncio.run(films.begin_film_search(
+        SimpleNamespace(effective_message=message), SimpleNamespace(user_data={}), "ничего хорошего в отеле",
+    ))
+
+    assert state == SELECTING_FILM_METADATA
+    assert message.reply_text.await_args.args[0] == "Что именно добавить?"
+    buttons = message.reply_text.await_args.kwargs["reply_markup"].inline_keyboard
+    assert "Ничего хорошего в отеле «Эль Рояль»" in buttons[0][0].text
+    assert buttons[0][0].callback_data == "filmmeta:select:0"
+    assert store.data["films"] == []
+
+
 def test_manual_fallback_persists_unknown_type(monkeypatch) -> None:
     store = FakeStorage()
     configure(monkeypatch, store)
