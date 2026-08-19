@@ -7,7 +7,7 @@ import pytest
 
 from bot.handlers import nl_assistant
 from bot.services.nl_intent import IntentKind, IntentParserInvalidOutput, IntentParserTimeout, IntentParserUnavailable, ParsedIntent
-from bot.states import ADDING_CALENDAR_EVENT_TITLE, ADDING_EVENT_TITLE, ADDING_PURCHASE_TITLE, AI_CLARIFYING, MENU, SECTION
+from bot.states import ADDING_CALENDAR_EVENT_TITLE, ADDING_EVENT_TITLE, ADDING_PURCHASE_TITLE, AI_CLARIFYING, MENU, SECTION, SELECTING_FILM_METADATA
 
 
 class FakeParser:
@@ -233,15 +233,32 @@ def test_afisha_confirmation_uses_domain_action(monkeypatch):
     create.assert_called_once()
 
 
-def test_movie_confirmation_hands_query_to_existing_flow(monkeypatch):
-    nl_assistant._parser = FakeParser(ParsedIntent(IntentKind.ADD_MOVIE_OR_TV, {"query": "Игры разума"}))
-    begin = AsyncMock(return_value=SECTION)
+def test_movie_intent_immediately_hands_raw_query_to_existing_flow(monkeypatch):
+    parser = FakeParser(ParsedIntent(IntentKind.ADD_MOVIE_OR_TV, {"query": "ничего хорошего в отеле"}))
+    nl_assistant._parser = parser
+    begin = AsyncMock(return_value=SELECTING_FILM_METADATA)
     monkeypatch.setattr(nl_assistant, "begin_film_search", begin)
-    ctx = context()
-    run(nl_assistant.nl_text_handler(update(), ctx))
-    proposal_id = ctx.user_data["ai_active_proposal_id"]
-    assert run(nl_assistant.nl_callback_router(update(callback_data=f"ai:c:{proposal_id}"), ctx)) == SECTION
-    assert begin.await_args.args[2] == "Игры разума"
+    ctx, upd = context(), update(text="добавь фильм ничего хорошего в отеле")
+
+    assert run(nl_assistant.nl_text_handler(upd, ctx)) == SELECTING_FILM_METADATA
+
+    assert len(parser.calls) == 1
+    begin.assert_awaited_once_with(upd, ctx, "ничего хорошего в отеле")
+    assert "ai_active_proposal_id" not in ctx.user_data
+    upd.effective_message.waiting.delete.assert_awaited_once_with()
+    upd.effective_message.waiting.edit_text.assert_not_awaited()
+
+
+def test_movie_intent_rejects_empty_query_without_starting_search(monkeypatch):
+    nl_assistant._parser = FakeParser(ParsedIntent(IntentKind.ADD_MOVIE_OR_TV, {"query": "  "}))
+    begin = AsyncMock()
+    monkeypatch.setattr(nl_assistant, "begin_film_search", begin)
+    upd = update(text="добавь фильм")
+
+    assert run(nl_assistant.nl_text_handler(upd, context())) == MENU
+
+    begin.assert_not_awaited()
+    assert "надёжно разобрать" in upd.effective_message.waiting.edit_text.await_args.args[0]
 
 
 @pytest.mark.parametrize("kind", [IntentKind.NO_ACTION, IntentKind.UNSUPPORTED])
