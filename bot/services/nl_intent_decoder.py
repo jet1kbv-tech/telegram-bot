@@ -9,6 +9,14 @@ from bot.services.nl_intent import IntentKind, IntentParserInvalidOutput, Parsed
 from bot.services.genre_vocabulary import canonicalize_genres
 
 
+# Shared by the canonical decoder and the semantic branch schema.  The compact
+# Polza wire schema cannot condition an argument value on its sibling name, so
+# enum enforcement happens at this boundary after the wire envelope is
+# normalized.
+TRANSPORT_TYPES = ("train", "plane", "bus", "other")
+_TRANSPORT_VALUES = {None, *TRANSPORT_TYPES}
+
+
 def normalize_recommendation_genres(values: list[str]) -> list[str]:
     """Allow-list provider genre output; unsupported values are ignored."""
     return list(canonicalize_genres(values))
@@ -194,7 +202,7 @@ def decode_intent(raw: str | dict[str, Any]) -> ParsedIntent:
     if kind is IntentKind.QUERY_CONTEXT:
         if arguments["query_type"] not in {"departure", "arrival", "return", "documents", "overview"}:
             raise IntentParserInvalidOutput("invalid_query_type")
-        if arguments["transport_type"] not in {None, "train", "plane", "bus", "other"}:
+        if arguments["transport_type"] not in _TRANSPORT_VALUES:
             raise IntentParserInvalidOutput("invalid_transport_type")
         if arguments["destination"] is not None and not arguments["destination"]:
             raise IntentParserInvalidOutput("empty_destination")
@@ -203,7 +211,7 @@ def decode_intent(raw: str | dict[str, Any]) -> ParsedIntent:
     if kind is IntentKind.ATTACH_EVENT_FILE:
         if arguments["semantic_type"] not in {None, "transport_ticket", "voucher", "accommodation", "insurance", "reservation", "other"}:
             raise IntentParserInvalidOutput("invalid_semantic_type")
-        if arguments["transport_type"] not in {None, "train", "plane", "bus", "other"}:
+        if arguments["transport_type"] not in _TRANSPORT_VALUES:
             raise IntentParserInvalidOutput("invalid_transport_type")
         if arguments["person"] not in {None, "current_user", "other_user", "both"}:
             raise IntentParserInvalidOutput("invalid_person")
@@ -215,7 +223,7 @@ def decode_intent(raw: str | dict[str, Any]) -> ParsedIntent:
     if kind in {IntentKind.QUERY_EVENT_ATTACHMENTS, IntentKind.DELETE_EVENT_ATTACHMENT, IntentKind.UPDATE_EVENT_ATTACHMENT}:
         if arguments["semantic_type"] not in {None, "transport_ticket", "voucher", "reservation", "insurance", "other"}:
             raise IntentParserInvalidOutput("invalid_semantic_type")
-        if arguments["transport_type"] not in {None, "train", "plane", "bus", "other"}:
+        if arguments["transport_type"] not in _TRANSPORT_VALUES:
             raise IntentParserInvalidOutput("invalid_transport_type")
         if arguments["person"] not in {None, "current_user", "other_user", "both"}:
             raise IntentParserInvalidOutput("invalid_person")
@@ -268,7 +276,7 @@ _BRANCH_PROPERTIES: dict[IntentKind, dict[str, Any]] = {
     IntentKind.ATTACH_EVENT_FILE: {
         "target": {"type": "string"},
         "semantic_type": {"type": ["string", "null"], "enum": ["transport_ticket", "voucher", "accommodation", "insurance", "reservation", "other", None]},
-        "transport_type": {"type": ["string", "null"], "enum": ["train", "plane", "bus", "other", None]},
+        "transport_type": {"type": ["string", "null"], "enum": [*TRANSPORT_TYPES, None]},
         "origin": {"type": ["string", "null"]}, "destination": {"type": ["string", "null"]},
         "date_expression": {"type": ["string", "null"]},
         "departure_time": {"type": ["string", "null"]},
@@ -277,7 +285,7 @@ _BRANCH_PROPERTIES: dict[IntentKind, dict[str, Any]] = {
     IntentKind.QUERY_EVENT_ATTACHMENTS: {
         "target": {"type": ["string", "null"]},
         "semantic_type": {"type": ["string", "null"], "enum": ["transport_ticket", "voucher", "reservation", "insurance", "other", None]},
-        "transport_type": {"type": ["string", "null"], "enum": ["train", "plane", "bus", "other", None]},
+        "transport_type": {"type": ["string", "null"], "enum": [*TRANSPORT_TYPES, None]},
         "origin": {"type": ["string", "null"]}, "destination": {"type": ["string", "null"]},
         "date": {"type": ["string", "null"]}, "person": {"type": ["string", "null"], "enum": ["current_user", "other_user", "both", None]},
         "direction": {"type": ["string", "null"], "enum": ["outbound", "return", None]},
@@ -286,7 +294,7 @@ _BRANCH_PROPERTIES: dict[IntentKind, dict[str, Any]] = {
     IntentKind.QUERY_CONTEXT: {
         "query_type": {"type": "string", "enum": ["departure", "arrival", "return", "documents", "overview"]},
         "destination": {"type": ["string", "null"]},
-        "transport_type": {"type": ["string", "null"], "enum": ["train", "plane", "bus", "other", None]},
+        "transport_type": {"type": ["string", "null"], "enum": [*TRANSPORT_TYPES, None]},
     },
     IntentKind.QUERY_PURCHASES: {"status": {"type": "string", "enum": ["planned", "bought", "any"]}, "priority": {"type": "string", "enum": ["high", "medium", "low", "any"]}, "buyer": {"type": "string", "enum": ["current_user", "other_user", "unassigned", "any"]}, "operation": {"type": "string", "enum": ["list", "count", "sum"]}},
     IntentKind.QUERY_FILMS: {"status": {"type": "string", "enum": ["want", "watched", "any"]}, "media_type": {"type": "string", "enum": ["movie", "tv", "any"]}, "genre": {"type": ["string", "null"]}, "operation": {"type": "string", "enum": ["list", "count", "random"]}},

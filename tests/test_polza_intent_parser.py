@@ -987,6 +987,18 @@ def test_attachment_examples_are_in_provider_prompt():
     assert "ссылка на событие в формулировке пользователя" in SYSTEM_PROMPT
     assert "названия из хранилища тебе не передаются" in SYSTEM_PROMPT
 
+
+def test_query_context_prompt_uses_only_canonical_transport_contract():
+    context_rule = SYSTEM_PROMPT[
+        SYSTEM_PROMPT.index("query_context — вопрос"):SYSTEM_PROMPT.index("Для delete_event_attachment")
+    ]
+    assert "transport_type строго один из train/plane/bus/other" in context_rule
+    assert "НИКОГДА не русское слово" in context_rule
+    assert "не передавай transport_type (null)" in context_rule
+    assert 'query_type="return" transport_type="train"' in SYSTEM_PROMPT
+    assert 'query_type="overview" destination="Воронеж"' in SYSTEM_PROMPT
+    assert 'query_type="documents" destination="Воронеж"' in SYSTEM_PROMPT
+
 @pytest.mark.parametrize("text,intent", [
     ("удали билет в Воронеж", "delete_event_attachment"),
     ("удали обратный билет из Воронежа", "delete_event_attachment"),

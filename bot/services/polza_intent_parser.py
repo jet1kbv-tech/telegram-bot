@@ -34,7 +34,7 @@ Query defaults: purchases status=planned priority=any buyer=any, operations list
 
 Для query_event_attachments только структурируй запрос, не выбирай файл и не придумывай ID. target — ссылка на событие словами пользователя; date только уверенная дата отправления YYYY-MM-DD; return_all=true только при «все документы». semantic_type: transport_ticket/voucher/reservation/insurance/other; direction: outbound/return.
 
-query_context — вопрос о фактах сохранённой поездки. query_type строго departure/arrival/return/documents/overview; destination и transport_type извлекай только явно. Не отвечай на вопрос и не придумывай даты, время, маршруты или наличие билетов. Просьба прислать/открыть конкретный файл остаётся query_event_attachments; вопрос о наличии документов или обзор поездки — query_context.
+query_context — вопрос о фактах сохранённой поездки. query_type строго departure/arrival/return/documents/overview. transport_type строго один из train/plane/bus/other, НИКОГДА не русское слово и не произвольная строка; поезд=train, самолёт=plane, автобус=bus, явно иной транспорт=other. Если транспорт не назван в самом запросе или его нельзя уверенно определить, не передавай transport_type (null). destination также извлекай только явно. Не отвечай на вопрос и не придумывай даты, время, маршруты, транспорт из контекста или наличие билетов. Просьба прислать/открыть конкретный файл остаётся query_event_attachments; вопрос о наличии документов или обзор поездки — query_context.
 
 Для delete_event_attachment/update_event_attachment используй те же поля идентификации. Билет, ваучер или документ — attachment, НИКОГДА не событие календаря/Афиши. Не выдавай ID. В update только явно требуемые замены идут в new_*; маршрут без new_ идентифицирует документ. new_date/new_arrival_date сохраняй выражением пользователя; время строго HH:MM.
 «удали билет в Воронеж» -> delete_event_attachment semantic_type="transport_ticket" destination="Воронеж";
@@ -69,9 +69,10 @@ unsupported — только команда вне доменов, destructive/b
 «покажи документы к поездке в санаторий» -> query_event_attachments target="поездке в санаторий" return_all="true";
 «во сколько поезд в Воронеж?» -> query_context query_type="departure" destination="Воронеж" transport_type="train";
 «когда приезжаем в Воронеж?» -> query_context query_type="arrival" destination="Воронеж";
-«когда обратный поезд?» -> query_context query_type="return";
+«когда обратный поезд?» -> query_context query_type="return" transport_type="train";
+«когда мы возвращаемся из Воронежа?» -> query_context query_type="return" destination="Воронеж";
 «что известно про поездку в Воронеж?» -> query_context query_type="overview" destination="Воронеж";
-«есть ли билеты в Воронеж?» -> query_context query_type="documents" destination="Воронеж" transport_type="train";
+«какие документы есть на поездку в Воронеж?» -> query_context query_type="documents" destination="Воронеж";
 «что у нас в покупках?» -> query_purchases status=planned; «какие комедии мы ещё не смотрели?» -> query_films status=want genre="Комедия";
 «что у меня завтра?» -> query_calendar date_from=date_to="завтра";
 «что в афише в августе?» -> query_afisha date_from=date_to="в августе"."""
