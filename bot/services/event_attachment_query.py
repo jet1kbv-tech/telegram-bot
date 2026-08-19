@@ -42,22 +42,27 @@ def route_contains(stored: str, query: str) -> bool:
     return bool(requested) and all(token in available for token in requested)
 
 
-def _visible_parent(data: dict[str, Any], item: dict[str, Any], owner: str,
-                    canonical_parent: tuple[str, str] | None) -> bool:
+def attachment_visible_parent(data: dict[str, Any], item: dict[str, Any], owner: str,
+                              canonical_parent: tuple[str, str] | None = None) -> tuple[str, str] | None:
+    """Return an attachment's canonical parent when it is visible to ``owner``.
+
+    This is the shared privacy boundary for attachment query and context services.
+    """
     try:
         parent_type, parent_id, parent = resolve_attachment_parent(
             data, str(item.get("parent_type") or ""), str(item.get("parent_event_id") or ""),
         )
     except ValueError:
-        return False
+        return None
     if canonical_parent and (parent_type, parent_id) != canonical_parent:
-        return False
+        return None
     if parent_type == "afisha":
-        return parent.get("status") == "active"  # Existing shared product collection.
-    return any(
+        return (parent_type, parent_id) if parent.get("status") == "active" else None
+    visible = any(
         str(event.get("id") or "") == parent_id and event.get("source") == "manual"
         for event in data.get("calendars", {}).get(owner, [])
     )
+    return (parent_type, parent_id) if visible else None
 
 
 def query_event_attachments(data: dict[str, Any], *, owner: str,
@@ -77,7 +82,7 @@ def query_event_attachments(data: dict[str, Any], *, owner: str,
     filters = (("semantic_type", semantic_type), ("transport_type", transport_type),
                ("date", date), ("person", person))
     for item in data.get("event_attachments", []):
-        if not isinstance(item, dict) or not _visible_parent(data, item, owner, canonical_parent):
+        if not isinstance(item, dict) or not attachment_visible_parent(data, item, owner, canonical_parent):
             continue
         reasons: list[str] = []
         failed = False
