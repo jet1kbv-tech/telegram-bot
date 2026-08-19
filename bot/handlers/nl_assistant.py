@@ -30,6 +30,7 @@ from bot.handlers.nl_attachment_retrieval import begin_attachment_query
 from bot.handlers.nl_attachment_mutations import begin_attachment_mutation
 from bot.services.nl_query_contexts import create_query_context, get_query_context
 from bot.services.queries import choose_random, next_event, query_afisha, query_calendar, query_films, query_purchases
+from bot.services.context_queries import query_context
 from bot.states import (
     ADDING_CALENDAR_EVENT_TITLE, ADDING_EVENT_TITLE, ADDING_FILM_TITLE, ADDING_PURCHASE_TITLE, AI_CLARIFYING, MENU, SECTION,
 )
@@ -305,6 +306,15 @@ async def nl_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             return await begin_intent_attachment(update, context, parsed.arguments, response)
         if parsed.intent is IntentKind.QUERY_EVENT_ATTACHMENTS:
             return await begin_attachment_query(update, context, parsed.arguments, response)
+        if parsed.intent is IntentKind.QUERY_CONTEXT:
+            profile = get_allowed_profile(update) or {}
+            actor_key = str(profile.get("wishlist_owner") or "")
+            result = query_context(storage.load(), actor_key=actor_key, now=now, timezone=BOT_TIMEZONE,
+                                   **parsed.arguments)
+            logger.info("NL context query intent=query_context query_type=%s outcome=%s candidate_count=%s",
+                        parsed.arguments["query_type"], result.outcome, result.candidate_count)
+            await response.reply_text(result.text, reply_markup=_menu_keyboard())
+            return _idle_state(context)
         if parsed.intent is IntentKind.RECOMMEND_FILM:
             return await start_from_nl(update, context, parsed.arguments, response)
         if parsed.intent in {IntentKind.DELETE_EVENT_ATTACHMENT, IntentKind.UPDATE_EVENT_ATTACHMENT}:

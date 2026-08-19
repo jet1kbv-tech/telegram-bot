@@ -76,3 +76,10 @@ def _date_time_text(date_value: str | None, time_value: str | None) -> str:
         parts.append(f"{parsed.day} {MONTHS[parsed.month]} {parsed.year}")
     if time_value: parts.append(time_value)
     return " · ".join(parts)
+
+
+def date_time_text(date_value: date | str | None, time_value: Any = None) -> str:
+    """Format canonical date/time values consistently for deterministic answers."""
+    day = date_value.isoformat() if isinstance(date_value, date) else date_value
+    clock = time_value.strftime("%H:%M") if hasattr(time_value, "strftime") else time_value
+    return _date_time_text(day, clock)

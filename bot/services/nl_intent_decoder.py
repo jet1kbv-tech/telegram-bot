@@ -56,6 +56,10 @@ _FIELDS: dict[IntentKind, dict[str, tuple[type, ...]]] = {
         "destination": (str, type(None)), "date": (str, type(None)),
         "person": (str, type(None)), "direction": (str, type(None)), "return_all": (bool,),
     },
+    IntentKind.QUERY_CONTEXT: {
+        "query_type": (str,), "destination": (str, type(None)),
+        "transport_type": (str, type(None)),
+    },
     IntentKind.DELETE_EVENT_ATTACHMENT: {
         "target": (str, type(None)), "semantic_type": (str, type(None)), "transport_type": (str, type(None)),
         "origin": (str, type(None)), "destination": (str, type(None)), "date": (str, type(None)),
@@ -187,6 +191,13 @@ def decode_intent(raw: str | dict[str, Any]) -> ParsedIntent:
             raise IntentParserInvalidOutput("invalid_query_arguments")
     if kind in {IntentKind.QUERY_CALENDAR, IntentKind.QUERY_AFISHA} and arguments["operation"] not in {"list", "count", "next"}:
         raise IntentParserInvalidOutput("invalid_query_arguments")
+    if kind is IntentKind.QUERY_CONTEXT:
+        if arguments["query_type"] not in {"departure", "arrival", "return", "documents", "overview"}:
+            raise IntentParserInvalidOutput("invalid_query_type")
+        if arguments["transport_type"] not in {None, "train", "plane", "bus", "other"}:
+            raise IntentParserInvalidOutput("invalid_transport_type")
+        if arguments["destination"] is not None and not arguments["destination"]:
+            raise IntentParserInvalidOutput("empty_destination")
     if kind is IntentKind.UNSUPPORTED and arguments["category"] not in _UNSUPPORTED:
         raise IntentParserInvalidOutput("invalid_category")
     if kind is IntentKind.ATTACH_EVENT_FILE:
@@ -271,6 +282,11 @@ _BRANCH_PROPERTIES: dict[IntentKind, dict[str, Any]] = {
         "date": {"type": ["string", "null"]}, "person": {"type": ["string", "null"], "enum": ["current_user", "other_user", "both", None]},
         "direction": {"type": ["string", "null"], "enum": ["outbound", "return", None]},
         "return_all": {"type": "boolean"},
+    },
+    IntentKind.QUERY_CONTEXT: {
+        "query_type": {"type": "string", "enum": ["departure", "arrival", "return", "documents", "overview"]},
+        "destination": {"type": ["string", "null"]},
+        "transport_type": {"type": ["string", "null"], "enum": ["train", "plane", "bus", "other", None]},
     },
     IntentKind.QUERY_PURCHASES: {"status": {"type": "string", "enum": ["planned", "bought", "any"]}, "priority": {"type": "string", "enum": ["high", "medium", "low", "any"]}, "buyer": {"type": "string", "enum": ["current_user", "other_user", "unassigned", "any"]}, "operation": {"type": "string", "enum": ["list", "count", "sum"]}},
     IntentKind.QUERY_FILMS: {"status": {"type": "string", "enum": ["want", "watched", "any"]}, "media_type": {"type": "string", "enum": ["movie", "tv", "any"]}, "genre": {"type": ["string", "null"]}, "operation": {"type": "string", "enum": ["list", "count", "random"]}},
