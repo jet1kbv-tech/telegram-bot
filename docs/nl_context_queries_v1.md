@@ -23,9 +23,13 @@ expiring opaque pending operation and revalidates visibility before file deliver
 ## Contract and routing
 
 `query_context` is one read-only intent with required enum `query_type` (`departure`, `arrival`, `return`,
-`documents`, or `overview`) and nullable `destination` and `transport_type` (bounded enum). The schema is
-strict and has `additionalProperties=false`; the decoder rejects unknown fields, enum values, types, and an
-explicit empty destination. Polza extracts only these semantics. It receives neither storage nor a context
+`documents`, or `overview`) and nullable `destination` and `transport_type`. The latter has exactly the
+bounded vocabulary `train`, `plane`, `bus`, and `other`; omission in the compact provider envelope represents
+null. The Polza wire schema is strict and has `additionalProperties=false`, but its generic name/value carrier
+cannot condition `value` on `name`. The generated semantic branch schema and canonical decoder therefore
+enforce the enum after normalization and reject unknown fields, enum values, types, and an explicit empty
+destination. The prompt teaches the identical English vocabulary and requires omission when transport is not
+explicitly stated. Polza extracts only these semantics. It receives neither storage nor a context
 bundle and never supplies actor identity or factual values.
 
 Questions about stored schedule facts, document existence/count, and trip overview route to `query_context`.

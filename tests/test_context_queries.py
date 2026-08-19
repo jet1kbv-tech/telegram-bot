@@ -51,3 +51,59 @@ def test_context_decoder_is_strict_and_bounded():
         decode_intent({"intent":"query_context","arguments":{"query_type":"weather","destination":"Воронеж","transport_type":None}})
     with pytest.raises(IntentParserInvalidOutput):
         decode_intent({"intent":"query_context","arguments":{"query_type":"arrival","destination":"","transport_type":None}})
+
+
+PRODUCTION_CONTEXT_CASES = [
+    ("Во сколько поезд в Воронеж?", "departure", "Воронеж", "train"),
+    ("Когда приезжаем в Воронеж?", "arrival", "Воронеж", None),
+    ("Когда обратный поезд?", "return", None, "train"),
+    ("Когда мы возвращаемся из Воронежа?", "return", "Воронеж", None),
+    ("Что известно про поездку в Воронеж?", "overview", "Воронеж", None),
+    ("Какие документы есть на поездку в Воронеж?", "documents", "Воронеж", None),
+]
+
+
+@pytest.mark.parametrize(("text", "query_type", "destination", "transport_type"), PRODUCTION_CONTEXT_CASES)
+def test_production_context_provider_envelopes_decode(text, query_type, destination, transport_type):
+    """Exercise the compact Polza envelope that precedes Context Engine resolution."""
+    arguments = [{"name": "query_type", "value": query_type}]
+    if destination is not None:
+        arguments.append({"name": "destination", "value": destination})
+    if transport_type is not None:
+        arguments.append({"name": "transport_type", "value": transport_type})
+
+    parsed = decode_provider_envelope({"intent": "query_context", "arguments": arguments})
+
+    assert text  # documents which production phrase the controlled fixture represents
+    assert parsed.intent is IntentKind.QUERY_CONTEXT
+    assert parsed.arguments == {
+        "query_type": query_type, "destination": destination, "transport_type": transport_type,
+    }
+
+
+@pytest.mark.parametrize("transport_type", ["train", "plane", "bus", "other"])
+def test_context_provider_transport_vocabulary_is_accepted(transport_type):
+    parsed = decode_provider_envelope({"intent": "query_context", "arguments": [
+        {"name": "query_type", "value": "departure"},
+        {"name": "transport_type", "value": transport_type},
+    ]})
+    assert parsed.arguments["transport_type"] == transport_type
+
+
+def test_production_russian_transport_value_remains_rejected():
+    raw_provider_envelope = {"intent": "query_context", "arguments": [
+        {"name": "query_type", "value": "departure"},
+        {"name": "destination", "value": "Воронеж"},
+        {"name": "transport_type", "value": "поезд"},
+    ]}
+    with pytest.raises(IntentParserInvalidOutput, match="invalid_transport_type"):
+        decode_provider_envelope(raw_provider_envelope)
+
+
+def test_send_ticket_routing_provider_envelope_remains_attachment_retrieval():
+    parsed = decode_provider_envelope({"intent": "query_event_attachments", "arguments": [
+        {"name": "semantic_type", "value": "transport_ticket"},
+        {"name": "destination", "value": "Воронеж"},
+    ]})
+    assert parsed.intent is IntentKind.QUERY_EVENT_ATTACHMENTS
+    assert parsed.arguments["destination"] == "Воронеж"
