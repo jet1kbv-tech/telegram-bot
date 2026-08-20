@@ -13,7 +13,8 @@ from telegram.ext import (
 )
 
 from bot.config import (AI_ATTACHMENT_MAX_BYTES, AI_ATTACHMENT_TIMEOUT_SECONDS,
-                        AI_INTENT_TIMEOUT_SECONDS, NOTIFICATION_CHECK_INTERVAL, TMDB_API_TOKEN)
+                        AI_INTENT_TIMEOUT_SECONDS, NOTIFICATION_CHECK_INTERVAL, TMDB_API_TOKEN,
+                        WEATHER_CACHE_TTL_SECONDS, WEATHER_TIMEOUT_SECONDS)
 from bot.handlers.nl_assistant import configure_nl_assistant, nl_callback_router, nl_clarification_handler, nl_query_callback_router, nl_text_handler
 from bot.services.polza_intent_parser import PolzaIntentParser
 from bot.services.ticket_enrichment import PolzaTicketEnricher
@@ -185,6 +186,7 @@ from bot.ui.common import build_item_text
 from bot.services.tmdb_movie_metadata import TmdbMovieMetadataProvider
 from bot.services.tmdb_candidate_provider import TmdbCandidateProvider
 from bot.services.movie_recommendation_service import MovieRecommendationService
+from bot.services.weather import OpenMeteoWeatherProvider
 
 logger = logging.getLogger(__name__)
 MAIN_MENU_TEXT = "🏠 В меню"
@@ -265,6 +267,8 @@ def build_app() -> Application:
         configure_nl_assistant(
             parser=PolzaIntentParser(api_key=polza_key, model=polza_model, timeout_seconds=AI_INTENT_TIMEOUT_SECONDS),
             notify_calendar=notify_other_user_about_calendar_item,
+            weather_provider=OpenMeteoWeatherProvider(timeout_seconds=WEATHER_TIMEOUT_SECONDS,
+                                                      cache_ttl_seconds=WEATHER_CACHE_TTL_SECONDS),
         )
         logger.info("AI/NL assistant enabled with configured Polza model")
     else:

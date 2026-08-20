@@ -31,6 +31,8 @@ from bot.handlers.nl_attachment_mutations import begin_attachment_mutation
 from bot.services.nl_query_contexts import create_query_context, get_query_context
 from bot.services.queries import choose_random, next_event, query_afisha, query_calendar, query_films, query_purchases
 from bot.services.context_queries import query_context
+from bot.services.weather import WeatherError, WeatherProvider
+from bot.services.weather_context import query_weather_context
 from bot.states import (
     ADDING_CALENDAR_EVENT_TITLE, ADDING_EVENT_TITLE, ADDING_FILM_TITLE, ADDING_PURCHASE_TITLE, AI_CLARIFYING, MENU, SECTION,
 )
@@ -42,13 +44,16 @@ logger = logging.getLogger(__name__)
 
 _parser: IntentParser | None = None
 _notify_calendar: Callable[[ContextTypes.DEFAULT_TYPE, Update, dict[str, Any]], Awaitable[None]] | None = None
+_weather_provider: WeatherProvider | None = None
 
 
 def configure_nl_assistant(*, parser: IntentParser,
-                           notify_calendar: Callable[[ContextTypes.DEFAULT_TYPE, Update, dict[str, Any]], Awaitable[None]]) -> None:
-    global _parser, _notify_calendar
+                           notify_calendar: Callable[[ContextTypes.DEFAULT_TYPE, Update, dict[str, Any]], Awaitable[None]],
+                           weather_provider: WeatherProvider | None = None) -> None:
+    global _parser, _notify_calendar, _weather_provider
     _parser = parser
     _notify_calendar = notify_calendar
+    _weather_provider = weather_provider
 
 
 def _idle_state(context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -313,6 +318,34 @@ async def nl_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                                    **parsed.arguments)
             logger.info("NL context query intent=query_context query_type=%s outcome=%s candidate_count=%s",
                         parsed.arguments["query_type"], result.outcome, result.candidate_count)
+            await response.reply_text(result.text, reply_markup=_menu_keyboard())
+            return _idle_state(context)
+        if parsed.intent is IntentKind.QUERY_WEATHER_CONTEXT:
+            if _weather_provider is None:
+                await response.reply_text("Сейчас не получилось получить прогноз. Попробуй чуть позже.", reply_markup=_menu_keyboard())
+                return _idle_state(context)
+            profile = get_allowed_profile(update) or {}
+            actor_key = str(profile.get("wishlist_owner") or "")
+            expression = parsed.arguments.get("date_expression")
+            explicit_date = None
+            if expression:
+                try:
+                    explicit_date = datetime.strptime(resolve_date_expression(expression, now=now, timezone=BOT_TIMEZONE), "%Y-%m-%d").date()
+                except (DateExpressionError, ValueError):
+                    await response.reply_text("Не смог определить дату для прогноза.", reply_markup=_menu_keyboard())
+                    return _idle_state(context)
+            try:
+                result = await query_weather_context(
+                    storage.load(), actor_key=actor_key, now=now, timezone=BOT_TIMEZONE,
+                    provider=_weather_provider, explicit_date=explicit_date,
+                    **{key: value for key, value in parsed.arguments.items() if key != "date_expression"},
+                )
+            except WeatherError:
+                logger.warning("Weather provider request failed", exc_info=True)
+                await response.reply_text("Сейчас не получилось получить прогноз. Попробуй чуть позже.", reply_markup=_menu_keyboard())
+                return _idle_state(context)
+            logger.info("Weather query scope=%s outcome=%s candidate_count=%s",
+                        parsed.arguments["weather_scope"], result.outcome, result.candidate_count)
             await response.reply_text(result.text, reply_markup=_menu_keyboard())
             return _idle_state(context)
         if parsed.intent is IntentKind.RECOMMEND_FILM:

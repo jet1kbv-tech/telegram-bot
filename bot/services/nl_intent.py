@@ -23,6 +23,7 @@ class IntentKind(str, Enum):
     ATTACH_EVENT_FILE = "attach_event_file"
     QUERY_EVENT_ATTACHMENTS = "query_event_attachments"
     QUERY_CONTEXT = "query_context"
+    QUERY_WEATHER_CONTEXT = "query_weather_context"
     DELETE_EVENT_ATTACHMENT = "delete_event_attachment"
     UPDATE_EVENT_ATTACHMENT = "update_event_attachment"
     QUERY_PURCHASES = "query_purchases"

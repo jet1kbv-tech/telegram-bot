@@ -219,7 +219,7 @@ def test_purchase_unknown_missing_and_wrong_typed_fields_remain_rejected(payload
 def test_schema_discriminates_every_intent_and_matches_decoder_contract():
     schema = INTENT_JSON_SCHEMA["schema"]
     assert set(schema["properties"]["intent"]["enum"]) == {kind.value for kind in IntentKind}
-    assert len(IntentKind) == 24
+    assert len(IntentKind) == 25
     assert set(schema["properties"]) == {"intent", "arguments"}
     assert set(schema["required"]) == set(schema["properties"])
     assert "price_text" not in json.dumps(INTENT_JSON_SCHEMA)
