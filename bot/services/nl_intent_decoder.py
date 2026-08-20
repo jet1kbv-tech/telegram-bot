@@ -133,6 +133,14 @@ _PROVIDER_TECHNICAL_DEFAULTS: dict[IntentKind, dict[str, Any]] = {
     IntentKind.QUERY_WEATHER_CONTEXT: {"include_advice": False},
 }
 
+# Boolean values travel as strings in the compact Polza envelope.  Keep this
+# allow-list intent- and field-scoped so unsupported spellings fail closed and
+# only real bool values cross into the canonical decoder.
+_PROVIDER_BOOLEAN_FIELDS: dict[IntentKind, frozenset[str]] = {
+    IntentKind.QUERY_EVENT_ATTACHMENTS: frozenset({"return_all"}),
+    IntentKind.QUERY_WEATHER_CONTEXT: frozenset({"include_advice"}),
+}
+
 
 def decode_intent(raw: str | dict[str, Any]) -> ParsedIntent:
     """Strictly decode the canonical nested ``{intent, arguments}`` contract."""
@@ -393,6 +401,8 @@ def normalize_provider_envelope(raw: str | dict[str, Any]) -> dict[str, Any]:
         if not isinstance(raw_value, str):
             raise IntentParserInvalidOutput("invalid_argument_entry")
         raw_value = raw_value.strip()
+        if not raw_value and name in _PROVIDER_BOOLEAN_FIELDS.get(kind, frozenset()):
+            raise IntentParserInvalidOutput(f"invalid_{name}")
         if not raw_value or len(raw_value) > 1000:
             raise IntentParserInvalidOutput(f"invalid_provider_{name}")
         supplied[name] = raw_value
@@ -417,6 +427,12 @@ def normalize_provider_envelope(raw: str | dict[str, Any]) -> dict[str, Any]:
     for name, default in _PROVIDER_TECHNICAL_DEFAULTS.get(kind, {}).items():
         if name not in supplied:
             arguments[name] = default
+    for name in _PROVIDER_BOOLEAN_FIELDS.get(kind, frozenset()):
+        if name not in supplied:
+            continue
+        if supplied[name] not in {"true", "false"}:
+            raise IntentParserInvalidOutput(f"invalid_{name}")
+        arguments[name] = supplied[name] == "true"
     if kind is IntentKind.RECOMMEND_FILM:
         for name in ("include_genres", "exclude_genres"):
             raw_genres = supplied.get(name, "")
@@ -448,10 +464,6 @@ def normalize_provider_envelope(raw: str | dict[str, Any]) -> dict[str, Any]:
         numeric = re.sub(r"[ _\u00a0]", "", match.group(0))
         numeric = re.sub(r"\s*(?:₽|руб\.?|рублей)$", "", numeric, flags=re.IGNORECASE)
         arguments["price"] = int(numeric)
-    if kind is IntentKind.QUERY_EVENT_ATTACHMENTS and "return_all" in supplied:
-        if supplied["return_all"].casefold() not in {"true", "false"}:
-            raise IntentParserInvalidOutput("invalid_return_all")
-        arguments["return_all"] = supplied["return_all"].casefold() == "true"
     # Unsupported is non-mutating.  Collapsing an unfamiliar taxonomy label to
     # the canonical catch-all cannot authorize an action and avoids coupling the
     # provider's wording to internal UI categories.

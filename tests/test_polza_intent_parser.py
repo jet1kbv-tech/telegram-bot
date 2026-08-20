@@ -239,6 +239,94 @@ def test_decodes_attachment_retrieval_contract():
         "date": None, "person": None, "direction": "return", "return_all": True}
 
 
+@pytest.mark.parametrize(("user_text", "arguments", "expected_advice"), [
+    ("Какая погода будет в Воронеже 31 августа?", [
+        {"name": "weather_scope", "value": "date"},
+        {"name": "location", "value": "Воронеж"},
+        {"name": "date_expression", "value": "31 августа"},
+        {"name": "include_advice", "value": "false"},
+    ], False),
+    ("Какая погода будет когда мы приедем в Воронеж?", [
+        {"name": "weather_scope", "value": "arrival"},
+        {"name": "target", "value": "Воронеж"},
+        {"name": "location", "value": "Воронеж"},
+        {"name": "include_advice", "value": "false"},
+    ], False),
+    ("Какая погода на поездку в Воронеж?", [
+        {"name": "weather_scope", "value": "trip"},
+        {"name": "target", "value": "Воронеж"},
+        {"name": "location", "value": "Воронеж"},
+        {"name": "include_advice", "value": "false"},
+    ], False),
+    ("Какая погода будет на пикнике?", [
+        {"name": "weather_scope", "value": "event"},
+        {"name": "target", "value": "пикнике"},
+        {"name": "include_advice", "value": "false"},
+    ], False),
+    ("Нужен ли зонт на пикник?", [
+        {"name": "weather_scope", "value": "event"},
+        {"name": "target", "value": "пикник"},
+        {"name": "include_advice", "value": "true"},
+    ], True),
+])
+def test_production_weather_envelopes_normalize_wire_boolean(user_text, arguments, expected_advice):
+    parsed = decode_provider_envelope({
+        "intent": "query_weather_context", "arguments": arguments,
+    })
+
+    assert parsed.intent is IntentKind.QUERY_WEATHER_CONTEXT, user_text
+    assert parsed.arguments["include_advice"] is expected_advice
+
+
+def test_omitted_weather_advice_uses_canonical_false_default():
+    parsed = decode_provider_envelope({
+        "intent": "query_weather_context",
+        "arguments": [{"name": "weather_scope", "value": "current"}],
+    })
+
+    assert parsed.arguments["include_advice"] is False
+
+
+@pytest.mark.parametrize("value", ["да", "нет", "yes", "no", "1", "0", "maybe", "", "TRUE", "False"])
+def test_provider_boolean_values_fail_closed(value):
+    payload = {
+        "intent": "query_weather_context",
+        "arguments": [
+            {"name": "weather_scope", "value": "current"},
+            {"name": "include_advice", "value": value},
+        ],
+    }
+
+    with pytest.raises(IntentParserInvalidOutput, match="invalid_include_advice"):
+        decode_provider_envelope(payload)
+
+
+@pytest.mark.parametrize(("value", "expected"), [("true", True), ("false", False)])
+def test_attachment_return_all_uses_shared_provider_boolean_normalization(value, expected):
+    parsed = decode_provider_envelope({
+        "intent": "query_event_attachments",
+        "arguments": [{"name": "return_all", "value": value}],
+    })
+
+    assert parsed.arguments["return_all"] is expected
+
+
+@pytest.mark.parametrize(("user_text", "intent", "arguments"), [
+    ("Когда приезжаем в Воронеж?", "query_context", [
+        {"name": "query_type", "value": "arrival"},
+        {"name": "destination", "value": "Воронеж"},
+    ]),
+    ("Пришли билет в Воронеж", "query_event_attachments", [
+        {"name": "semantic_type", "value": "transport_ticket"},
+        {"name": "destination", "value": "Воронеж"},
+    ]),
+])
+def test_weather_boundary_fix_preserves_neighboring_routes(user_text, intent, arguments):
+    parsed = decode_provider_envelope({"intent": intent, "arguments": arguments})
+
+    assert parsed.intent.value == intent, user_text
+
+
 def test_gpt4o_provider_schema_has_supported_root_and_no_discriminator_oneof_or_const():
     """Regression for Polza/GPT-4o's rejection of the former root oneOf schema."""
     schema = INTENT_JSON_SCHEMA["schema"]
@@ -250,6 +338,15 @@ def test_gpt4o_provider_schema_has_supported_root_and_no_discriminator_oneof_or_
     assert '"const"' not in serialized
     assert schema["properties"]["arguments"]["type"] == "array"
     assert '"anyOf"' not in serialized
+
+
+def test_prompt_and_schema_define_bounded_string_boolean_wire_values():
+    value_schema = INTENT_JSON_SCHEMA["schema"]["properties"]["arguments"]["items"]["properties"]["value"]
+
+    assert value_schema["type"] == "string"
+    assert 'только строками "true" или "false" в нижнем регистре' in SYSTEM_PROMPT
+    assert 'include_advice="false"' in SYSTEM_PROMPT
+    assert 'include_advice="true"' in SYSTEM_PROMPT
 
 
 def test_exact_production_response_format_matches_golden_file():
