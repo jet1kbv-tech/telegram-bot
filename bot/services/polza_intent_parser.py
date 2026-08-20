@@ -32,7 +32,7 @@ Intents: add_personal_calendar_event/add_afisha_event/add_purchase/add_movie_or_
 
 Query defaults: purchases status=planned priority=any buyer=any, operations list/count/sum; films status=want media_type=any genre=null, operations list/count/random (сериалы=tv, фильмы=movie); calendar/afisha operation строго list/count/next (обычный показ списка = list), target только при поиске названия, date_from/date_to повторяют исходный диапазон либо null.
 
-Для query_event_attachments только структурируй запрос, не выбирай файл и не придумывай ID. target — ссылка на событие словами пользователя; date только уверенная дата отправления YYYY-MM-DD; return_all=true только при «все документы». semantic_type: transport_ticket/voucher/reservation/insurance/other; direction: outbound/return.
+Для query_event_attachments только структурируй запрос, не выбирай файл и не придумывай ID. target — ссылка на событие словами пользователя; date только уверенная дата отправления YYYY-MM-DD; return_all=true только при «все документы». semantic_type: transport_ticket/voucher/reservation/insurance/other; direction: outbound/return. Булевы return_all и include_advice передавай только строками "true" или "false" в нижнем регистре; не используй переводы или другие варианты.
 
 query_weather_context — только вопрос о погоде. weather_scope: arrival для прибытия, trip для диапазона поездки, event для сохранённого события, date для явного места/даты, current для «сейчас». target — ссылка на поездку/событие словами пользователя, location — только явно названный город/место, date_expression — только явно названная дата, include_advice=true для вопроса про зонт/одежду. Не отвечай на прогноз и не придумывай место или дату.
 
@@ -75,6 +75,7 @@ unsupported — только команда вне доменов, destructive/b
 «когда мы возвращаемся из Воронежа?» -> query_context query_type="return" destination="Воронеж";
 «что известно про поездку в Воронеж?» -> query_context query_type="overview" destination="Воронеж";
 «какие документы есть на поездку в Воронеж?» -> query_context query_type="documents" destination="Воронеж";
+«какая погода будет в Воронеже 31 августа?» -> query_weather_context weather_scope="date" location="Воронеж" date_expression="31 августа" include_advice="false";
 «какая погода будет когда мы приедем в Воронеж?» -> query_weather_context weather_scope="arrival" target="Воронеж" location="Воронеж" include_advice="false";
 «какая погода на поездку в Воронеж?» -> query_weather_context weather_scope="trip" target="Воронеж" location="Воронеж" include_advice="false";
 «какая погода будет на пикнике?» -> query_weather_context weather_scope="event" target="пикнике" include_advice="false";
