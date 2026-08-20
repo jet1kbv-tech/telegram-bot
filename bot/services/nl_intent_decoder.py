@@ -68,6 +68,10 @@ _FIELDS: dict[IntentKind, dict[str, tuple[type, ...]]] = {
         "query_type": (str,), "destination": (str, type(None)),
         "transport_type": (str, type(None)),
     },
+    IntentKind.QUERY_WEATHER_CONTEXT: {
+        "weather_scope": (str,), "target": (str, type(None)), "location": (str, type(None)),
+        "date_expression": (str, type(None)), "include_advice": (bool,),
+    },
     IntentKind.DELETE_EVENT_ATTACHMENT: {
         "target": (str, type(None)), "semantic_type": (str, type(None)), "transport_type": (str, type(None)),
         "origin": (str, type(None)), "destination": (str, type(None)), "date": (str, type(None)),
@@ -126,6 +130,7 @@ _PROVIDER_TECHNICAL_DEFAULTS: dict[IntentKind, dict[str, Any]] = {
     IntentKind.QUERY_CALENDAR: {"operation": "list"},
     IntentKind.QUERY_AFISHA: {"operation": "list"},
     IntentKind.QUERY_EVENT_ATTACHMENTS: {"return_all": False},
+    IntentKind.QUERY_WEATHER_CONTEXT: {"include_advice": False},
 }
 
 
@@ -206,6 +211,8 @@ def decode_intent(raw: str | dict[str, Any]) -> ParsedIntent:
             raise IntentParserInvalidOutput("invalid_transport_type")
         if arguments["destination"] is not None and not arguments["destination"]:
             raise IntentParserInvalidOutput("empty_destination")
+    if kind is IntentKind.QUERY_WEATHER_CONTEXT and arguments["weather_scope"] not in {"date", "arrival", "trip", "event", "current"}:
+        raise IntentParserInvalidOutput("invalid_weather_scope")
     if kind is IntentKind.UNSUPPORTED and arguments["category"] not in _UNSUPPORTED:
         raise IntentParserInvalidOutput("invalid_category")
     if kind is IntentKind.ATTACH_EVENT_FILE:
@@ -295,6 +302,11 @@ _BRANCH_PROPERTIES: dict[IntentKind, dict[str, Any]] = {
         "query_type": {"type": "string", "enum": ["departure", "arrival", "return", "documents", "overview"]},
         "destination": {"type": ["string", "null"]},
         "transport_type": {"type": ["string", "null"], "enum": [*TRANSPORT_TYPES, None]},
+    },
+    IntentKind.QUERY_WEATHER_CONTEXT: {
+        "weather_scope": {"type": "string", "enum": ["date", "arrival", "trip", "event", "current"]},
+        "target": {"type": ["string", "null"]}, "location": {"type": ["string", "null"]},
+        "date_expression": {"type": ["string", "null"]}, "include_advice": {"type": "boolean"},
     },
     IntentKind.QUERY_PURCHASES: {"status": {"type": "string", "enum": ["planned", "bought", "any"]}, "priority": {"type": "string", "enum": ["high", "medium", "low", "any"]}, "buyer": {"type": "string", "enum": ["current_user", "other_user", "unassigned", "any"]}, "operation": {"type": "string", "enum": ["list", "count", "sum"]}},
     IntentKind.QUERY_FILMS: {"status": {"type": "string", "enum": ["want", "watched", "any"]}, "media_type": {"type": "string", "enum": ["movie", "tv", "any"]}, "genre": {"type": ["string", "null"]}, "operation": {"type": "string", "enum": ["list", "count", "random"]}},
