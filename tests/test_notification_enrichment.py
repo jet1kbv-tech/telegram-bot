@@ -3,7 +3,8 @@ from datetime import date, datetime
 from unittest.mock import AsyncMock
 
 from bot import runtime
-from bot.services.notification_enrichment import build_notification_context, render_notification_enrichment
+from bot.services.context_engine import EventContext, TripContext
+from bot.services.notification_enrichment import _linked_trip, build_notification_context, render_notification_enrichment
 from bot.services.weather import WeatherDay, WeatherForecast, WeatherMalformedResponse, WeatherTimeout
 from bot.storage import JsonStorage
 
@@ -47,6 +48,17 @@ def ticket(parent_type="afisha", parent_id="a"):
             "telegram_media_type": "document", "telegram_file_id": "opaque-file"}
 
 
+def trip(trip_id, *, departure, arrival):
+    return TripContext(trip_id, "Destination", "destination", None, "Origin",
+        datetime.combine(departure, datetime.min.time()), datetime.combine(arrival, datetime.min.time()),
+        departure, None, arrival, None, ("event",), (trip_id,), (), "strong", (), "vova")
+
+
+def linked_event(day=date(2026, 8, 31)):
+    return EventContext("event", "afisha", "afisha", "a", "Event", day, None, None, None,
+                        "shared", True, None)
+
+
 def build(data, provider, actor="vova"):
     return run(build_notification_context(data, event_id="a", actor_key=actor, now=NOW,
                                            timezone="Europe/Moscow", weather_provider=provider))
@@ -79,6 +91,47 @@ def test_voronezh_trip_uses_arrival_day_and_renders_bounded_travel_block():
     assert "Прибытие: 31 августа · 09:33" in text
     assert "🌦 Воронеж · 31 августа" in text
     assert "Лучше взять зонт." in text
+
+
+def test_notification_trip_selection_precedence_and_ambiguity():
+    event = linked_event()
+    exact = trip("exact", departure=date(2026, 8, 30), arrival=event.date)
+    future_return = trip("return", departure=date(2026, 9, 6), arrival=date(2026, 9, 7))
+    assert _linked_trip(event, (future_return, exact)) == exact
+    assert _linked_trip(event, (exact, trip("also-exact", departure=event.date, arrival=event.date))) is None
+
+    closest = trip("closest", departure=date(2026, 8, 29), arrival=date(2026, 8, 30))
+    older = trip("older", departure=date(2026, 8, 27), arrival=date(2026, 8, 28))
+    assert _linked_trip(event, (older, closest)) == closest
+    assert _linked_trip(event, (closest, trip("tie", departure=date(2026, 8, 30),
+                                              arrival=date(2026, 8, 30)))) is None
+
+    departure = trip("departure", departure=event.date, arrival=date(2026, 9, 1))
+    irrelevant = trip("irrelevant", departure=date(2026, 8, 20), arrival=date(2026, 8, 21))
+    assert _linked_trip(event, (irrelevant, departure)) == departure
+    assert _linked_trip(event, (irrelevant, future_return)) is None
+    assert _linked_trip(event, (irrelevant,)) == irrelevant
+
+
+def test_production_sanatorium_selects_outbound_voronezh_trip_only():
+    outbound = ticket()
+    outbound["id"] = "outbound"
+    returning = {**ticket(), "id": "return", "origin": "Старый Оскол",
+                 "destination": "Москва ВК Восточный", "date": "2026-09-06",
+                 "departure_time": "21:18", "arrival_date": "2026-09-07", "arrival_time": "09:02"}
+    provider = Provider(location="Воронеж")
+    data = snapshot(event_date="2026-08-31", attachments=[outbound, returning])
+    data["afisha"][0]["title"] = "Санаторий"
+    result = build(data, provider)
+    text = render_notification_enrichment(result)
+
+    assert result.trip_context is not None
+    assert result.trip_context.linked_attachment_ids == ("outbound",)
+    assert provider.calls == [("Воронеж", date(2026, 8, 31), date(2026, 8, 31))]
+    assert "🚆 Отправление: 30 августа · 23:38" in text
+    assert "Прибытие: 31 августа · 09:33" in text
+    assert "🌦 Воронеж · 31 августа" in text
+    assert "Москва" not in text and "6 сентября" not in text
 
 
 def test_horizon_is_rejected_before_provider_call_and_context_missing_is_empty():

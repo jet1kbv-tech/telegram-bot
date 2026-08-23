@@ -31,7 +31,22 @@ def _stamp(day: date | None, clock: time | None) -> datetime | None:
 
 def _linked_trip(event: EventContext, trips: tuple[TripContext, ...]) -> TripContext | None:
     linked = tuple(trip for trip in trips if event.context_id in trip.linked_event_ids)
-    return linked[0] if len(linked) == 1 else None
+    if len(linked) == 1:
+        return linked[0]
+
+    exact_arrivals = tuple(trip for trip in linked if trip.arrival_date == event.date)
+    if exact_arrivals:
+        return exact_arrivals[0] if len(exact_arrivals) == 1 else None
+
+    recent_arrivals = tuple(trip for trip in linked if trip.arrival_date is not None
+                            and timedelta(0) <= event.date - trip.arrival_date <= timedelta(days=3))
+    if recent_arrivals:
+        closest_date = max(trip.arrival_date for trip in recent_arrivals if trip.arrival_date is not None)
+        closest = tuple(trip for trip in recent_arrivals if trip.arrival_date == closest_date)
+        return closest[0] if len(closest) == 1 else None
+
+    exact_departures = tuple(trip for trip in linked if trip.departure_date == event.date)
+    return exact_departures[0] if len(exact_departures) == 1 else None
 
 
 async def build_notification_context(

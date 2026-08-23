@@ -96,6 +96,22 @@ def test_return_route_groups_structurally_and_sets_end_and_direction():
     assert "opposite_transport_route" in trip.match_reasons
 
 
+def test_production_sanatorium_routes_remain_two_independent_trips():
+    shared = event("a", "Санаторий", "2026-08-31")
+    outbound = attachment("out", "afisha", "a", origin="Москва Казанская",
+        destination="Придача Воронеж Южный", date="2026-08-30", departure_time="23:38",
+        arrival_date="2026-08-31", arrival_time="09:33")
+    returning = attachment("back", "afisha", "a", origin="Старый Оскол",
+        destination="Москва ВК Восточный", date="2026-09-06", departure_time="21:18",
+        arrival_date="2026-09-07", arrival_time="09:02")
+
+    bundle = build_context_bundle(data(afisha=[shared], attachments=[outbound, returning]),
+                                  "vova", NOW, "Europe/Moscow")
+
+    assert [trip.linked_attachment_ids for trip in bundle.trips] == [("out",), ("back",)]
+    assert all(trip.linked_event_ids == (bundle.events[0].context_id,) for trip in bundle.trips)
+
+
 def test_same_city_months_apart_and_unrelated_destinations_are_separate_and_ordered():
     shared = event("a", "Trips", "2026-08-30")
     docs = [attachment("dec", "afisha", "a", origin="Москва", destination="Воронеж", date="2026-12-01"),
