@@ -134,7 +134,6 @@ def build_calendar_event_text(item: dict[str, Any]) -> str:
 def calendar_event_keyboard(owner: str, item_id: str, page: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("📎 Документы", callback_data=f"att|cal|{owner}|{item_id}|{page}")],
             [InlineKeyboardButton("✏️ Редактировать", callback_data=f"cal_edit|{owner}|{item_id}|{page}")],
             [InlineKeyboardButton("🗑️ Удалить", callback_data=f"cal_delete_confirm|{owner}|{item_id}|{page}")],
             [InlineKeyboardButton("⬅️ К списку", callback_data=f"cal_list|{owner}|{page}")],
@@ -146,7 +145,6 @@ def calendar_event_keyboard(owner: str, item_id: str, page: int) -> InlineKeyboa
 def calendar_event_readonly_keyboard(owner: str, source_id: str, page: int) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     if source_id:
-        rows.append([InlineKeyboardButton("📎 Документы", callback_data=f"att|afi|{source_id}|0")])
         rows.append([InlineKeyboardButton("🗓 Открыть в Афише", callback_data=f"view|afisha|{source_id}|0")])
     rows.append([InlineKeyboardButton("⬅️ К списку", callback_data=f"cal_list|{owner}|{page}")])
     rows.append([InlineKeyboardButton("🏠 В меню", callback_data="menu:main")])
@@ -164,10 +162,20 @@ def calendar_edit_menu_keyboard(owner: str, item_id: str, page: int) -> InlineKe
     )
 
 
-def calendar_event_keyboard_for_item(owner: str, item: dict[str, Any], page: int) -> InlineKeyboardMarkup:
+def calendar_event_keyboard_for_item(owner: str, item: dict[str, Any], page: int,
+                                     actor_key: str | None = None, data: dict[str, Any] | None = None) -> InlineKeyboardMarkup:
     if item.get("source") == "afisha":
-        return calendar_event_readonly_keyboard(owner, str(item.get("source_id") or ""), page)
-    return calendar_event_keyboard(owner, str(item.get("id") or ""), page)
+        base = calendar_event_readonly_keyboard(owner, str(item.get("source_id") or ""), page)
+        parent_type, parent_id = "afisha", str(item.get("source_id") or "")
+    else:
+        base = calendar_event_keyboard(owner, str(item.get("id") or ""), page)
+        parent_type, parent_id = "calendar", str(item.get("id") or "")
+    if not actor_key or actor_key != owner:
+        return base
+    from bot.handlers.contextual_actions import contextual_action_rows
+    assistant = contextual_action_rows(data or storage.load(), actor_key=actor_key,
+        parent_type=parent_type, parent_id=parent_id, page=page)
+    return InlineKeyboardMarkup(assistant + list(base.inline_keyboard))
 
 
 def calendar_event_delete_confirm_keyboard(owner: str, item_id: str, page: int) -> InlineKeyboardMarkup:
@@ -213,7 +221,9 @@ async def show_calendar_owner_item(update: Update, owner: str, item_id: str, pag
     text = build_calendar_event_text(item)
     if item.get("source") == "afisha":
         text += "\n\nЭто событие из Афиши и доступно только для чтения в Календаре."
-    await safe_edit_message(query, text, reply_markup=calendar_event_keyboard_for_item(owner, item, page))
+    from bot.utils import get_wishlist_owner_by_user
+    actor_key = get_wishlist_owner_by_user(update)
+    await safe_edit_message(query, text, reply_markup=calendar_event_keyboard_for_item(owner, item, page, actor_key, data))
     return SECTION
 
 

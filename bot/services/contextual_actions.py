@@ -1,0 +1,107 @@
+"""Read-only resolution and rendering for explicit event assistant actions."""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+
+from bot.services.context_engine import (
+    ContextBundle,
+    EventContext,
+    TripContext,
+    build_context_bundle,
+    documents_for_context,
+    find_event_context,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class EventActionContext:
+    bundle: ContextBundle
+    event: EventContext
+    trip: TripContext | None
+    document_count: int
+
+
+def select_event_trip(event: EventContext, trips: tuple[TripContext, ...]) -> TripContext | None:
+    """Conservatively select one linked segment using notification semantics."""
+    linked = tuple(trip for trip in trips if event.context_id in trip.linked_event_ids)
+    exact_arrivals = tuple(trip for trip in linked if trip.arrival_date == event.date)
+    if exact_arrivals:
+        return exact_arrivals[0] if len(exact_arrivals) == 1 else None
+    recent = tuple(trip for trip in linked if trip.arrival_date is not None
+                   and timedelta(0) <= event.date - trip.arrival_date <= timedelta(days=3))
+    if recent:
+        closest_day = max(trip.arrival_date for trip in recent if trip.arrival_date is not None)
+        closest = tuple(trip for trip in recent if trip.arrival_date == closest_day)
+        return closest[0] if len(closest) == 1 else None
+    exact_departures = tuple(trip for trip in linked if trip.departure_date == event.date)
+    if exact_departures:
+        return exact_departures[0] if len(exact_departures) == 1 else None
+    return linked[0] if len(linked) == 1 else None
+
+
+def resolve_event_action_context(data: dict, *, actor_key: str, parent_type: str,
+                                 parent_id: str, now: datetime, timezone: str) -> EventActionContext | None:
+    bundle = build_context_bundle(data, actor_key, now, timezone, include_past=True)
+    event = find_event_context(bundle, parent_type, parent_id)
+    if event is None:
+        return None
+    documents = documents_for_context(bundle, event)
+    return EventActionContext(bundle, event, select_event_trip(event, bundle.trips), len(documents))
+
+
+def visible_actions(value: EventActionContext) -> tuple[str, ...]:
+    # Weather Context explicitly permits Moscow fallback for a stored event.
+    actions = ["weather"]
+    if value.document_count:
+        actions.append("docs")
+    if value.trip is not None:
+        actions.append("trip")
+    actions.append("overview")
+    return tuple(actions)
+
+
+_MONTHS = ("", "января", "февраля", "марта", "апреля", "мая", "июня", "июля",
+           "августа", "сентября", "октября", "ноября", "декабря")
+
+
+def _day(value) -> str:
+    return f"{value.day} {_MONTHS[value.month]}"
+
+
+def render_trip(trip: TripContext) -> str:
+    lines = ["🚆 Поездка", ""]
+    if trip.departure_date:
+        moment = _day(trip.departure_date)
+        if trip.departure_time:
+            moment += f" · {trip.departure_time:%H:%M}"
+        lines += ["Туда:", moment]
+        if trip.origin and trip.destination:
+            lines.append(f"{trip.origin} → {trip.destination}")
+    if trip.arrival_date:
+        moment = _day(trip.arrival_date)
+        if trip.arrival_time:
+            moment += f" · {trip.arrival_time:%H:%M}"
+        lines += ["", "Прибытие:", moment]
+    return "\n".join(lines)
+
+
+def render_overview(value: EventActionContext) -> str:
+    event, trip = value.event, value.trip
+    when = _day(event.date)
+    if event.start_time:
+        when += f" · {event.start_time:%H:%M}"
+    lines = ["🗓 Что известно", "", f"Когда: {when}"]
+    if event.location_text:
+        lines.append(f"Где: {event.location_text}")
+    if trip:
+        route = " → ".join(part for part in (trip.origin, trip.destination) if part)
+        if route:
+            lines.append(f"Поездка: {route}")
+        if trip.arrival_date:
+            arrival = _day(trip.arrival_date)
+            if trip.arrival_time:
+                arrival += f" · {trip.arrival_time:%H:%M}"
+            lines.append(f"Прибытие: {arrival}")
+    lines.append(f"Документы: {value.document_count}")
+    return "\n".join(lines)
