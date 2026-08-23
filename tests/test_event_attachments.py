@@ -93,11 +93,11 @@ def _labels(markup):
     return [button.text for row in markup.inline_keyboard for button in row]
 
 
-def test_documents_button_visible_on_event_cards_and_projection():
-    assert "📎 Документы" in _labels(calendar_event_keyboard("vova", "cal1", 0))
-    assert "📎 Документы" in _labels(calendar_event_readonly_keyboard("vova", "afi1", 0))
+def test_documents_button_is_not_unconditionally_visible_on_event_cards():
+    assert "📎 Документы" not in _labels(calendar_event_keyboard("vova", "cal1", 0))
+    assert "📎 Документы" not in _labels(calendar_event_readonly_keyboard("vova", "afi1", 0))
     afisha = {"id": "afi1", "status": "active"}
-    assert "📎 Документы" in _labels(item_keyboard("afisha", afisha, 0))
+    assert "📎 Документы" not in _labels(item_keyboard("afisha", afisha, 0))
     assert "🎟 Билеты" not in _labels(item_keyboard("afisha", afisha, 0))
     assert not any(button.callback_data.startswith("tickets:") for row in item_keyboard("afisha", afisha, 0).inline_keyboard for button in row)
 

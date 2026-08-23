@@ -230,8 +230,11 @@ def item_keyboard(
         delete_confirm_callback = f"delete_confirm|{section}|{item_id}|{page}"
 
     documents_row = []
-    if section == "afisha":
-        documents_row = [[InlineKeyboardButton("📎 Документы", callback_data=f"att|afi|{item_id}|{page}")]]
+    if section == "afisha" and actor_key:
+        from bot.handlers.contextual_actions import contextual_action_rows
+        from bot.storage import storage
+        documents_row = contextual_action_rows(storage.load(), actor_key=actor_key,
+            parent_type="afisha", parent_id=str(item_id), page=page)
 
     back_callback = build_back_to_list_callback(section, page, owner, status_filter)
 
