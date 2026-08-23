@@ -176,6 +176,7 @@ from bot.states import (
 from bot.keyboards.common import item_keyboard, main_menu_keyboard
 from bot.runtime import (
     check_afisha_notifications,
+    configure_notification_enrichment,
     menu_router,
     notify_other_user_about_calendar_item,
     notify_other_user_about_wishlist_item,
@@ -263,12 +264,14 @@ def build_app() -> Application:
     else:
         logger.info("Ticket enrichment enabled with configured attachment model")
     nl_enabled = bool(polza_key and polza_model)
+    weather_provider = OpenMeteoWeatherProvider(timeout_seconds=WEATHER_TIMEOUT_SECONDS,
+                                                cache_ttl_seconds=WEATHER_CACHE_TTL_SECONDS)
+    configure_notification_enrichment(weather_provider)
     if nl_enabled:
         configure_nl_assistant(
             parser=PolzaIntentParser(api_key=polza_key, model=polza_model, timeout_seconds=AI_INTENT_TIMEOUT_SECONDS),
             notify_calendar=notify_other_user_about_calendar_item,
-            weather_provider=OpenMeteoWeatherProvider(timeout_seconds=WEATHER_TIMEOUT_SECONDS,
-                                                      cache_ttl_seconds=WEATHER_CACHE_TTL_SECONDS),
+            weather_provider=weather_provider,
         )
         logger.info("AI/NL assistant enabled with configured Polza model")
     else:
