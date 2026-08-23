@@ -30,12 +30,15 @@ from bot.config import (
     AFISHA_MORNING_START_HOUR,
     ALLOWED_USERS,
     BACKLOG_STATUSES,
+    BOT_TIMEZONE,
     FILM_STATUSES,
     NOTIFICATION_CHECK_INTERVAL,
     NOTIFY_LOOKAHEAD_MAX,
     NOTIFY_LOOKAHEAD_MIN,
     SECTION_CONFIG,
 )
+from bot.services.notification_enrichment import build_notification_context, render_notification_enrichment
+from bot.services.weather import WeatherProvider
 from bot.handlers.backlog import add_backlog_description, add_backlog_title, configure_backlog_handlers
 from bot.handlers.common import back_to_main, cancel, configure_common_handlers, noop, start, whoami
 from bot.handlers.films import (
@@ -156,6 +159,34 @@ from bot.keyboards.common import (
     wishlist_owner_keyboard,
 )
 from bot.ui.common import build_item_text, build_list_text
+
+_notification_weather_provider: WeatherProvider | None = None
+
+
+def configure_notification_enrichment(weather_provider: WeatherProvider) -> None:
+    """Install the shared cached provider used at the existing send boundary."""
+    global _notification_weather_provider
+    _notification_weather_provider = weather_provider
+
+
+async def _enrich_afisha_reminder(core_text: str, data: dict[str, Any], event: dict[str, Any],
+                                  actor_key: str, now: datetime) -> str:
+    if _notification_weather_provider is None:
+        return core_text
+    try:
+        enrichment = await build_notification_context(data, event_id=str(event.get("id") or ""),
+            actor_key=actor_key, now=now, timezone=BOT_TIMEZONE,
+            weather_provider=_notification_weather_provider)
+        suffix = render_notification_enrichment(enrichment)
+        logger.info("notification_enrichment event_resolved=%s trip_linked=%s weather_attempted=%s included=%s",
+            enrichment.event_context is not None, enrichment.trip_context is not None,
+            enrichment.weather_attempted, bool(suffix))
+        if "weather_failed" in enrichment.enrichment_reasons:
+            logger.warning("notification_enrichment weather_failed=true core_preserved=true")
+        return f"{core_text}\n\n{suffix}" if suffix else core_text
+    except Exception:
+        logger.warning("notification_enrichment failed=true core_preserved=true", exc_info=True)
+        return core_text
 
 async def safe_edit_message(query, text: str, reply_markup: InlineKeyboardMarkup | None = None) -> None:
     try:
@@ -420,6 +451,8 @@ async def check_afisha_notifications(context: ContextTypes.DEFAULT_TYPE) -> None
                     text += f"\nГде: {event['place']}"
                 if event.get("link"):
                     text += f"\nСсылка: {event['link']}"
+                text = await _enrich_afisha_reminder(text, data, event,
+                    str(profile.get("wishlist_owner") or ""), now)
                 try:
                     await context.bot.send_message(chat_id=chat_id, text=text)
                 except TelegramError:
@@ -454,6 +487,8 @@ async def check_afisha_notifications(context: ContextTypes.DEFAULT_TYPE) -> None
                 text += f"\nГде: {event['place']}"
             if event.get("link"):
                 text += f"\nСсылка: {event['link']}"
+            text = await _enrich_afisha_reminder(text, data, event,
+                str(profile.get("wishlist_owner") or ""), now)
             try:
                 await context.bot.send_message(chat_id=chat_id, text=text)
             except TelegramError:
