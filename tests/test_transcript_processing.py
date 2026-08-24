@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from datetime import datetime
 from pathlib import Path
 import zipfile
@@ -49,6 +50,43 @@ def test_cleanup_validation_rejects_missing_extra_identity_and_timestamp():
             validate_cleaned([turn], invalid)
 
 
+@pytest.mark.parametrize(("original", "cleaned"), [
+    ("ну я думаю что да", "Ну, я думаю, что да."),
+    ("привет Мир", "Привет Мир"),
+    ("это основные стрик холдеры проекта", "Это основные стейкхолдеры проекта."),
+])
+def test_cleanup_preservation_accepts_proofreading_and_obvious_asr_correction(original, cleaned):
+    turn = TranscriptTurn(1, "Спикер 1", 0, 1, "00:00:00", original)
+    payload = {"segments": [{"id": 1, "speaker": "Спикер 1", "timestamp": "00:00:00", "text": cleaned}]}
+    assert validate_cleaned([turn], payload)[0].text == cleaned
+
+
+@pytest.mark.parametrize(("original", "cleaned"), [
+    ("ну я вообще не думаю что это проблема", "я не думаю, что это проблема"),
+    ("я я думаю что да", "Я думаю, что да."),
+    ("мы должны очень быстро закончить эту важную задачу сегодня",
+     "Нужно завершить важную задачу."),
+    ("мы должны быстро закончить эту важную задачу",
+     "Нужно оперативно завершить важную задачу."),
+])
+def test_cleanup_preservation_rejects_deletion_shortening_and_paraphrase(original, cleaned):
+    turn = TranscriptTurn(1, "Спикер 1", 0, 1, "00:00:00", original)
+    payload = {"segments": [{"id": 1, "speaker": "Спикер 1", "timestamp": "00:00:00", "text": cleaned}]}
+    assert validate_cleaned([turn], payload) == [turn]
+
+
+def test_rejected_segment_falls_back_without_discarding_accepted_sibling():
+    turns = [TranscriptTurn(1, "Спикер 1", 0, 1, "00:00:00", "ну это верно"),
+             TranscriptTurn(2, "Спикер 1", 1, 2, "00:00:01", "это тоже верно")]
+    payload = {"segments": [
+        {"id": 1, "speaker": "Спикер 1", "timestamp": "00:00:00", "text": "Это верно."},
+        {"id": 2, "speaker": "Спикер 1", "timestamp": "00:00:01", "text": "Это тоже верно."},
+    ]}
+    result = validate_cleaned(turns, payload)
+    assert result[0].text == "ну это верно"
+    assert result[1].text == "Это тоже верно."
+
+
 async def test_partial_and_total_cleanup_fallback():
     turns = [TranscriptTurn(i, "Спикер 1", i, i + 1, f"00:00:{i:02d}", f"raw {i}") for i in range(1, 4)]
     calls = 0
@@ -64,6 +102,30 @@ async def test_partial_and_total_cleanup_fallback():
         raise ValueError
     result, outcome = await cleanup_best_effort(turns, failed, max_chars=110)
     assert outcome == "failed" and result == turns
+
+
+async def test_long_multichunk_cleanup_is_bounded_deterministic_and_survives_outage(tmp_path: Path, caplog):
+    turns = [TranscriptTurn(i, "Спикер 1", i, i + 1, f"00:00:{i:02d}", f"исходный текст {i}")
+             for i in range(1, 31)]
+    seen: list[list[int]] = []
+
+    async def outage(chunk):
+        seen.append([turn.id for turn in chunk])
+        raise ValueError("provider unavailable")
+
+    with caplog.at_level(logging.INFO, logger="bot.services.transcript_processing"):
+        result, outcome = await cleanup_best_effort(turns, outage, max_chars=240)
+    expected_chunks = chunk_turns(turns, max_chars=240)
+    assert seen == [[turn.id for turn in chunk] for chunk in expected_chunks]
+    assert len(seen) > 1 and all(len(chunk) <= 2 for chunk in seen)
+    assert outcome == "failed"
+    assert result == turns
+    docx_path = tmp_path / "outage.docx"
+    create_docx(docx_path, original_filename="recording.mp3", processed_at=datetime(2026, 8, 24),
+                duration_seconds=31, speaker_count=1, turns=result)
+    with zipfile.ZipFile(docx_path) as archive:
+        assert "исходный текст 30" in archive.read("word/document.xml").decode()
+    assert "исходный текст" not in caplog.text
 
 
 def test_durable_job_normalization_and_docx_cyrillic(tmp_path: Path):

@@ -47,8 +47,15 @@ Normalized turns are deterministically chunked at a 12,000-character estimate, o
 Every entry has stable `id`, `speaker`, and `timestamp`. Polza is instructed to edit punctuation,
 capitalization, and only highly certain ASR errors—not summarize, omit, translate, censor, or invent.
 JSON output is accepted only if every ID appears once in the original order with unchanged speaker
-and timestamp and non-empty text. A malformed/failed chunk falls back to its normalized Aiesa text;
-other chunks remain cleaned. Thus cleanup can never destroy an otherwise valid transcription.
+and timestamp and non-empty text. Each segment also passes a deterministic preservation guard over
+case-folded Unicode word tokens: punctuation/case-only edits pass directly; other edits must contain
+no standalone token insertion/deletion, retain at least 75% of the token count, and meet token-sequence
+and punctuation-free character similarity floors of 0.60 and 0.82. These conservative floors allow a
+close 2-to-1 recognition repair such as `стрик холдеры` -> `стейкхолдеры`, while rejecting shortening
+and material rewriting. A segment that fails only this text guard falls back to its normalized Aiesa
+text without discarding accepted siblings. Structural/malformed output or a provider failure falls
+back for the bounded chunk; other chunks remain cleaned. Logs contain only aggregate acceptance,
+rejection reasons, and provider-failure categories—never transcript or provider payload text.
 
 ## DOCX
 
