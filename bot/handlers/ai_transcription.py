@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import mimetypes
 import os
@@ -14,6 +15,8 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from bot.services.aiesa_transcription import AiesaError, AiesaTranscriptionService
+from bot.services.polza_master_transcription import PolzaMasterTranscriptionService
+from bot.services.transcript_alignment import select_best_transcript
 from bot.services.transcript_docx import create_docx, duration_text, output_filename, safe_name
 from bot.services.transcript_processing import PolzaTranscriptCleaner, cleanup_best_effort, normalize_segments
 from bot.states import MENU, WAITING_FOR_AI_TRANSCRIPTION
@@ -84,7 +87,17 @@ async def receive_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         if media_path.stat().st_size > max_bytes:
             await update.message.reply_text(f"Файл слишком большой. Максимальный размер — {max_bytes // 1024 // 1024} МБ.")
             return WAITING_FOR_AI_TRANSCRIPTION
-        provider_job_id = await service.create(media_path, filename, content_type)
+        master_service: PolzaMasterTranscriptionService | None = context.application.bot_data.get(
+            "master_transcription_service")
+        aiesa_call = service.create(media_path, filename, content_type)
+        if master_service:
+            provider_job_id, master = await asyncio.gather(
+                aiesa_call, master_service.transcribe(media_path, filename, content_type))
+            context.application.bot_data.setdefault("master_transcriptions", {})[provider_job_id] = master
+            logger.info("AI transcription master provider=polza outcome=%s category=%s",
+                        master.outcome, master.failure_category or "none")
+        else:
+            provider_job_id = await aiesa_call
     except (AiesaError, OSError):
         logger.warning("AI transcription creation failed provider=aiesa category=bounded")
         await update.message.reply_text("Не получилось начать расшифровку. Попробуй ещё раз чуть позже.")
@@ -123,6 +136,17 @@ async def process_transcription_jobs(context: ContextTypes.DEFAULT_TYPE) -> None
             _set_job(job["id"], status="postprocessing")
             result = await service.result(status.result_json_url or "")
             turns = normalize_segments(result.segments)
+            master = context.application.bot_data.get("master_transcriptions", {}).pop(job["provider_job_id"], None)
+            selection = select_best_transcript(turns, master)
+            source = selection.source
+            if selection.alignment is not None:
+                alignment = selection.alignment
+                unsafe = sum(boundary.confidence.value == "low" for boundary in alignment.boundaries)
+                logger.info("AI transcription alignment accepted=%s similarity_bucket=%s turns=%s boundaries=%s "
+                            "unsafe_boundaries=%s reason=%s", alignment.accepted,
+                            _similarity_bucket(alignment.similarity), len(turns), len(alignment.boundaries),
+                            unsafe, alignment.rejection_reason or "none")
+            turns = list(selection.turns)
             cleaner_obj = context.application.bot_data.get("transcript_cleaner")
             cleaner = cleaner_obj.clean_chunk if cleaner_obj else None
             turns, cleanup = await cleanup_best_effort(turns, cleaner)
@@ -140,8 +164,8 @@ async def process_transcription_jobs(context: ContextTypes.DEFAULT_TYPE) -> None
                     await context.bot.send_document(job["telegram_chat_id"], document=document, filename=filename, caption=caption)
                 _set_job(job["id"], status="completed", delivered_at=datetime.now(timezone.utc).isoformat(), attempts=0)
                 logger.info("AI transcription completed provider=aiesa duration_seconds=%s minutes_billed=%s speaker_count=%s "
-                            "segment_count=%s cleanup=%s delivery=success", result.duration_seconds, status.minutes_billed,
-                            result.speaker_count, len(result.segments), cleanup)
+                            "segment_count=%s source=%s cleanup=%s delivery=success", result.duration_seconds,
+                            status.minutes_billed, result.speaker_count, len(result.segments), source, cleanup)
             finally:
                 shutil.rmtree(workdir, ignore_errors=True)
         except AiesaError as exc:
@@ -161,6 +185,14 @@ def _due(job: dict[str, Any], now: datetime) -> bool:
         return not job.get("next_attempt_at") or datetime.fromisoformat(job["next_attempt_at"]) <= now
     except ValueError:
         return True
+
+
+def _similarity_bucket(value: float) -> str:
+    if value >= 0.85:
+        return "high"
+    if value >= 0.65:
+        return "medium"
+    return "low"
 
 
 def _set_job(job_id: str, **changes: Any) -> None:

@@ -17,9 +17,11 @@ from bot.config import (AI_ATTACHMENT_MAX_BYTES, AI_ATTACHMENT_TIMEOUT_SECONDS,
                         TRIP_REMINDER_CHECK_INTERVAL, TMDB_API_TOKEN,
                         WEATHER_CACHE_TTL_SECONDS, WEATHER_TIMEOUT_SECONDS, AIESA_API_PUBLIC,
                         AIESA_API_SECRET, AIESA_TRANSCRIPTION_POLL_SECONDS,
-                        AI_TRANSCRIPTION_MAX_FILE_BYTES, AI_TRANSCRIPTION_CLEANUP_MODEL)
+                        AI_TRANSCRIPTION_MAX_FILE_BYTES, AI_TRANSCRIPTION_CLEANUP_MODEL,
+                        POLZA_TRANSCRIPTION_MODEL)
 from bot.handlers.ai_transcription import ai_callback, process_transcription_jobs, receive_media
 from bot.services.aiesa_transcription import AiesaTranscriptionService
+from bot.services.polza_master_transcription import PolzaMasterTranscriptionService
 from bot.services.transcript_processing import PolzaTranscriptCleaner
 from bot.handlers.nl_assistant import configure_nl_assistant, nl_callback_router, nl_clarification_handler, nl_query_callback_router, nl_text_handler
 from bot.services.polza_intent_parser import PolzaIntentParser
@@ -290,11 +292,16 @@ def build_app() -> Application:
         logger.info("AI/NL assistant disabled: POLZA_AI_API_KEY or POLZA_AI_MODEL is missing")
 
     app.bot_data["transcription_max_bytes"] = AI_TRANSCRIPTION_MAX_FILE_BYTES
+    app.bot_data["master_transcriptions"] = {}
     if AIESA_API_PUBLIC and AIESA_API_SECRET:
         app.bot_data["aiesa_service"] = AiesaTranscriptionService(AIESA_API_PUBLIC, AIESA_API_SECRET)
+        if polza_key and POLZA_TRANSCRIPTION_MODEL:
+            app.bot_data["master_transcription_service"] = PolzaMasterTranscriptionService(
+                polza_key, POLZA_TRANSCRIPTION_MODEL)
         if polza_key and AI_TRANSCRIPTION_CLEANUP_MODEL:
             app.bot_data["transcript_cleaner"] = PolzaTranscriptCleaner(polza_key, AI_TRANSCRIPTION_CLEANUP_MODEL)
-        logger.info("AI transcription enabled provider=aiesa cleanup=%s",
+        logger.info("AI transcription enabled provider=aiesa master=%s cleanup=%s",
+                    "enabled" if app.bot_data.get("master_transcription_service") else "disabled",
                     "enabled" if app.bot_data.get("transcript_cleaner") else "disabled")
     else:
         logger.info("AI transcription disabled: Aiesa credentials are missing")
