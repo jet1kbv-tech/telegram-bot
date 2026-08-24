@@ -146,6 +146,17 @@ async def process_transcription_jobs(context: ContextTypes.DEFAULT_TYPE) -> None
                             "unsafe_boundaries=%s reason=%s", alignment.accepted,
                             _similarity_bucket(alignment.similarity), len(turns), len(alignment.boundaries),
                             unsafe, alignment.rejection_reason or "none")
+                for boundary_index, boundary in enumerate(alignment.boundaries):
+                    if boundary.confidence.value == "low":
+                        logger.warning(
+                            "AI transcription boundary index=%s estimated=%s selected=%s displacement=%s "
+                            "left_fit=%s right_fit=%s confidence=%s margin=%s short_protected=%s reason=%s",
+                            boundary_index, boundary.estimated, boundary.selected,
+                            boundary.selected - boundary.estimated, boundary.left_fit_bucket,
+                            boundary.right_fit_bucket, boundary.confidence.value,
+                            boundary.margin_bucket, boundary.short_turn_protected,
+                            boundary.reason or "none",
+                        )
                 if alignment.pathological_turn is not None:
                     diagnostic = alignment.pathological_turn
                     logger.warning(
