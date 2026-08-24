@@ -23,7 +23,8 @@ from bot.services.afisha_calendar_sync import (
 )
 from bot.storage import find_item, normalize_event, sort_events, storage
 from bot.storage import format_event_dt, is_event_actual
-from bot.utils import ensure_access, item_status_label, normalize_entity_title, remember_current_chat
+from bot.utils import (ensure_access, get_wishlist_owner_by_user, item_status_label,
+                       normalize_entity_title, remember_current_chat)
 from bot.services.actions.afisha import create_afisha_event
 
 
@@ -165,7 +166,8 @@ async def edit_afisha_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     item_keyboard = _require_item_keyboard()
     await update.message.reply_text(
         f"Дата обновлена:\n\n{build_item_text('afisha', item)}",
-        reply_markup=item_keyboard("afisha", item, page=page),
+        reply_markup=item_keyboard("afisha", item, page=page,
+                                   actor_key=get_wishlist_owner_by_user(update)),
     )
     context.user_data.pop("editing_afisha_item_id", None)
     context.user_data.pop("editing_afisha_page", None)
@@ -223,7 +225,8 @@ async def edit_afisha_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     item_keyboard = _require_item_keyboard()
     await update.message.reply_text(
         f"Время обновлено:\n\n{build_item_text('afisha', item)}",
-        reply_markup=item_keyboard("afisha", item, page=page),
+        reply_markup=item_keyboard("afisha", item, page=page,
+                                   actor_key=get_wishlist_owner_by_user(update)),
     )
     context.user_data.pop("editing_afisha_item_id", None)
     context.user_data.pop("editing_afisha_page", None)
@@ -372,6 +375,7 @@ async def add_event_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     await update.message.reply_text(
         f"Событие сохранено:\n\n{build_item_text('afisha', normalized_item)}",
-        reply_markup=item_keyboard("afisha", normalized_item, page=0),
+        reply_markup=item_keyboard("afisha", normalized_item, page=0,
+                                   actor_key=get_wishlist_owner_by_user(update)),
     )
     return SECTION

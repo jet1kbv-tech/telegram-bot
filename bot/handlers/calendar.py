@@ -167,14 +167,17 @@ def calendar_event_keyboard_for_item(owner: str, item: dict[str, Any], page: int
     if item.get("source") == "afisha":
         base = calendar_event_readonly_keyboard(owner, str(item.get("source_id") or ""), page)
         parent_type, parent_id = "afisha", str(item.get("source_id") or "")
+        source_kind = "p"
     else:
         base = calendar_event_keyboard(owner, str(item.get("id") or ""), page)
         parent_type, parent_id = "calendar", str(item.get("id") or "")
+        source_kind = None
     if not actor_key or actor_key != owner:
         return base
     from bot.handlers.contextual_actions import contextual_action_rows
     assistant = contextual_action_rows(data or storage.load(), actor_key=actor_key,
-        parent_type=parent_type, parent_id=parent_id, page=page)
+        parent_type=parent_type, parent_id=parent_id, page=page, source_kind=source_kind,
+        source_parent_id=str(item.get("id") or "") if source_kind else None)
     return InlineKeyboardMarkup(assistant + list(base.inline_keyboard))
 
 

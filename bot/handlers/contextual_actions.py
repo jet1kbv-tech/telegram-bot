@@ -9,6 +9,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from bot.config import BOT_TIMEZONE
+from bot.services.afisha_calendar_sync import build_afisha_projection_id
 from bot.handlers.event_attachments import show_documents
 from bot.services.contextual_actions import (
     EventActionContext,
@@ -17,6 +18,7 @@ from bot.services.contextual_actions import (
     render_trip_overview,
     render_trip_route,
     resolve_event_action_context,
+    resolve_event_action_context_id,
     resolve_trip_action_context,
     trip_weather_target,
     visible_actions,
@@ -48,16 +50,31 @@ def trip_callback(action: str, trip_context_id: str) -> str:
     return f"ctx:trip:{action}:{trip_context_id}"
 
 
+def _trip_callback_with_source(action: str, trip_id: str, kind: str, event_id: str, page: int) -> str:
+    return f"ctx:trip:{action}:{trip_id}:{kind}:{event_id}:{page}"
+
+
+def _trips_callback(kind: str, event_id: str, page: int) -> str:
+    return f"ctx:trips:{kind}:{event_id}:{page}"
+
+
 def contextual_action_rows(data: dict, *, actor_key: str, parent_type: str,
-                           parent_id: str, page: int, now: datetime | None = None) -> list[list[InlineKeyboardButton]]:
+                           parent_id: str, page: int, now: datetime | None = None,
+                           source_kind: str | None = None,
+                           source_parent_id: str | None = None) -> list[list[InlineKeyboardButton]]:
     if actor_key not in {"vova", "sasha"}:
         return []
     value = resolve_event_action_context(data, actor_key=actor_key, parent_type=parent_type,
         parent_id=parent_id, now=now or datetime.now(), timezone=BOT_TIMEZONE)
     if value is None:
         return []
-    labels = {"weather": "🌦 Погода", "docs": "📎 Документы", "trip": "🚆 Поездка", "overview": "🗓 Что известно"}
-    buttons = [InlineKeyboardButton(labels[action], callback_data=_callback(action, parent_type, parent_id, page))
+    labels = {"weather": "🌦 Погода", "docs": "📎 Документы",
+              "trip": "🚆 Поездки" if len(value.trips) > 1 else "🚆 Поездка",
+              "overview": "🗓 Что известно"}
+    callback_parent = "calendar" if source_kind == "p" else parent_type
+    callback_id = source_parent_id or parent_id
+    buttons = [InlineKeyboardButton(labels[action], callback_data=
+               _callback(action, callback_parent, callback_id, page).replace(":c:", ":p:"))
                for action in visible_actions(value)]
     return [buttons[index:index + 2] for index in range(0, len(buttons), 2)]
 
@@ -71,13 +88,14 @@ def _back(parent_type: str, parent_id: str, page: int, actor_key: str) -> Inline
     ])
 
 
-def _trip_keyboard(value, *, back_callback: str = "menu:main") -> InlineKeyboardMarkup:
+def _trip_keyboard(value, *, back_callback: str = "menu:main", source: tuple[str, str, int] | None = None) -> InlineKeyboardMarkup:
     trip_id = value.trip.context_id
+    callback = (lambda action: _trip_callback_with_source(action, trip_id, *source)) if source else (lambda action: trip_callback(action, trip_id))
     rows = [
-        [InlineKeyboardButton("🌦 Погода", callback_data=trip_callback("weather", trip_id)),
-         InlineKeyboardButton("📎 Документы", callback_data=trip_callback("docs", trip_id))],
-        [InlineKeyboardButton("🚆 Маршрут", callback_data=trip_callback("route", trip_id)),
-         InlineKeyboardButton("🗓 Что известно", callback_data=trip_callback("overview", trip_id))],
+        [InlineKeyboardButton("🌦 Погода", callback_data=callback("weather")),
+         InlineKeyboardButton("📎 Документы", callback_data=callback("docs"))],
+        [InlineKeyboardButton("🚆 Маршрут", callback_data=callback("route")),
+         InlineKeyboardButton("🗓 Что известно", callback_data=callback("overview"))],
     ]
     if len(value.linked_events) == 1:
         event = value.linked_events[0]
@@ -89,6 +107,41 @@ def _trip_keyboard(value, *, back_callback: str = "menu:main") -> InlineKeyboard
     return InlineKeyboardMarkup(rows)
 
 
+def _trip_selector(value: EventActionContext, kind: str, page: int,
+                   actor_key: str) -> tuple[str, InlineKeyboardMarkup]:
+    lines = ["🚆 Поездки"]
+    rows = []
+    for index, trip in enumerate(value.trips, 1):
+        route = " → ".join(part for part in (trip.origin, trip.destination) if part) or "Маршрут не указан"
+        lines += ["", f"🚆 {index} · {route}"]
+        departure = _selector_moment(trip.departure_date, trip.departure_time)
+        arrival = _selector_moment(trip.arrival_date, trip.arrival_time)
+        if departure:
+            lines.append(departure)
+        if arrival:
+            lines.append(f"Прибытие: {arrival}")
+        rows.append([InlineKeyboardButton(f"🚆 {index} · {route}", callback_data=
+            _trip_callback_with_source("card", trip.context_id, kind, value.event.context_id, page))])
+    rows += [[InlineKeyboardButton("⬅️ К событию", callback_data=_event_back_callback(value, kind, page, actor_key))],
+             [InlineKeyboardButton("🏠 В меню", callback_data="menu:main")]]
+    return "\n".join(lines), InlineKeyboardMarkup(rows)
+
+
+def _selector_moment(day, clock) -> str | None:
+    if not day:
+        return None
+    months = ("", "января", "февраля", "марта", "апреля", "мая", "июня", "июля",
+              "августа", "сентября", "октября", "ноября", "декабря")
+    return f"{day.day} {months[day.month]}" + (f" · {clock:%H:%M}" if clock else "")
+
+
+def _event_back_callback(value: EventActionContext, kind: str, page: int, actor_key: str) -> str:
+    event = value.event
+    return (f"view|afisha|{event.canonical_parent_id}|{page}" if kind == "a"
+            else f"cal_view|{event.owner_scope if kind == 'c' else actor_key}|"
+                 f"{event.canonical_parent_id if kind == 'c' else build_afisha_projection_id(event.canonical_parent_id, actor_key)}|{page}")
+
+
 async def contextual_action_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
@@ -97,18 +150,24 @@ async def contextual_action_callback(update: Update, context: ContextTypes.DEFAU
     if len(parts) != 6:
         return SECTION
     _, _, action, kind, parent_id, page_raw = parts
-    parent_type = "afisha" if kind == "a" else "calendar"
+    callback_parent_id = parent_id
+    parent_type = "afisha" if kind in {"a", "p"} else "calendar"
     try:
         page = int(page_raw)
     except ValueError:
         page = 0
     actor_key = get_wishlist_owner_by_user(update)
     data = storage.load()
+    if kind == "p":
+        projection = next((row for row in data.get("calendars", {}).get(actor_key, [])
+                           if str(row.get("id") or "") == parent_id and row.get("source") == "afisha"), None)
+        parent_id = str(projection.get("source_id") or "") if projection else ""
     value = resolve_event_action_context(data, actor_key=actor_key, parent_type=parent_type,
         parent_id=parent_id, now=datetime.now(), timezone=BOT_TIMEZONE)
     logger.info("Context event action action=%s outcome=%s candidate_count=%s", action,
                 "resolved" if value else "stale", value.document_count if value else 0)
-    back = _back(parent_type, parent_id, page, actor_key)
+    back = (_back("calendar", build_afisha_projection_id(parent_id, actor_key), page, actor_key)
+            if kind == "p" else _back(parent_type, parent_id, page, actor_key))
     if value is None:
         await _safe_edit_message(query, "Событие больше недоступно.", reply_markup=back)
         return SECTION
@@ -118,11 +177,16 @@ async def contextual_action_callback(update: Update, context: ContextTypes.DEFAU
             return SECTION
         # This is the established canonical attachment list/detail/send flow.
         return await show_documents(update, context, parent_type, parent_id,
-                                    f"ctx:event:overview:{kind}:{parent_id}:{page}")
+                                    f"ctx:event:overview:{kind}:{callback_parent_id}:{page}")
     if action == "trip":
-        if value.trip:
+        if len(value.trips) > 1:
+            text, keyboard = _trip_selector(value, kind, page, actor_key)
+            await _safe_edit_message(query, text, reply_markup=keyboard)
+            return SECTION
+        if value.trips:
+            trip = value.trips[0]
             trip_value = resolve_trip_action_context(data, actor_key=actor_key,
-                trip_context_id=value.trip.context_id, now=datetime.now(), timezone=BOT_TIMEZONE)
+                trip_context_id=trip.context_id, now=datetime.now(), timezone=BOT_TIMEZONE)
             text = render_trip_card(trip_value)
             await _safe_edit_message(query, text, reply_markup=_trip_keyboard(
                 trip_value, back_callback=back.inline_keyboard[0][0].callback_data))
@@ -138,15 +202,47 @@ async def contextual_action_callback(update: Update, context: ContextTypes.DEFAU
     return SECTION
 
 
+async def contextual_trip_list_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Rebuild a selector from its opaque canonical event identity."""
+    query = update.callback_query
+    await query.answer()
+    await remember_current_chat(update)
+    parts = str(query.data).split(":")
+    if len(parts) != 5:
+        return SECTION
+    _, _, kind, event_id, page_raw = parts
+    try:
+        page = int(page_raw)
+    except ValueError:
+        page = 0
+    actor_key = get_wishlist_owner_by_user(update)
+    value = resolve_event_action_context_id(storage.load(), actor_key=actor_key,
+        event_context_id=event_id, now=datetime.now(), timezone=BOT_TIMEZONE)
+    if value is None:
+        await _safe_edit_message(query, "Событие больше недоступно.",
+                                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 В меню", callback_data="menu:main")]]))
+        return SECTION
+    text, keyboard = _trip_selector(value, kind, page, actor_key)
+    await _safe_edit_message(query, text, reply_markup=keyboard)
+    return SECTION
+
+
 async def contextual_trip_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Re-authorize every trip action against a fresh Context Engine bundle."""
     query = update.callback_query
     await query.answer()
     await remember_current_chat(update)
     parts = str(query.data).split(":")
-    if len(parts) != 4:
+    if len(parts) not in {4, 7}:
         return SECTION
-    _, _, action, trip_id = parts
+    _, _, action, trip_id = parts[:4]
+    source = None
+    if len(parts) == 7:
+        kind, event_id, page_raw = parts[4:]
+        try:
+            source = (kind, event_id, int(page_raw))
+        except ValueError:
+            return SECTION
     actor_key = get_wishlist_owner_by_user(update)
     value = resolve_trip_action_context(storage.load(), actor_key=actor_key,
         trip_context_id=trip_id, now=datetime.now(), timezone=BOT_TIMEZONE)
@@ -155,11 +251,14 @@ async def contextual_trip_callback(update: Update, context: ContextTypes.DEFAULT
         await _safe_edit_message(query, "Эта поездка больше недоступна.",
                                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 В меню", callback_data="menu:main")]]))
         return SECTION
-    back = _trip_keyboard(value, back_callback=trip_callback("card", trip_id))
+    card_callback = (_trip_callback_with_source("card", trip_id, *source)
+                     if source else trip_callback("card", trip_id))
+    back = _trip_keyboard(value, back_callback=card_callback, source=source)
     outcome = "found"
     if action == "card":
         text = render_trip_card(value)
-        back = _trip_keyboard(value)
+        selector_back = _trips_callback(source[0], source[1], source[2]) if source else "menu:main"
+        back = _trip_keyboard(value, back_callback=selector_back, source=source)
     elif action == "route":
         text = render_trip_route(value.trip)
     elif action == "overview":
@@ -176,7 +275,7 @@ async def contextual_trip_callback(update: Update, context: ContextTypes.DEFAULT
                 logger.info("contextual trip action action=docs outcome=found document_count=%s linked_event_count=%s",
                             len(value.documents), len(value.linked_events))
                 return await show_documents(update, context, parent_type, parent_id,
-                                            trip_callback("card", trip_id), read_only=True)
+                                            card_callback, read_only=True)
             text = "📎 Документы\n\n" + "\n".join(f"• {row.semantic_type}" for row in value.documents)
     else:
         text, outcome = "Действие больше недоступно.", "missing_data"

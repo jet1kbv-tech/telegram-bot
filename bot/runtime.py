@@ -322,7 +322,7 @@ async def show_item(update: Update, section: str, item_id: str, page: int, owner
         )
         return SECTION
 
-    actor_key = get_wishlist_owner_by_user(update) if section == "films" else None
+    actor_key = get_wishlist_owner_by_user(update) if section in {"films", "afisha"} else None
     await safe_edit_message(query, build_item_text(section, item), reply_markup=item_keyboard(section, item, page, owner, status_filter, actor_key))
     return SECTION
 
@@ -841,7 +841,7 @@ async def section_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if section == "films" and new_status == "watched":
             await safe_edit_message(query, "Как тебе фильм?", reply_markup=film_reaction_followup_keyboard(item_id, "watched", page))
             return SECTION
-        actor_key = get_wishlist_owner_by_user(update) if section == "films" else None
+        actor_key = get_wishlist_owner_by_user(update) if section in {"films", "afisha"} else None
         await safe_edit_message(query, build_item_text(section, item), reply_markup=item_keyboard(section, item, page, owner, status_filter, actor_key))
         return SECTION
 

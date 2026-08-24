@@ -67,14 +67,15 @@ def test_sanatorium_selects_outbound_and_exposes_all_four_actions():
     assert "Документы: 3" in render_overview(value)
 
 
-def test_ambiguous_exact_arrivals_hide_trip_action():
+def test_multiple_exact_arrivals_expose_trip_selector_action():
     first = document("one", semantic_type="transport_ticket", destination="Воронеж", date="2026-08-30",
                      arrival_date="2026-08-31")
     second = document("two", semantic_type="transport_ticket", destination="Казань", date="2026-08-30",
                       arrival_date="2026-08-31")
     value = resolve(snapshot(first, second))
     assert value.trip is None
-    assert "trip" not in visible_actions(value)
+    assert "trip" in visible_actions(value)
+    assert len(value.trips) == 2
 
 
 def test_private_calendar_is_actor_scoped_and_shared_afisha_is_visible():

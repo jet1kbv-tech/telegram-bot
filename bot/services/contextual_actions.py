@@ -19,6 +19,7 @@ class EventActionContext:
     bundle: ContextBundle
     event: EventContext
     trip: TripContext | None
+    trips: tuple[TripContext, ...]
     document_count: int
 
 
@@ -39,13 +40,11 @@ def resolve_trip_action_context(data: dict, *, actor_key: str, trip_context_id: 
         return None
     event_ids = set(trip.linked_event_ids)
     events = tuple(event for event in bundle.events if event.context_id in event_ids)
-    # A trip owns its tickets and also the other canonical documents of its
-    # visible linked events (voucher, insurance, reservation, and so on).
+    # Trip scope is deliberately narrower than event scope: sharing an event
+    # parent is not evidence that a document belongs to this segment.
     identities = set(trip.linked_attachment_ids)
-    parents = {(event.canonical_parent_type, event.canonical_parent_id) for event in events}
     documents = tuple(document for document in bundle.documents
-                      if document.attachment_id in identities
-                      or (document.parent_type, document.parent_id) in parents)
+                      if document.attachment_id in identities)
     return TripActionContext(bundle, trip, documents, events)
 
 
@@ -67,6 +66,16 @@ def select_event_trip(event: EventContext, trips: tuple[TripContext, ...]) -> Tr
     return linked[0] if len(linked) == 1 else None
 
 
+def linked_event_trips(event: EventContext, trips: tuple[TripContext, ...]) -> tuple[TripContext, ...]:
+    """Return every visible linked segment in a stable chronological order."""
+    maximum = datetime.max.date()
+    return tuple(sorted(
+        (trip for trip in trips if event.context_id in trip.linked_event_ids),
+        key=lambda trip: (trip.departure_date or maximum,
+                          trip.departure_time or datetime.max.time(), trip.context_id),
+    ))
+
+
 def resolve_event_action_context(data: dict, *, actor_key: str, parent_type: str,
                                  parent_id: str, now: datetime, timezone: str) -> EventActionContext | None:
     bundle = build_context_bundle(data, actor_key, now, timezone, include_past=True)
@@ -74,7 +83,19 @@ def resolve_event_action_context(data: dict, *, actor_key: str, parent_type: str
     if event is None:
         return None
     documents = documents_for_context(bundle, event)
-    return EventActionContext(bundle, event, select_event_trip(event, bundle.trips), len(documents))
+    trips = linked_event_trips(event, bundle.trips)
+    return EventActionContext(bundle, event, select_event_trip(event, bundle.trips), trips, len(documents))
+
+
+def resolve_event_action_context_id(data: dict, *, actor_key: str, event_context_id: str,
+                                    now: datetime, timezone: str) -> EventActionContext | None:
+    bundle = build_context_bundle(data, actor_key, now, timezone, include_past=True)
+    event = next((row for row in bundle.events if row.context_id == event_context_id), None)
+    if event is None:
+        return None
+    documents = documents_for_context(bundle, event)
+    trips = linked_event_trips(event, bundle.trips)
+    return EventActionContext(bundle, event, select_event_trip(event, bundle.trips), trips, len(documents))
 
 
 def visible_actions(value: EventActionContext) -> tuple[str, ...]:
@@ -82,7 +103,7 @@ def visible_actions(value: EventActionContext) -> tuple[str, ...]:
     actions = ["weather"]
     if value.document_count:
         actions.append("docs")
-    if value.trip is not None:
+    if value.trips:
         actions.append("trip")
     actions.append("overview")
     return tuple(actions)
