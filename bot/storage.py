@@ -48,6 +48,7 @@ class JsonStorage:
                 "used": [],
             },
             "event_attachments": [],
+            "ai_jobs": [],
             "spark": {
                 "active": [],
                 "done": [],
@@ -136,6 +137,9 @@ class JsonStorage:
         normalize_purchases_root(data, raw_data.get("purchases"))
         normalize_tickets_root(data, raw_data.get("tickets"))
         normalize_event_attachments_root(data, raw_data.get("event_attachments"))
+        raw_ai_jobs = raw_data.get("ai_jobs", [])
+        if isinstance(raw_ai_jobs, list):
+            data["ai_jobs"] = [job for raw in raw_ai_jobs if (job := normalize_ai_job(raw))]
         normalize_spark_root(data, raw_data.get("spark"))
         normalize_places_root(data, raw_data.get("places"))
 
@@ -154,6 +158,36 @@ class JsonStorage:
             if isinstance(username, str) and isinstance(chat_id, int)
         }
         return data
+
+
+def normalize_ai_job(raw: Any) -> dict[str, Any] | None:
+    """Keep only resumable, non-content transcription metadata."""
+    if not isinstance(raw, dict) or raw.get("type") != "transcription":
+        return None
+    required = ("id", "actor", "telegram_chat_id", "provider_job_id")
+    if any(not raw.get(key) for key in required) or not isinstance(raw.get("telegram_chat_id"), int):
+        return None
+    status = str(raw.get("status") or "processing")
+    if status not in {"processing", "postprocessing", "delivering", "completed", "failed"}:
+        status = "processing"
+    return {
+        "id": str(raw["id"]), "type": "transcription", "provider": "aiesa",
+        "actor": str(raw["actor"]), "telegram_chat_id": raw["telegram_chat_id"],
+        "provider_job_id": str(raw["provider_job_id"]),
+        "original_filename": str(raw.get("original_filename") or "audio"),
+        "status": status, "created_at": str(raw.get("created_at") or ""),
+        "updated_at": str(raw.get("updated_at") or ""),
+        "delivered_at": str(raw.get("delivered_at") or ""),
+        "attempts": normalize_nonnegative_int(raw.get("attempts")),
+        "next_attempt_at": str(raw.get("next_attempt_at") or ""),
+    }
+
+
+def normalize_nonnegative_int(value: Any) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 storage = JsonStorage(DATA_FILE)

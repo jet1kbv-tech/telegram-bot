@@ -14,7 +14,12 @@ from telegram.ext import (
 
 from bot.config import (AI_ATTACHMENT_MAX_BYTES, AI_ATTACHMENT_TIMEOUT_SECONDS,
                         AI_INTENT_TIMEOUT_SECONDS, NOTIFICATION_CHECK_INTERVAL, TMDB_API_TOKEN,
-                        WEATHER_CACHE_TTL_SECONDS, WEATHER_TIMEOUT_SECONDS)
+                        WEATHER_CACHE_TTL_SECONDS, WEATHER_TIMEOUT_SECONDS, AIESA_API_PUBLIC,
+                        AIESA_API_SECRET, AIESA_TRANSCRIPTION_POLL_SECONDS,
+                        AI_TRANSCRIPTION_MAX_FILE_BYTES, AI_TRANSCRIPTION_CLEANUP_MODEL)
+from bot.handlers.ai_transcription import ai_callback, process_transcription_jobs, receive_media
+from bot.services.aiesa_transcription import AiesaTranscriptionService
+from bot.services.transcript_processing import PolzaTranscriptCleaner
 from bot.handlers.nl_assistant import configure_nl_assistant, nl_callback_router, nl_clarification_handler, nl_query_callback_router, nl_text_handler
 from bot.services.polza_intent_parser import PolzaIntentParser
 from bot.services.ticket_enrichment import PolzaTicketEnricher
@@ -147,6 +152,7 @@ from bot.states import (
     EDITING_EVENT_ATTACHMENT_METADATA,
     CONFIRMING_TICKET_ENRICHMENT,
     SELECTING_NL_ATTACHMENT_QUERY,
+    WAITING_FOR_AI_TRANSCRIPTION,
     WAITING_FOR_NL_ATTACHMENTS,
     SELECTING_NL_ATTACHMENT_EVENT,
     CONFIRMING_NL_ATTACHMENT,
@@ -279,8 +285,20 @@ def build_app() -> Application:
     else:
         logger.info("AI/NL assistant disabled: POLZA_AI_API_KEY or POLZA_AI_MODEL is missing")
 
+    app.bot_data["transcription_max_bytes"] = AI_TRANSCRIPTION_MAX_FILE_BYTES
+    if AIESA_API_PUBLIC and AIESA_API_SECRET:
+        app.bot_data["aiesa_service"] = AiesaTranscriptionService(AIESA_API_PUBLIC, AIESA_API_SECRET)
+        if polza_key and AI_TRANSCRIPTION_CLEANUP_MODEL:
+            app.bot_data["transcript_cleaner"] = PolzaTranscriptCleaner(polza_key, AI_TRANSCRIPTION_CLEANUP_MODEL)
+        logger.info("AI transcription enabled provider=aiesa cleanup=%s",
+                    "enabled" if app.bot_data.get("transcript_cleaner") else "disabled")
+    else:
+        logger.info("AI transcription disabled: Aiesa credentials are missing")
+
     if app.job_queue is not None:
         app.job_queue.run_repeating(check_afisha_notifications, interval=NOTIFICATION_CHECK_INTERVAL, first=30, name="afisha_notifications")
+        app.job_queue.run_repeating(process_transcription_jobs, interval=AIESA_TRANSCRIPTION_POLL_SECONDS,
+                                    first=10, name="ai_transcription_jobs")
     else:
         logger.warning("JobQueue недоступна. Для уведомлений за день до события нужен APScheduler в requirements.")
 
@@ -322,6 +340,7 @@ def build_app() -> Application:
                 *ai_callback_handlers,
                 CallbackQueryHandler(film_recommendation_callback_router, pattern=r"^filmrec:"),
                 CallbackQueryHandler(back_to_main, pattern=r"^(main|menu:main)$"),
+                CallbackQueryHandler(ai_callback, pattern=r"^aif:"),
                 CallbackQueryHandler(menu_router, pattern=r"^menu\|(films|wishlist|leisure|afisha|backlog)$"),
                 CallbackQueryHandler(places_callback_router, pattern=r"^places:"),
                 CallbackQueryHandler(spark_callback_router, pattern=r"^spark:"),
@@ -340,6 +359,7 @@ def build_app() -> Application:
                 CallbackQueryHandler(film_enrichment_callback_router, pattern=r"^filmenrich:"),
                 CallbackQueryHandler(film_filter_callback_router, pattern=r"^filmfilter:"),
                 CallbackQueryHandler(back_to_main, pattern=r"^(main|menu:main)$"),
+                CallbackQueryHandler(ai_callback, pattern=r"^aif:"),
                 CallbackQueryHandler(menu_router, pattern=r"^menu\|(films|wishlist|leisure|afisha|backlog)$"),
                 CallbackQueryHandler(places_callback_router, pattern=r"^places:"),
                 CallbackQueryHandler(spark_callback_router, pattern=r"^spark:"),
@@ -355,6 +375,13 @@ def build_app() -> Application:
                 MessageHandler(filters.Regex(rf"^{MAIN_MENU_TEXT}$"), quick_return_to_main_menu),
                 *ai_callback_handlers,
                 MessageHandler(filters.TEXT & ~filters.COMMAND, nl_clarification_handler),
+            ],
+            WAITING_FOR_AI_TRANSCRIPTION: [
+                CallbackQueryHandler(back_to_main, pattern=r"^(main|menu:main)$"),
+                CallbackQueryHandler(ai_callback, pattern=r"^aif:"),
+                MessageHandler(filters.AUDIO | filters.VOICE | filters.Document.ALL | filters.VIDEO | filters.VIDEO_NOTE,
+                               receive_media),
+                MessageHandler(filters.ALL, receive_media),
             ],
             ADDING_FILM_TITLE: text_state(add_film_title),
             ADDING_FILM_COMMENT: text_state(add_film_comment),
