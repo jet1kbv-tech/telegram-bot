@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from threading import RLock
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.error import TelegramError
@@ -35,9 +36,11 @@ from bot.config import (
     NOTIFICATION_CHECK_INTERVAL,
     NOTIFY_LOOKAHEAD_MAX,
     NOTIFY_LOOKAHEAD_MIN,
+    TRIP_REMINDER_GRACE_MINUTES,
     SECTION_CONFIG,
 )
 from bot.services.notification_enrichment import build_notification_context, render_notification_enrichment
+from bot.services.proactive_trip_reminders import scan_trip_reminders
 from bot.services.weather import WeatherProvider
 from bot.handlers.backlog import add_backlog_description, add_backlog_title, configure_backlog_handlers
 from bot.handlers.common import back_to_main, cancel, configure_common_handlers, noop, start, whoami
@@ -167,6 +170,13 @@ def configure_notification_enrichment(weather_provider: WeatherProvider) -> None
     """Install the shared cached provider used at the existing send boundary."""
     global _notification_weather_provider
     _notification_weather_provider = weather_provider
+
+
+async def check_trip_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Single hourly actor-scoped scan; no per-trip scheduler jobs."""
+    await scan_trip_reminders(storage=storage, bot=context.bot, actors=ALLOWED_USERS,
+        timezone=BOT_TIMEZONE, grace=timedelta(minutes=TRIP_REMINDER_GRACE_MINUTES),
+        now=datetime.now(ZoneInfo(BOT_TIMEZONE)), weather_provider=_notification_weather_provider)
 
 
 async def _enrich_afisha_reminder(core_text: str, data: dict[str, Any], event: dict[str, Any],

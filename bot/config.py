@@ -24,6 +24,10 @@ PAGE_SIZE = 10
 NOTIFY_LOOKAHEAD_MIN = 23 * 60
 NOTIFY_LOOKAHEAD_MAX = 25 * 60
 NOTIFICATION_CHECK_INTERVAL = 60 * 60
+TRIP_REMINDER_CHECK_INTERVAL = 15 * 60
+# Two scan opportunities tolerate ordinary scheduler jitter without making the
+# fixed "in two hours" wording materially stale.
+TRIP_REMINDER_GRACE_MINUTES = 30
 BOT_TIMEZONE = os.getenv("BOT_TIMEZONE", "Europe/Moscow").strip() or "Europe/Moscow"
 TMDB_API_TOKEN = os.getenv("TMDB_API_TOKEN", os.getenv("TMDB_API_READ_ACCESS_TOKEN", "")).strip()
 AI_INTENT_TIMEOUT_SECONDS = float(os.getenv("AI_INTENT_TIMEOUT_SECONDS", "10"))
