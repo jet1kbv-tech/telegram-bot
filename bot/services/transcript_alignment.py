@@ -1,6 +1,23 @@
-"""Pure, deterministic assignment of master-ASR wording to Aiesa speaker turns."""
+"""Project master-ASR wording onto Aiesa's diarized turn structure.
+
+Alignment v2.1 keeps Aiesa's turns, speakers and timestamps authoritative.  A
+global ``SequenceMatcher`` is used only to estimate each Aiesa boundary.  The
+actual boundary is selected independently in a bounded local window using the
+suffix of the preceding Aiesa turn and prefix of the following turn.  Thus this
+is not a global segmentation optimizer and a distant attractive match cannot
+move a boundary through neighbouring speech.
+
+For a candidate ``k`` the score is ``4*left_fit + 4*right_fit - .22*distance
++ syntax_adjustment + short_turn_adjustment``.  Lexical fits are SequenceMatcher
+ratios over up to eight words (the complete turn when it has at most five).
+Syntax adjustment is +.12 after sentence punctuation, +.04 after ``;:`` and
+-.10 for no punctuation (-.04 after a comma).  The search radius is
+``min(8, 2 + ceil(sqrt(shorter adjacent turn)))``.  Accepted boundaries slice
+the one master token stream, which provides exact, ordered token conservation.
+"""
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, replace
 from difflib import SequenceMatcher
@@ -11,10 +28,9 @@ from bot.services.polza_master_transcription import MasterTranscriptionResult
 
 WORD_RE = re.compile(r"[^\W_]+(?:['’\-][^\W_]+)*", re.UNICODE)
 MIN_GLOBAL_SIMILARITY = 0.45
-MIN_SEARCH_RADIUS = 1
-MAX_SEARCH_RADIUS = 6
-ABSOLUTE_MAX_BOUNDARY_SHIFT = 8
-LOCAL_CONTEXT_TOKENS = 4
+MAX_SEARCH_RADIUS = 8
+LOCAL_CONTEXT_TOKENS = 8
+SHORT_TURN_TOKENS = 5
 MAX_UNSAFE_BOUNDARIES = 0
 MAX_TURN_EXPANSION_RATIO = 1.6
 MAX_TURN_EXPANSION_SLACK = 8
@@ -28,9 +44,15 @@ class BoundaryConfidence(str, Enum):
 
 @dataclass(frozen=True)
 class BoundaryDecision:
+    """Text-free structural diagnostics for one Aiesa boundary."""
     estimated: int
     selected: int
     confidence: BoundaryConfidence
+    left_fit_bucket: str = "none"
+    right_fit_bucket: str = "none"
+    margin_bucket: str = "none"
+    short_turn_protected: bool = False
+    reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -70,28 +92,38 @@ class _Token:
 
 
 def _tokens(text: str) -> list[_Token]:
-    return [_Token(match.group(0).casefold(), match.start(), match.end()) for match in WORD_RE.finditer(text)]
+    return [_Token(m.group(0).casefold(), m.start(), m.end()) for m in WORD_RE.finditer(text)]
 
 
-def _punctuation_strength(text: str, tokens: list[_Token], boundary: int) -> int:
+def _fit(source: list[str], master: list[str]) -> float:
+    if not source or not master:
+        return 0.0
+    return SequenceMatcher(None, source, master, autojunk=False).ratio()
+
+
+def _context_size(turn: list[_Token]) -> int:
+    return len(turn) if len(turn) <= SHORT_TURN_TOKENS else min(LOCAL_CONTEXT_TOKENS, len(turn))
+
+
+def _syntax_adjustment(text: str, tokens: list[_Token], boundary: int) -> float:
     left = tokens[boundary - 1].end if boundary else 0
     right = tokens[boundary].start if boundary < len(tokens) else len(text)
     gap = text[left:right]
     if re.search(r"[.?!]", gap):
-        return 3
+        return 0.12
     if re.search(r"[;:]", gap):
-        return 2
+        return 0.04
     if "," in gap:
-        return 1
-    return 0
+        return -0.04
+    return -0.10
 
 
 def _estimate_boundary(a_boundary: int, a_count: int, g_count: int,
                        matcher: SequenceMatcher) -> tuple[int, bool, bool]:
     pairs = [(ai + offset, gi + offset) for ai, gi, size in matcher.get_matching_blocks()
              for offset in range(size)]
-    left = max((pair for pair in pairs if pair[0] < a_boundary), default=None, key=lambda x: x[0])
-    right = min((pair for pair in pairs if pair[0] >= a_boundary), default=None, key=lambda x: x[0])
+    left = max((p for p in pairs if p[0] < a_boundary), default=None, key=lambda x: x[0])
+    right = min((p for p in pairs if p[0] >= a_boundary), default=None, key=lambda x: x[0])
     if left and right:
         span = right[0] - left[0]
         estimate = left[1] + round((a_boundary - left[0]) * (right[1] - left[1]) / max(1, span))
@@ -104,14 +136,18 @@ def _estimate_boundary(a_boundary: int, a_count: int, g_count: int,
     return max(0, min(g_count, estimate)), left is not None, right is not None
 
 
+def _bucket(value: float, medium: float, high: float) -> str:
+    return "high" if value >= high else "medium" if value >= medium else "low"
+
+
 def align_transcript(turns: list[TranscriptTurn], master_text: str) -> HybridAlignmentResult:
-    """Align words globally, then select lexical-first bounded speaker boundaries."""
+    """Select locally anchored boundaries, then conservatively accept or fall back."""
     if not turns or not master_text.strip():
         return HybridAlignmentResult(False, tuple(turns), 0.0, (), "empty_input")
     per_turn = [_tokens(turn.text) for turn in turns]
-    a_words = [token.normalized for group in per_turn for token in group]
+    a_words = [t.normalized for group in per_turn for t in group]
     g_tokens = _tokens(master_text)
-    g_words = [token.normalized for token in g_tokens]
+    g_words = [t.normalized for t in g_tokens]
     if not a_words or not g_words:
         return HybridAlignmentResult(False, tuple(turns), 0.0, (), "empty_tokens")
     matcher = SequenceMatcher(None, a_words, g_words, autojunk=False)
@@ -120,68 +156,82 @@ def align_transcript(turns: list[TranscriptTurn], master_text: str) -> HybridAli
         return HybridAlignmentResult(False, tuple(turns), similarity, (), "global_similarity")
 
     decisions: list[BoundaryDecision] = []
-    cumulative = 0
-    previous = 0
+    cumulative = previous = 0
     for index in range(len(turns) - 1):
         cumulative += len(per_turn[index])
         estimate, has_left, has_right = _estimate_boundary(cumulative, len(a_words), len(g_words), matcher)
-        nearby_size = min(len(per_turn[index]), len(per_turn[index + 1]))
-        quality_radius = 1 if similarity >= 0.85 else 2 if similarity >= 0.65 else 3
-        radius = min(MAX_SEARCH_RADIUS, ABSOLUTE_MAX_BOUNDARY_SHIFT,
-                     max(MIN_SEARCH_RADIUS, min(nearby_size // 3 + quality_radius, MAX_SEARCH_RADIUS)))
+        adjacent = min(len(per_turn[index]), len(per_turn[index + 1]))
+        radius = min(MAX_SEARCH_RADIUS, 2 + math.ceil(math.sqrt(max(1, adjacent))))
         low, high = max(previous + 1, estimate - radius), min(len(g_words) - 1, estimate + radius)
         if low > high:
             return HybridAlignmentResult(False, tuple(turns), similarity, tuple(decisions), "non_monotonic")
-        # Distance has a 4-point cost while punctuation is at most 3: punctuation can
-        # break a local tie, but can never buy even one token of unsupported movement.
-        candidates = [(abs(candidate - estimate) * -4 + _punctuation_strength(master_text, g_tokens, candidate),
-                       -abs(candidate - estimate), candidate) for candidate in range(low, high + 1)]
+
+        left_words = [t.normalized for t in per_turn[index]]
+        right_words = [t.normalized for t in per_turn[index + 1]]
+        left_n, right_n = _context_size(per_turn[index]), _context_size(per_turn[index + 1])
+        short_protected = len(left_words) <= SHORT_TURN_TOKENS or len(right_words) <= SHORT_TURN_TOKENS
+        candidates = []
+        for candidate in range(low, high + 1):
+            left_fit = _fit(left_words[-left_n:], g_words[max(0, candidate - left_n):candidate])
+            right_fit = _fit(right_words[:right_n], g_words[candidate:candidate + right_n])
+            score = 4.0 * left_fit + 4.0 * right_fit - 0.22 * abs(candidate - estimate)
+            score += _syntax_adjustment(master_text, g_tokens, candidate)
+            # Complete short turns already drive the lexical terms.  This small
+            # deterministic term makes credible preservation win close ties,
+            # without manufacturing a match where none exists.
+            if short_protected and max(left_fit, right_fit) >= 0.50:
+                score += 0.35
+            candidates.append((score, -abs(candidate - estimate), -candidate,
+                               candidate, left_fit, right_fit))
         candidates.sort(reverse=True)
-        selected = candidates[0][2]
+        best = candidates[0]
+        selected, left_fit, right_fit = best[3], best[4], best[5]
+        second_score = candidates[1][0] if len(candidates) > 1 else best[0] - 1.0
+        margin = best[0] - second_score
         distance = abs(selected - estimate)
-        local_left = has_left and cumulative > 0
-        local_right = has_right and cumulative < len(a_words)
-        if distance <= 1 and local_left and local_right:
+        lexical_floor = min(left_fit, right_fit)
+        lexical_total = left_fit + right_fit
+        # A provider may insert a whole clause immediately on one side of an
+        # otherwise exact anchor.  Both sides remain scored, but one exact side
+        # is sufficient when the global matcher confirms anchors on both sides.
+        if (lexical_total >= 0.95 and max(left_fit, right_fit) >= 0.70 and
+                margin >= 0.18 and distance <= 3 and has_left and has_right):
             confidence = BoundaryConfidence.HIGH
-        elif distance <= 2 and (local_left or local_right) and similarity >= 0.65:
+        elif (lexical_total >= 0.70 and max(left_fit, right_fit) >= 0.50 and
+              margin >= 0.08 and distance <= 5 and (has_left or has_right)):
             confidence = BoundaryConfidence.MEDIUM
         else:
             confidence = BoundaryConfidence.LOW
-        decisions.append(BoundaryDecision(estimate, selected, confidence))
+        reason = None if confidence is not BoundaryConfidence.LOW else (
+            "insufficient_lexical_fit" if lexical_total < 0.70 else
+            "ambiguous_candidates" if margin < 0.08 else "excessive_displacement")
+        decisions.append(BoundaryDecision(
+            estimate, selected, confidence, _bucket(left_fit, .35, .70),
+            _bucket(right_fit, .35, .70), _bucket(margin, .08, .18),
+            short_protected and max(left_fit, right_fit) >= .50, reason))
         previous = selected
 
-    boundaries = [0, *(decision.selected for decision in decisions), len(g_tokens)]
+    boundaries = [0, *(d.selected for d in decisions), len(g_tokens)]
     if any(left >= right for left, right in zip(boundaries, boundaries[1:])):
         return HybridAlignmentResult(False, tuple(turns), similarity, tuple(decisions), "empty_turn")
     if sum(d.confidence is BoundaryConfidence.LOW for d in decisions) > MAX_UNSAFE_BOUNDARIES:
         return HybridAlignmentResult(False, tuple(turns), similarity, tuple(decisions), "unsafe_boundary")
     for index, (left, right) in enumerate(zip(boundaries, boundaries[1:])):
-        source_tokens = len(per_turn[index])
-        hybrid_tokens = right - left
-        # A fixed allowance prevents a few legitimately restored ASR words from
-        # dominating the ratio for short turns. The relative term still scales
-        # the guard for longer turns without permitting multi-turn absorption.
+        source_tokens, hybrid_tokens = len(per_turn[index]), right - left
         token_limit = source_tokens * MAX_TURN_EXPANSION_RATIO + MAX_TURN_EXPANSION_SLACK
         if hybrid_tokens > token_limit:
-            diagnostic = PathologicalTurnDiagnostic(
-                index=index,
-                source_tokens=source_tokens,
-                hybrid_tokens=hybrid_tokens,
-                ratio=hybrid_tokens / max(1, source_tokens),
-                ratio_limit=MAX_TURN_EXPANSION_RATIO,
-                absolute_slack=MAX_TURN_EXPANSION_SLACK,
-                token_limit=token_limit,
-            )
+            diagnostic = PathologicalTurnDiagnostic(index, source_tokens, hybrid_tokens,
+                hybrid_tokens / max(1, source_tokens), MAX_TURN_EXPANSION_RATIO,
+                MAX_TURN_EXPANSION_SLACK, token_limit)
             return HybridAlignmentResult(False, tuple(turns), similarity, tuple(decisions),
                                          "pathological_turn", diagnostic)
 
-    output: list[TranscriptTurn] = []
+    output = []
     for index, (left, right) in enumerate(zip(boundaries, boundaries[1:])):
         char_start = 0 if left == 0 else g_tokens[left].start
         char_end = len(master_text) if right == len(g_tokens) else g_tokens[right].start
         output.append(replace(turns[index], text=master_text[char_start:char_end].strip()))
-    # Structural and exact token-coverage guard (including repeated words).
-    output_words = [token.normalized for turn in output for token in _tokens(turn.text)]
+    output_words = [t.normalized for turn in output for t in _tokens(turn.text)]
     if output_words != g_words or len(output) != len(turns):
         return HybridAlignmentResult(False, tuple(turns), similarity, tuple(decisions), "token_coverage")
     if any((out.speaker, out.start, out.end, out.timestamp) !=
