@@ -66,6 +66,7 @@ class JsonStorage:
             },
             "meta": {
                 "user_chats": {},
+                "trip_reminder_deliveries": [],
             },
         }
 
@@ -157,6 +158,14 @@ class JsonStorage:
             for username, chat_id in user_chats.items()
             if isinstance(username, str) and isinstance(chat_id, int)
         }
+        deliveries = meta.get("trip_reminder_deliveries")
+        if isinstance(deliveries, list):
+            # Opaque hashes only.  Keeping this as an additive meta field makes
+            # old JSON files valid without a migration.
+            data["meta"]["trip_reminder_deliveries"] = sorted({
+                value for value in deliveries
+                if isinstance(value, str) and len(value) == 64
+            })
         return data
 
 
