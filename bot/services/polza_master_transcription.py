@@ -25,6 +25,8 @@ logger = logging.getLogger(__name__)
 def _audio_mime_type(content_type: str | None, filename: str) -> str:
     """Return a Data URL-safe audio MIME type without trusting Telegram metadata."""
     candidate = content_type.strip() if isinstance(content_type, str) else ""
+    if Path(filename).suffix.lower() == ".m4a" and candidate.lower() == "audio/mpeg":
+        return "audio/mp4"
     normalized = _M4A_MIME_NORMALIZATION.get(candidate.lower())
     if normalized:
         return normalized
