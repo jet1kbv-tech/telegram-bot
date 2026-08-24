@@ -97,7 +97,8 @@ from bot.handlers.tickets import (
 )
 from bot.handlers.event_attachments import (configure_event_attachment_handlers, discard_ticket_enrichment, event_attachment_router,
                                             receive_attachment_metadata, receive_file)
-from bot.handlers.contextual_actions import configure_contextual_action_handlers, contextual_action_callback
+from bot.handlers.contextual_actions import (configure_contextual_action_handlers,
+                                             contextual_action_callback, contextual_trip_callback)
 from bot.handlers.nl_event_attachments import (attachment_event_title_handler, collect_attachment_handler, nl_attachment_callback_router,
                                                 orphan_attachment_handler)
 from bot.handlers.nl_attachment_retrieval import attachment_query_callback_router
@@ -346,6 +347,7 @@ def build_app() -> Application:
                 CallbackQueryHandler(spark_callback_router, pattern=r"^spark:"),
                 CallbackQueryHandler(tickets_callback_router, pattern=r"^tickets:"),
                 CallbackQueryHandler(purchases_callback_router, pattern=r"^purchases:"),
+                CallbackQueryHandler(contextual_trip_callback, pattern=r"^ctx:trip:"),
                 CallbackQueryHandler(section_router),
                 *ai_text_handlers,
             ],
@@ -366,6 +368,7 @@ def build_app() -> Application:
                 CallbackQueryHandler(tickets_callback_router, pattern=r"^tickets:"),
                 CallbackQueryHandler(purchases_callback_router, pattern=r"^purchases:"),
                 CallbackQueryHandler(contextual_action_callback, pattern=r"^ctx:event:"),
+                CallbackQueryHandler(contextual_trip_callback, pattern=r"^ctx:trip:"),
                 CallbackQueryHandler(event_attachment_router, pattern=r"^att\|"),
                 CallbackQueryHandler(section_router),
                 *ai_text_handlers,
