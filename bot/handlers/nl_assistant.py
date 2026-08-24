@@ -12,6 +12,7 @@ from bot.config import AI_MAX_CLARIFICATIONS, AI_PROPOSAL_TTL_SECONDS, BOT_TIMEZ
 from bot.handlers.afisha import build_afisha_item_text
 from bot.handlers.calendar import build_calendar_event_text
 from bot.handlers.event_attachments import extract_attachment_draft
+from bot.handlers.contextual_actions import trip_callback
 from bot.handlers.films import begin_film_search
 from bot.handlers.film_recommendations import start_from_nl
 from bot.services.actions.afisha import create_afisha_event
@@ -318,7 +319,14 @@ async def nl_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                                    **parsed.arguments)
             logger.info("NL context query intent=query_context query_type=%s outcome=%s candidate_count=%s",
                         parsed.arguments["query_type"], result.outcome, result.candidate_count)
-            await response.reply_text(result.text, reply_markup=_menu_keyboard())
+            if result.trip is not None and result.candidate_count == 1:
+                markup = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🧳 Открыть поездку", callback_data=trip_callback("card", result.trip.context_id))],
+                    [InlineKeyboardButton("🏠 В меню", callback_data="menu:main")],
+                ])
+            else:
+                markup = _menu_keyboard()
+            await response.reply_text(result.text, reply_markup=markup)
             return _idle_state(context)
         if parsed.intent is IntentKind.QUERY_WEATHER_CONTEXT:
             if _weather_provider is None:

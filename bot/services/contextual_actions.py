@@ -22,6 +22,33 @@ class EventActionContext:
     document_count: int
 
 
+@dataclass(frozen=True, slots=True)
+class TripActionContext:
+    """A freshly rebuilt, actor-visible canonical trip projection."""
+    bundle: ContextBundle
+    trip: TripContext
+    documents: tuple
+    linked_events: tuple[EventContext, ...]
+
+
+def resolve_trip_action_context(data: dict, *, actor_key: str, trip_context_id: str,
+                                now: datetime, timezone: str) -> TripActionContext | None:
+    bundle = build_context_bundle(data, actor_key, now, timezone, include_past=True)
+    trip = next((row for row in bundle.trips if row.context_id == trip_context_id), None)
+    if trip is None:
+        return None
+    event_ids = set(trip.linked_event_ids)
+    events = tuple(event for event in bundle.events if event.context_id in event_ids)
+    # A trip owns its tickets and also the other canonical documents of its
+    # visible linked events (voucher, insurance, reservation, and so on).
+    identities = set(trip.linked_attachment_ids)
+    parents = {(event.canonical_parent_type, event.canonical_parent_id) for event in events}
+    documents = tuple(document for document in bundle.documents
+                      if document.attachment_id in identities
+                      or (document.parent_type, document.parent_id) in parents)
+    return TripActionContext(bundle, trip, documents, events)
+
+
 def select_event_trip(event: EventContext, trips: tuple[TripContext, ...]) -> TripContext | None:
     """Conservatively select one linked segment using notification semantics."""
     linked = tuple(trip for trip in trips if event.context_id in trip.linked_event_ids)
@@ -84,6 +111,52 @@ def render_trip(trip: TripContext) -> str:
             moment += f" · {trip.arrival_time:%H:%M}"
         lines += ["", "Прибытие:", moment]
     return "\n".join(lines)
+
+
+def _moment(day, clock) -> str | None:
+    if not day:
+        return None
+    return _day(day) + (f" · {clock:%H:%M}" if clock else "")
+
+
+def render_trip_route(trip: TripContext) -> str:
+    lines = ["🚆 Маршрут"]
+    departure = _moment(trip.departure_date, trip.departure_time)
+    if departure:
+        lines += ["", "Отправление:", departure]
+    route = " → ".join(value for value in (trip.origin, trip.destination) if value)
+    if route:
+        lines += ["", route]
+    arrival = _moment(trip.arrival_date, trip.arrival_time)
+    if arrival:
+        lines += ["", "Прибытие:", arrival]
+    return "\n".join(lines)
+
+
+def render_trip_card(value: TripActionContext) -> str:
+    trip = value.trip
+    heading = f"🧳 Поездка в {trip.city_hint or trip.destination}" if (trip.city_hint or trip.destination) else "🧳 Поездка"
+    lines = [heading]
+    route = render_trip_route(trip).splitlines()[1:]
+    if route:
+        lines += route
+    if len(value.linked_events) == 1:
+        event = value.linked_events[0]
+        lines += ["", "Связано с:", f"{event.title} · {_day(event.date)}"]
+    elif value.linked_events:
+        lines += ["", f"Связано событий: {len(value.linked_events)}"]
+    lines += ["", f"Документы: {len(value.documents)}"]
+    return "\n".join(lines)
+
+
+def render_trip_overview(value: TripActionContext) -> str:
+    return "🗓 Что известно\n\n" + "\n".join(render_trip_card(value).splitlines()[1:]).lstrip()
+
+
+def trip_weather_target(trip: TripContext):
+    """Return only explicit trip weather coordinates, never event fallback."""
+    return (trip.city_hint or trip.destination or None,
+            trip.arrival_date or trip.departure_date)
 
 
 def render_overview(value: EventActionContext) -> str:

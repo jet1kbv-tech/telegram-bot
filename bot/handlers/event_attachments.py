@@ -66,7 +66,8 @@ def _back(context: ContextTypes.DEFAULT_TYPE) -> str:
     return str(context.user_data.get("event_attachment_back") or "menu:main")
 
 
-async def show_documents(update: Update, context: ContextTypes.DEFAULT_TYPE, parent_type: str, parent_id: str, back: str) -> int:
+async def show_documents(update: Update, context: ContextTypes.DEFAULT_TYPE, parent_type: str, parent_id: str,
+                         back: str, *, read_only: bool = False) -> int:
     data = storage.load()
     try:
         resolved_type, resolved_id, event = resolve_attachment_parent(data, parent_type, parent_id)
@@ -75,11 +76,13 @@ async def show_documents(update: Update, context: ContextTypes.DEFAULT_TYPE, par
         return SECTION
     context.user_data["event_attachment_parent"] = (resolved_type, resolved_id)
     context.user_data["event_attachment_back"] = back
+    context.user_data["event_attachment_read_only"] = read_only
     items = get_attachments_for_event(data, resolved_type, resolved_id)
     titles = attachment_list_titles(items)
     rows = [[InlineKeyboardButton(title, callback_data=f"att|detail|{item['id']}")] for item, title in zip(items, titles)]
-    rows += [[InlineKeyboardButton("➕ Добавить", callback_data="att|add")],
-             [InlineKeyboardButton("⬅️ Назад", callback_data=back)],
+    if not read_only:
+        rows.append([InlineKeyboardButton("➕ Добавить", callback_data="att|add")])
+    rows += [[InlineKeyboardButton("⬅️ Назад", callback_data=back)],
              [InlineKeyboardButton("🏠 В меню", callback_data="menu:main")]]
     body = "\n".join(titles) if items else "Пока документов нет."
     await _edit()(update.callback_query, f"📎 Документы\n{event.get('title', 'Событие')}\n\n{body}", reply_markup=InlineKeyboardMarkup(rows))
@@ -120,12 +123,14 @@ async def show_detail(update: Update, context: ContextTypes.DEFAULT_TYPE, attach
         await _edit()(update.callback_query, "Документ не найден.")
         return SECTION
     rows = [[InlineKeyboardButton("📤 Отправить файл", callback_data=f"att|send|{attachment_id}")]]
-    if item.get("semantic_type") == "transport_ticket" and _ticket_enricher is not None:
+    read_only = bool(context.user_data.get("event_attachment_read_only"))
+    if not read_only and item.get("semantic_type") == "transport_ticket" and _ticket_enricher is not None:
         rows.append([InlineKeyboardButton("✨ Распознать данные", callback_data=f"att|recognize|{attachment_id}")])
-    rows += [
+    if not read_only:
+        rows += [
             [InlineKeyboardButton("✏️ Изменить данные", callback_data=f"att|edit|{attachment_id}")],
-            [InlineKeyboardButton("🗑 Удалить", callback_data=f"att|delconfirm|{attachment_id}")],
-            [InlineKeyboardButton("⬅️ Назад", callback_data="att|return")]]
+            [InlineKeyboardButton("🗑 Удалить", callback_data=f"att|delconfirm|{attachment_id}")]]
+    rows.append([InlineKeyboardButton("⬅️ Назад", callback_data="att|return")])
     await _edit()(update.callback_query, attachment_detail_text(item), reply_markup=InlineKeyboardMarkup(rows)); return SECTION
 
 
