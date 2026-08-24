@@ -146,6 +146,15 @@ async def process_transcription_jobs(context: ContextTypes.DEFAULT_TYPE) -> None
                             "unsafe_boundaries=%s reason=%s", alignment.accepted,
                             _similarity_bucket(alignment.similarity), len(turns), len(alignment.boundaries),
                             unsafe, alignment.rejection_reason or "none")
+                if alignment.pathological_turn is not None:
+                    diagnostic = alignment.pathological_turn
+                    logger.warning(
+                        "AI transcription pathological_turn index=%s source_tokens=%s hybrid_tokens=%s "
+                        "ratio=%.2f ratio_limit=%.2f absolute_slack=%s token_limit=%.2f",
+                        diagnostic.index, diagnostic.source_tokens, diagnostic.hybrid_tokens,
+                        diagnostic.ratio, diagnostic.ratio_limit, diagnostic.absolute_slack,
+                        diagnostic.token_limit,
+                    )
             turns = list(selection.turns)
             cleaner_obj = context.application.bot_data.get("transcript_cleaner")
             cleaner = cleaner_obj.clean_chunk if cleaner_obj else None

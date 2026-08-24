@@ -16,7 +16,8 @@ MAX_SEARCH_RADIUS = 6
 ABSOLUTE_MAX_BOUNDARY_SHIFT = 8
 LOCAL_CONTEXT_TOKENS = 4
 MAX_UNSAFE_BOUNDARIES = 0
-MAX_TURN_EXPANSION_FACTOR = 3.0
+MAX_TURN_EXPANSION_RATIO = 1.6
+MAX_TURN_EXPANSION_SLACK = 8
 
 
 class BoundaryConfidence(str, Enum):
@@ -33,12 +34,25 @@ class BoundaryDecision:
 
 
 @dataclass(frozen=True)
+class PathologicalTurnDiagnostic:
+    """Bounded, text-free context for explaining an expansion rejection."""
+    index: int
+    source_tokens: int
+    hybrid_tokens: int
+    ratio: float
+    ratio_limit: float
+    absolute_slack: int
+    token_limit: float
+
+
+@dataclass(frozen=True)
 class HybridAlignmentResult:
     accepted: bool
     turns: tuple[TranscriptTurn, ...]
     similarity: float
     boundaries: tuple[BoundaryDecision, ...]
     rejection_reason: str | None = None
+    pathological_turn: PathologicalTurnDiagnostic | None = None
 
 
 @dataclass(frozen=True)
@@ -142,9 +156,24 @@ def align_transcript(turns: list[TranscriptTurn], master_text: str) -> HybridAli
     if sum(d.confidence is BoundaryConfidence.LOW for d in decisions) > MAX_UNSAFE_BOUNDARIES:
         return HybridAlignmentResult(False, tuple(turns), similarity, tuple(decisions), "unsafe_boundary")
     for index, (left, right) in enumerate(zip(boundaries, boundaries[1:])):
-        expected = max(1, len(per_turn[index]))
-        if right - left > max(8, round(expected * MAX_TURN_EXPANSION_FACTOR)):
-            return HybridAlignmentResult(False, tuple(turns), similarity, tuple(decisions), "pathological_turn")
+        source_tokens = len(per_turn[index])
+        hybrid_tokens = right - left
+        # A fixed allowance prevents a few legitimately restored ASR words from
+        # dominating the ratio for short turns. The relative term still scales
+        # the guard for longer turns without permitting multi-turn absorption.
+        token_limit = source_tokens * MAX_TURN_EXPANSION_RATIO + MAX_TURN_EXPANSION_SLACK
+        if hybrid_tokens > token_limit:
+            diagnostic = PathologicalTurnDiagnostic(
+                index=index,
+                source_tokens=source_tokens,
+                hybrid_tokens=hybrid_tokens,
+                ratio=hybrid_tokens / max(1, source_tokens),
+                ratio_limit=MAX_TURN_EXPANSION_RATIO,
+                absolute_slack=MAX_TURN_EXPANSION_SLACK,
+                token_limit=token_limit,
+            )
+            return HybridAlignmentResult(False, tuple(turns), similarity, tuple(decisions),
+                                         "pathological_turn", diagnostic)
 
     output: list[TranscriptTurn] = []
     for index, (left, right) in enumerate(zip(boundaries, boundaries[1:])):
