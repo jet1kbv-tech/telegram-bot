@@ -82,3 +82,6 @@ CONFIRMING_TICKET_ENRICHMENT = 75
 
 # Read-only NL event attachment retrieval.
 SELECTING_NL_ATTACHMENT_QUERY = 76
+
+# AI audio transcription intake. Never renumber deployed states above.
+WAITING_FOR_AI_TRANSCRIPTION = 77

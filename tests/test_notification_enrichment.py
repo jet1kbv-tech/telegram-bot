@@ -194,4 +194,4 @@ def test_existing_job_sends_one_enriched_message_and_keeps_existing_marker(monke
     assert "🚆 Отправление" in text and "🌦 Воронеж · 31 августа" in text
     saved = store.load()
     assert saved["afisha"][0]["notified_24h"] is True
-    assert set(saved) == {"meta", "films", "wishlist", "leisure", "backlog", "spark", "afisha", "calendars", "places", "purchases", "tickets", "event_attachments"}
+    assert set(saved) == {"meta", "films", "wishlist", "leisure", "backlog", "spark", "afisha", "calendars", "places", "purchases", "tickets", "event_attachments", "ai_jobs"}
