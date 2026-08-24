@@ -2,7 +2,32 @@
 
 ## Architecture and entry points
 
-V2 is a read-only presentation layer over the existing Context Engine. It does not add storage, trip inference, search, or authorization rules. An event's existing **🚆 Поездка** action opens a card only after the existing conservative `select_event_trip` produces one result. A successful, unambiguous NL `query_context` result offers **🧳 Открыть поездку**; ambiguous results retain the established controlled response.
+V2 is a read-only presentation layer over the existing Context Engine. It does not add storage, trip inference, search, or authorization rules. A successful, unambiguous NL `query_context` result offers **🧳 Открыть поездку**; ambiguous results retain the established controlled response. Event navigation behavior is extended by V2.1 below.
+
+## V2.1: Afisha parity and linked trip segments
+
+Afisha item cards and their Calendar projections now pass the current actor into the same
+`contextual_action_rows` integration. Consequently, both entry points expose the same
+actor-visible canonical actions without duplicating action logic. Calendar projections keep
+their Calendar origin for back navigation.
+
+An event action considers every actor-visible canonical `TripContext` whose
+`linked_event_ids` contains the event ID. One segment keeps the **🚆 Поездка** direct-card
+fast path; multiple segments use **🚆 Поездки** and open a read-only selector ordered by
+departure date, departure time, and canonical context ID. The selector uses neutral numbering
+and returns to the exact Afisha or Calendar event. A trip opened from it returns to the selector.
+
+Event document scope continues to contain every visible canonical document associated with
+the event. Trip document scope contains only attachment IDs explicitly associated with that
+canonical trip; merely sharing an event parent is not treated as evidence. Thus tickets for a
+different segment and general event vouchers remain available at event scope but do not leak
+into an individual trip.
+
+Selector and trip callbacks carry only actions, opaque canonical event/trip IDs, a compact
+source kind, and a page number. They contain no routes, cities, filenames, Telegram IDs, or
+provider data and stay within Telegram's callback bound. Each callback reloads storage and
+rebuilds the actor-scoped ContextBundle before resolving visibility. Selector, cards,
+documents, route, and overview are local-only; only weather can make one WeatherProvider call.
 
 ## Card UX and identity
 

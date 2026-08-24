@@ -61,7 +61,7 @@ def test_route_and_overview_are_local_and_never_derive_duration():
     overview = render_trip_overview(value)
     assert "Отправление:" in route and "Прибытие:" in route
     assert "длитель" not in route.casefold()
-    assert "Документы: 2" in overview
+    assert "Документы: 1" in overview
     assert "Санаторий · 31 августа" in overview
     assert trip_weather_target(value.trip) == ("Воронеж", value.trip.arrival_date)
 
@@ -78,7 +78,7 @@ def test_documents_and_stale_visibility_are_rebuilt_from_fresh_storage():
     data = snapshot(outbound(), document("voucher", semantic_type="voucher"))
     value = resolve(data)
     trip_id = value.trip.context_id
-    assert len(value.documents) == 2
+    assert len(value.documents) == 1
     data["event_attachments"] = [outbound()]
     # Canonical identity changes when the ticket disappears, while deletion of
     # a related voucher is reflected without changing the trip identity.
