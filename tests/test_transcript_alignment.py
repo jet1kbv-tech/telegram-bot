@@ -207,3 +207,71 @@ def test_production_like_transcript_accepts_restored_words_without_unsafe_bounda
     # The former max(8, round(source * 3.0)) cap was 12 here, so this
     # legitimate 13-token restoration deterministically reproduced rejection.
     assert len(result.turns[3].text.rstrip(".").split()) == 13
+
+
+def test_v22_production_shape_recovers_three_low_boundaries_locally():
+    """18 turns remain hybrid when three local regions have weak wording."""
+    weak_turns = {10, 11, 14, 15, 16}
+    source, master_words = [], []
+    for index in range(18):
+        words = [f"word{index}x{offset}" for offset in range(6)]
+        source.append(" ".join(
+            [f"noise{index}z{offset}" for offset in range(6)]
+            if index in weak_turns else words
+        ))
+        master_words.extend(words)
+    original = turns(*source)
+    master = " ".join(master_words)
+
+    result = align_transcript(original, master)
+
+    assert result.accepted and 0.65 <= result.similarity <= 0.80
+    assert len(result.turns) == 18 and len(result.boundaries) == 17
+    assert result.unsafe_boundary_count == 3
+    assert result.local_fallback_boundary_count == 3
+    assert all(d.local_fallback_applied for d in result.boundaries
+               if d.confidence.value == "low")
+    selection = select_best_transcript(
+        original, MasterTranscriptionResult("success", "model", text=master))
+    assert selection.source == "hybrid"
+    assert [word for turn in result.turns for word in turn.text.split()] == master_words
+
+
+def test_v22_ambiguous_boundary_uses_clamped_global_estimate():
+    source = turns("a e d", "a c", "d d c b")
+    master = "a c d d a a c c b"
+
+    result = align_transcript(source, master)
+
+    ambiguous = [d for d in result.boundaries if d.reason == "ambiguous_candidates"]
+    assert result.accepted and len(ambiguous) == 1
+    decision = ambiguous[0]
+    assert decision.confidence.value == "low" and decision.local_fallback_applied
+    # Its raw global estimate lies behind the preceding boundary, so v2.2 uses
+    # the nearest feasible position (previous + one), not the best LOW score.
+    previous = result.boundaries[0].selected
+    assert decision.estimated < previous + 1
+    assert decision.selected == previous + 1
+
+
+def test_v22_short_alternating_tail_reserves_one_master_token_per_turn():
+    source = turns(
+        "alpha beta gamma delta epsilon zeta", "one", "two", "three", "four")
+    master = "alpha beta gamma delta epsilon zeta red blue green gold"
+
+    result = align_transcript(source, master)
+
+    assert result.accepted and result.local_fallback_boundary_count > 0
+    assert all(turn.text.split() for turn in result.turns)
+    assert [t.speaker for t in result.turns] == [t.speaker for t in source]
+    assert [word for turn in result.turns for word in turn.text.split()] == master.split()
+
+
+def test_v22_impossible_nonempty_partition_still_rejects_globally():
+    source = turns("same", "same", "same")
+    result = align_transcript(source, "same same")
+
+    assert not result.accepted and result.rejection_reason == "non_monotonic"
+    selection = select_best_transcript(
+        source, MasterTranscriptionResult("success", "model", text="same same"))
+    assert selection.source == "aiesa_fallback" and selection.turns == tuple(source)

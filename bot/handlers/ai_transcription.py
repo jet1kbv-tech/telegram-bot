@@ -141,21 +141,23 @@ async def process_transcription_jobs(context: ContextTypes.DEFAULT_TYPE) -> None
             source = selection.source
             if selection.alignment is not None:
                 alignment = selection.alignment
-                unsafe = sum(boundary.confidence.value == "low" for boundary in alignment.boundaries)
                 logger.info("AI transcription alignment accepted=%s similarity_bucket=%s turns=%s boundaries=%s "
-                            "unsafe_boundaries=%s reason=%s", alignment.accepted,
+                            "unsafe_boundaries=%s local_fallback_boundaries=%s reason=%s", alignment.accepted,
                             _similarity_bucket(alignment.similarity), len(turns), len(alignment.boundaries),
-                            unsafe, alignment.rejection_reason or "none")
+                            alignment.unsafe_boundary_count,
+                            alignment.local_fallback_boundary_count,
+                            alignment.rejection_reason or "none")
                 for boundary_index, boundary in enumerate(alignment.boundaries):
                     if boundary.confidence.value == "low":
                         logger.warning(
                             "AI transcription boundary index=%s estimated=%s selected=%s displacement=%s "
-                            "left_fit=%s right_fit=%s confidence=%s margin=%s short_protected=%s reason=%s",
+                            "left_fit=%s right_fit=%s confidence=%s margin=%s short_protected=%s reason=%s "
+                            "local_fallback_applied=%s",
                             boundary_index, boundary.estimated, boundary.selected,
                             boundary.selected - boundary.estimated, boundary.left_fit_bucket,
                             boundary.right_fit_bucket, boundary.confidence.value,
                             boundary.margin_bucket, boundary.short_turn_protected,
-                            boundary.reason or "none",
+                            boundary.reason or "none", boundary.local_fallback_applied,
                         )
                 if alignment.pathological_turn is not None:
                     diagnostic = alignment.pathological_turn
