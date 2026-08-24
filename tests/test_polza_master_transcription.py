@@ -55,10 +55,12 @@ async def test_master_transcription_json_data_url_contract(tmp_path: Path):
 
 @pytest.mark.parametrize(("content_type", "filename", "expected"), [
     ("audio/mp4", "recording.bin", "audio/mp4"),
-    ("audio/x-m4a", "recording.m4a", "audio/mp4"),
+    ("audio/mpeg", "test.m4a", "audio/mp4"),
+    ("audio/mpeg", "test.mp3", "audio/mpeg"),
+    ("audio/x-m4a", "test.m4a", "audio/mp4"),
     ("audio/m4a", "recording.m4a", "audio/mp4"),
     ("video/mp4", "recording.m4a", "audio/mp4"),
-    (None, "recording.m4a", "audio/mp4"),
+    (None, "test.m4a", "audio/mp4"),
     ("audio/wav", "recording.m4a", "audio/wav"),
     ("", "recording.mp3", "audio/mpeg"),
     ("application/octet-stream", "recording.unknown", "audio/ogg"),
