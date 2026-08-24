@@ -1,6 +1,6 @@
 """Project master-ASR wording onto Aiesa's diarized turn structure.
 
-Alignment v2.1 keeps Aiesa's turns, speakers and timestamps authoritative.  A
+Alignment v2.2 keeps Aiesa's turns, speakers and timestamps authoritative.  A
 global ``SequenceMatcher`` is used only to estimate each Aiesa boundary.  The
 actual boundary is selected independently in a bounded local window using the
 suffix of the preceding Aiesa turn and prefix of the following turn.  Thus this
@@ -14,6 +14,13 @@ Syntax adjustment is +.12 after sentence punctuation, +.04 after ``;:`` and
 -.10 for no punctuation (-.04 after a comma).  The search radius is
 ``min(8, 2 + ceil(sqrt(shorter adjacent turn)))``.  Accepted boundaries slice
 the one master token stream, which provides exact, ordered token conservation.
+
+LOW is a local boundary-quality result, not a judgement about master wording.
+Such a boundary uses the global matcher's estimate, clamped to
+``[previous + 1, master_count - remaining_turns]``.  The lower bound preserves
+the preceding turn and the upper bound reserves one token for every remaining
+Aiesa turn.  HIGH/MEDIUM boundaries retain their locally scored positions.
+Only a failure of the global or final structural guards rejects the hybrid.
 """
 from __future__ import annotations
 
@@ -31,7 +38,6 @@ MIN_GLOBAL_SIMILARITY = 0.45
 MAX_SEARCH_RADIUS = 8
 LOCAL_CONTEXT_TOKENS = 8
 SHORT_TURN_TOKENS = 5
-MAX_UNSAFE_BOUNDARIES = 0
 MAX_TURN_EXPANSION_RATIO = 1.6
 MAX_TURN_EXPANSION_SLACK = 8
 
@@ -53,6 +59,7 @@ class BoundaryDecision:
     margin_bucket: str = "none"
     short_turn_protected: bool = False
     reason: str | None = None
+    local_fallback_applied: bool = False
 
 
 @dataclass(frozen=True)
@@ -75,6 +82,14 @@ class HybridAlignmentResult:
     boundaries: tuple[BoundaryDecision, ...]
     rejection_reason: str | None = None
     pathological_turn: PathologicalTurnDiagnostic | None = None
+
+    @property
+    def unsafe_boundary_count(self) -> int:
+        return sum(d.confidence is BoundaryConfidence.LOW for d in self.boundaries)
+
+    @property
+    def local_fallback_boundary_count(self) -> int:
+        return sum(d.local_fallback_applied for d in self.boundaries)
 
 
 @dataclass(frozen=True)
@@ -162,7 +177,13 @@ def align_transcript(turns: list[TranscriptTurn], master_text: str) -> HybridAli
         estimate, has_left, has_right = _estimate_boundary(cumulative, len(a_words), len(g_words), matcher)
         adjacent = min(len(per_turn[index]), len(per_turn[index + 1]))
         radius = min(MAX_SEARCH_RADIUS, 2 + math.ceil(math.sqrt(max(1, adjacent))))
-        low, high = max(previous + 1, estimate - radius), min(len(g_words) - 1, estimate + radius)
+        # In addition to keeping this boundary non-empty, reserve one master
+        # token for each source turn still to be emitted.  This makes short
+        # turns an explicit invariant rather than relying on a later check.
+        safe_low = previous + 1
+        remaining_turns = len(turns) - index - 1
+        safe_high = len(g_words) - remaining_turns
+        low, high = max(safe_low, estimate - radius), min(safe_high, estimate + radius)
         if low > high:
             return HybridAlignmentResult(False, tuple(turns), similarity, tuple(decisions), "non_monotonic")
 
@@ -205,17 +226,22 @@ def align_transcript(turns: list[TranscriptTurn], master_text: str) -> HybridAli
         reason = None if confidence is not BoundaryConfidence.LOW else (
             "insufficient_lexical_fit" if lexical_total < 0.70 else
             "ambiguous_candidates" if margin < 0.08 else "excessive_displacement")
+        local_fallback = confidence is BoundaryConfidence.LOW
+        if local_fallback:
+            # Deliberately ignore the linguistically best LOW candidate.  The
+            # global Aiesa->master estimate is the conservative structural
+            # answer, clamped only to the feasible monotonic partition.
+            selected = max(safe_low, min(estimate, safe_high))
         decisions.append(BoundaryDecision(
             estimate, selected, confidence, _bucket(left_fit, .35, .70),
             _bucket(right_fit, .35, .70), _bucket(margin, .08, .18),
-            short_protected and max(left_fit, right_fit) >= .50, reason))
+            short_protected and max(left_fit, right_fit) >= .50, reason,
+            local_fallback))
         previous = selected
 
     boundaries = [0, *(d.selected for d in decisions), len(g_tokens)]
     if any(left >= right for left, right in zip(boundaries, boundaries[1:])):
         return HybridAlignmentResult(False, tuple(turns), similarity, tuple(decisions), "empty_turn")
-    if sum(d.confidence is BoundaryConfidence.LOW for d in decisions) > MAX_UNSAFE_BOUNDARIES:
-        return HybridAlignmentResult(False, tuple(turns), similarity, tuple(decisions), "unsafe_boundary")
     for index, (left, right) in enumerate(zip(boundaries, boundaries[1:])):
         source_tokens, hybrid_tokens = len(per_turn[index]), right - left
         token_limit = source_tokens * MAX_TURN_EXPANSION_RATIO + MAX_TURN_EXPANSION_SLACK
