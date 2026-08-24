@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass, replace
+from difflib import SequenceMatcher
 from typing import Awaitable, Callable
 
 import httpx
@@ -11,6 +13,15 @@ from bot.services.aiesa_transcription import ProviderSegment
 
 POLZA_URL = "https://polza.ai/api/v1/chat/completions"
 SPEAKER_RE = re.compile(r"^SPEAKER_(\d+)$", re.I)
+WORD_RE = re.compile(r"[^\W_]+", re.UNICODE)
+logger = logging.getLogger(__name__)
+
+# These deliberately favor false rejection (and source fallback) over accepting
+# editorial rewriting.  A 2->1 token ASR repair is permitted when its characters
+# remain close, but deletions/insertions outside a replacement span are not.
+MIN_TOKEN_COUNT_RATIO = 0.75
+MIN_TOKEN_SEQUENCE_RATIO = 0.60
+MIN_COMPACT_CHAR_RATIO = 0.82
 
 
 @dataclass(frozen=True)
@@ -60,6 +71,31 @@ def chunk_turns(turns: list[TranscriptTurn], max_chars: int = 12000) -> list[lis
     return chunks
 
 
+def _preserves_text(original: str, cleaned: str) -> tuple[bool, str]:
+    original_tokens = WORD_RE.findall(original.casefold())
+    cleaned_tokens = WORD_RE.findall(cleaned.casefold())
+    if original_tokens == cleaned_tokens:
+        return True, "normalized_identity"
+    if not original_tokens or not cleaned_tokens:
+        return False, "empty_normalized_text"
+
+    matcher = SequenceMatcher(None, original_tokens, cleaned_tokens, autojunk=False)
+    opcodes = matcher.get_opcodes()
+    # A standalone delete loses speech; a standalone insert invents speech.
+    if any(tag in {"delete", "insert"} for tag, *_ in opcodes):
+        return False, "token_deletion_or_insertion"
+    count_ratio = len(cleaned_tokens) / len(original_tokens)
+    token_ratio = matcher.ratio()
+    char_ratio = SequenceMatcher(
+        None, "".join(original_tokens), "".join(cleaned_tokens), autojunk=False
+    ).ratio()
+    if count_ratio < MIN_TOKEN_COUNT_RATIO:
+        return False, "disproportionate_shortening"
+    if token_ratio < MIN_TOKEN_SEQUENCE_RATIO or char_ratio < MIN_COMPACT_CHAR_RATIO:
+        return False, "material_rewording"
+    return True, "bounded_asr_correction"
+
+
 def validate_cleaned(chunk: list[TranscriptTurn], payload: object) -> list[TranscriptTurn]:
     if not isinstance(payload, dict) or not isinstance(payload.get("segments"), list):
         raise ValueError("invalid_cleanup_output")
@@ -67,12 +103,24 @@ def validate_cleaned(chunk: list[TranscriptTurn], payload: object) -> list[Trans
     if len(output) != len(chunk):
         raise ValueError("segment_count_changed")
     cleaned: list[TranscriptTurn] = []
+    accepted = 0
+    rejected_reasons: dict[str, int] = {}
     for original, item in zip(chunk, output, strict=True):
         if not isinstance(item, dict) or item.get("id") != original.id or item.get("speaker") != original.speaker:
             raise ValueError("segment_identity_changed")
         if item.get("timestamp") != original.timestamp or not isinstance(item.get("text"), str) or not item["text"].strip():
             raise ValueError("segment_content_invalid")
-        cleaned.append(replace(original, text=item["text"].strip()))
+        candidate = item["text"].strip()
+        preserved, reason = _preserves_text(original.text, candidate)
+        if preserved:
+            accepted += 1
+            cleaned.append(replace(original, text=candidate))
+        else:
+            rejected_reasons[reason] = rejected_reasons.get(reason, 0) + 1
+            cleaned.append(original)
+    logger.info("AI transcription cleanup validation provider=polza accepted_segments=%s rejected_segments=%s reasons=%s",
+                accepted, len(cleaned) - accepted,
+                ",".join(f"{reason}:{count}" for reason, count in sorted(rejected_reasons.items())) or "none")
     return cleaned
 
 
@@ -82,9 +130,16 @@ class PolzaTranscriptCleaner:
 
     async def clean_chunk(self, chunk: list[TranscriptTurn]) -> list[TranscriptTurn]:
         source = {"segments": [{"id": t.id, "speaker": t.speaker, "timestamp": t.timestamp, "text": t.text} for t in chunk]}
-        prompt = ("Ты редактор ASR, не суммаризатор. Исправь только пунктуацию, регистр и очевидные ошибки. "
-                  "Не удаляй, не добавляй, не переводи и не меняй id/speaker/timestamp. Верни только JSON "
-                  "в том же формате. При сомнении сохрани исходное слово.\n" + json.dumps(source, ensure_ascii=False))
+        prompt = ("Выполни строго консервативную корректуру ASR-транскрипта, а не литературное редактирование. "
+                  "Разрешены только пунктуация, регистр, безвредное форматирование и очевидная ошибка "
+                  "распознавания/написания, когда правильное слово однозначно подтверждается контекстом. "
+                  "Дословно сохрани разговорные артефакты: слова-паразиты и частицы (например, ну, вот, "
+                  "как бы, типа, короче, эээ, эм), повторы, незаконченные фразы, самоисправления и фрагменты. "
+                  "Запрещены суммаризация, перефразирование, сокращение, стилистическая правка, завершение "
+                  "мыслей, изменение смысла и добавление отсутствующей речи. Не пытайся восстановить то, чего "
+                  "нет в исходном тексте Aiesa. При любой неуверенности оставь исходную формулировку. "
+                  "Не меняй количество/порядок сегментов или id/speaker/timestamp. Верни только JSON в том же "
+                  "формате.\n" + json.dumps(source, ensure_ascii=False))
         body = {"model": self.model, "stream": False, "temperature": 0,
                 "messages": [{"role": "user", "content": prompt}], "response_format": {"type": "json_object"}}
         try:
@@ -112,7 +167,9 @@ async def cleanup_best_effort(turns: list[TranscriptTurn], cleaner: Callable[[li
     for chunk in chunk_turns(turns, max_chars):
         try:
             result.extend(await cleaner(chunk))
-        except (ValueError, httpx.HTTPError):
+        except (ValueError, httpx.HTTPError) as exc:
             failures += 1
             result.extend(chunk)
+            logger.warning("AI transcription cleanup provider failure provider=polza category=%s",
+                           "validation_or_payload" if isinstance(exc, ValueError) else "http")
     return result, "success" if not failures else ("failed" if failures == len(chunk_turns(turns, max_chars)) else "partial")
