@@ -11,15 +11,18 @@ delivered it to Telegram, and deleted the DOCX directory. Thus the exact old flo
 `Telegram media -> Aiesa transcription/diarization -> normalized turns -> Polza cleanup -> DOCX -> Telegram -> cleanup`.
 
 The existing persisted states, retry/backoff (eight bounded attempts, maximum 15 minutes), scheduler,
-DOCX format/delivery, and temporary cleanup remain unchanged. Aiesa's multipart upload and Polza's
-multipart audio request stream independent file handles; neither base64-encodes the media.
+DOCX format/delivery, and temporary cleanup remain unchanged. Aiesa continues to use its multipart
+upload. Polza receives a JSON request whose `file` field is a request-local base64 Data URL.
 
 ## Hybrid Transcription v2
 
 After the one Telegram download, Aiesa job creation and Polza `POST /api/v1/audio/transcriptions`
 run concurrently against the same on-disk file. Polza uses `openai/gpt-4o-mini-transcribe`, Russian,
-and JSON response format without diarization. Its typed result contains only outcome, model, text, and
-a bounded failure category. The master result lives only in process memory until Aiesa completes;
+and JSON response format without diarization. The request is authenticated with the existing bearer
+token and has `Content-Type: application/json`; its body contains `model`, `language`,
+`response_format`, and `file: data:<audio MIME>;base64,<audio>`. A safe supplied audio MIME is used,
+with an extension-derived type or `audio/ogg` fallback. Its typed result contains only outcome, model,
+text, and a bounded failure category. The master result lives only in process memory until Aiesa completes;
 it is deliberately not persisted. A restart therefore safely degrades that job to Aiesa rather than
 persisting private text. Once both results are available, the flow is:
 
@@ -72,8 +75,9 @@ similarity 0.82. DOCX contains only the best safe transcript and exposes no prov
 ## Long recordings, privacy, and configuration
 
 The configured input cap remains 50 MB. On the 1-vCPU/~2-GB/no-swap host, the downloaded file is one
-disk copy. Concurrent HTTP multipart encoders open it separately but do not create whole-file Python
-byte/base64 copies; provider/network buffers add bounded overhead. Alignment keeps token/span objects
+disk copy. Aiesa streams multipart data, while the Polza request temporarily holds the required base64
+encoding only in memory and neither persists nor logs it; provider/network buffers add bounded overhead.
+Alignment keeps token/span objects
 and two text representations in memory and is local diff work, not ASR. No ffmpeg/transcoding or new
 service is required. `SequenceMatcher` can have quadratic worst cases; acceptance is deterministic and
 the one-hour synthetic regression guards representative behavior, while the 50-MB cap bounds input.

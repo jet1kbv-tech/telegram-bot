@@ -1,12 +1,28 @@
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass
+import mimetypes
 from pathlib import Path
+import re
 from typing import Literal
 
 import httpx
 
 POLZA_AUDIO_TRANSCRIPTIONS_URL = "https://polza.ai/api/v1/audio/transcriptions"
+_SAFE_AUDIO_MIME = re.compile(r"^audio/[A-Za-z0-9!#$&^_.+-]+$")
+_DEFAULT_AUDIO_MIME = "audio/ogg"
+
+
+def _audio_mime_type(content_type: str, filename: str) -> str:
+    """Return a Data URL-safe audio MIME type without trusting Telegram metadata."""
+    candidate = content_type.strip() if isinstance(content_type, str) else ""
+    if _SAFE_AUDIO_MIME.fullmatch(candidate):
+        return candidate.lower()
+    guessed, _ = mimetypes.guess_type(filename)
+    if guessed and _SAFE_AUDIO_MIME.fullmatch(guessed):
+        return guessed.lower()
+    return _DEFAULT_AUDIO_MIME
 
 
 @dataclass(frozen=True)
@@ -28,21 +44,29 @@ class PolzaMasterTranscriptionService:
 
     async def transcribe(self, media_path: Path, filename: str, content_type: str,
                          *, language: str = "ru") -> MasterTranscriptionResult:
-        headers = {"Authorization": f"Bearer {self.api_key}"}
-        data = {"model": self.model, "language": language, "response_format": "json"}
+        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
         try:
-            with media_path.open("rb") as media:
-                files = {"file": (filename, media, content_type)}
-                if self.client:
-                    response = await self.client.post(POLZA_AUDIO_TRANSCRIPTIONS_URL, headers=headers,
-                                                      data=data, files=files, timeout=self.timeout)
-                else:
-                    async with httpx.AsyncClient(timeout=self.timeout) as client:
-                        response = await client.post(POLZA_AUDIO_TRANSCRIPTIONS_URL, headers=headers,
-                                                     data=data, files=files)
+            # Polza's audio endpoint accepts a base64 Data URL, not a multipart upload. Keep
+            # the encoding request-local and never expose it through results or diagnostics.
+            data_url = (f"data:{_audio_mime_type(content_type, filename)};base64,"
+                        + base64.b64encode(media_path.read_bytes()).decode("ascii"))
+            payload = {
+                "model": self.model,
+                "file": data_url,
+                "language": language,
+                "response_format": "json",
+            }
+            if self.client:
+                response = await self.client.post(POLZA_AUDIO_TRANSCRIPTIONS_URL, headers=headers,
+                                                  json=payload, timeout=self.timeout)
+            else:
+                async with httpx.AsyncClient(timeout=self.timeout) as client:
+                    response = await client.post(POLZA_AUDIO_TRANSCRIPTIONS_URL, headers=headers,
+                                                 json=payload)
+            del data_url, payload
             response.raise_for_status()
-            payload = response.json()
-            text = payload.get("text") if isinstance(payload, dict) else None
+            response_payload = response.json()
+            text = response_payload.get("text") if isinstance(response_payload, dict) else None
             if not isinstance(text, str) or not text.strip():
                 return MasterTranscriptionResult("failed", self.model, failure_category="malformed_response")
             return MasterTranscriptionResult("success", self.model, text=text.strip())
@@ -50,7 +74,8 @@ class PolzaMasterTranscriptionService:
             return MasterTranscriptionResult("failed", self.model, failure_category="timeout")
         except httpx.HTTPStatusError as exc:
             category = "rate_limited" if exc.response.status_code == 429 else (
-                "provider_unavailable" if exc.response.status_code >= 500 else "provider_rejected")
+                "provider_unavailable" if exc.response.status_code >= 500
+                else f"provider_rejected_http_{exc.response.status_code}")
             return MasterTranscriptionResult("failed", self.model, failure_category=category)
         except (httpx.HTTPError, OSError):
             return MasterTranscriptionResult("failed", self.model, failure_category="network")
