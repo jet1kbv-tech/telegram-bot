@@ -24,7 +24,7 @@ SYSTEM_PROMPT = """Классифицируй русскую команду Tele
 Поля intent:
 add_movie_or_tv=query; add_purchase=title,price,priority,link,comment,buyer; add_personal_calendar_event=title,date_expression,time_expression,end_time_expression,comment,owner; add_afisha_event=title,place,date_expression,time_expression,end_date_expression,end_time_expression,link;
 update_purchase=target,title,price,priority,link,comment,buyer,status; delete_purchase=target; update_film=target,status,comment; delete_film=target; update_calendar_event=target,title,date_expression,time_expression,end_time_expression; delete_calendar_event=target,date_expression; update_afisha_event=target,title,place,date_expression,time_expression,end_date_expression,end_time_expression; delete_afisha_event=target,date_expression; attach_event_file=target,semantic_type,transport_type,origin,destination,date_expression,departure_time,person; query_event_attachments=target,semantic_type,transport_type,origin,destination,date,person,direction,return_all; delete_event_attachment=target,semantic_type,transport_type,origin,destination,date,person,direction; update_event_attachment=target,semantic_type,transport_type,origin,destination,date,person,direction,new_origin,new_destination,new_date,new_departure_time,new_arrival_date,new_arrival_time,new_person;
-query_context=query_type,destination,transport_type; query_weather_context=weather_scope,target,location,date_expression,include_advice; query_purchases=status,priority,buyer,operation; query_films=status,media_type,genre,operation; query_calendar/query_afisha=date_from,date_to,target,operation; unsupported=category; no_action=без полей.
+query_context=query_type,destination,transport_type,target,date_expression,person; query_weather_context=weather_scope,target,location,date_expression,include_advice; query_purchases=status,priority,buyer,operation; query_films=status,media_type,genre,operation; query_calendar/query_afisha=date_from,date_to,target,operation; unsupported=category; no_action=без полей.
 
 Intents: add_personal_calendar_event/add_afisha_event/add_purchase/add_movie_or_tv; update/delete_purchase, _film, _calendar_event, _afisha_event; attach_event_file; update_event_attachment/delete_event_attachment; read-only query_context/query_weather_context/query_event_attachments/query_purchases/query_films/query_calendar/query_afisha; unsupported; no_action. Различай add, update, delete и query как ровно одно действие. Терпи разговорную грамматику, склонения, порядок слов и отсутствие пунктуации. Недостающие значения = null, а не unsupported/no_action. Для update заполняй только явно изменяемые поля; target — название, не ID. Purchase statuses planned/bought, priority только high/medium/low; film want/watched.
 
@@ -36,7 +36,7 @@ Query defaults: purchases status=planned priority=any buyer=any, operations list
 
 query_weather_context — только вопрос о погоде. weather_scope: arrival для прибытия, trip для диапазона поездки, event для сохранённого события, date для явного места/даты, current для «сейчас». target — ссылка на поездку/событие словами пользователя, location — только явно названный город/место, date_expression — только явно названная дата, include_advice=true для вопроса про зонт/одежду. Не отвечай на прогноз и не придумывай место или дату.
 
-query_context — вопрос о фактах сохранённой поездки. query_type строго departure/arrival/return/documents/overview. transport_type строго один из train/plane/bus/other, НИКОГДА не русское слово и не произвольная строка; поезд=train, самолёт=plane, автобус=bus, явно иной транспорт=other. Если транспорт не назван в самом запросе или его нельзя уверенно определить, не передавай transport_type (null). destination также извлекай только явно. Не отвечай на вопрос и не придумывай даты, время, маршруты, транспорт из контекста или наличие билетов. Просьба прислать/открыть конкретный файл остаётся query_event_attachments; вопрос о наличии документов или обзор поездки — query_context.
+query_context — вопрос о фактах сохранённой поездки или события. Для поездки query_type departure/arrival/return/documents/overview. Для общего расписания events (date_expression обязателен), ближайшего совпадающего события next_event, поля события event_time/event_date/event_place, наличия вложений event_documents. target — описание события словами пользователя; date_expression — дословная дата/диапазон; person — self/vova/sasha/both только если человек явно назван. transport_type строго один из train/plane/bus/other, НИКОГДА не русское слово и не произвольная строка; поезд=train, самолёт=plane, автобус=bus, явно иной транспорт=other. Если транспорт не назван в самом запросе или его нельзя уверенно определить, не передавай transport_type (null). destination также извлекай только явно. Не отвечай на вопрос и не придумывай даты, время, маршруты, транспорт из контекста или наличие билетов. Просьба прислать/открыть конкретный файл остаётся query_event_attachments. Короткие продолжения «а обратно?», «а где?», «а билеты?» без самостоятельной цели -> unsupported/conversation.
 
 Для delete_event_attachment/update_event_attachment используй те же поля идентификации. Билет, ваучер или документ — attachment, НИКОГДА не событие календаря/Афиши. Не выдавай ID. В update только явно требуемые замены идут в new_*; маршрут без new_ идентифицирует документ. new_date/new_arrival_date сохраняй выражением пользователя; время строго HH:MM.
 «удали билет в Воронеж» -> delete_event_attachment semantic_type="transport_ticket" destination="Воронеж";
@@ -76,13 +76,19 @@ unsupported — только команда вне доменов, destructive/b
 «когда мы возвращаемся из Воронежа?» -> query_context query_type="return" destination="Воронеж";
 «что известно про поездку в Воронеж?» -> query_context query_type="overview" destination="Воронеж";
 «какие документы есть на поездку в Воронеж?» -> query_context query_type="documents" destination="Воронеж";
+«что у меня завтра?» -> query_context query_type="events" date_expression="завтра" person="self";
+«какие у нас планы на выходные?» -> query_context query_type="events" date_expression="выходные" person="both";
+«когда следующий концерт?» -> query_context query_type="next_event" target="концерт";
+«во сколько концерт?» -> query_context query_type="event_time" target="концерт";
+«где проходит концерт?» -> query_context query_type="event_place" target="концерт";
+«есть билеты на концерт?» -> query_context query_type="event_documents" target="концерт";
 «какая погода будет в Воронеже 31 августа?» -> query_weather_context weather_scope="date" location="Воронеж" date_expression="31 августа" include_advice="false";
 «какая погода будет когда мы приедем в Воронеж?» -> query_weather_context weather_scope="arrival" target="Воронеж" location="Воронеж" include_advice="false";
 «какая погода на поездку в Воронеж?» -> query_weather_context weather_scope="trip" target="Воронеж" location="Воронеж" include_advice="false";
 «какая погода будет на пикнике?» -> query_weather_context weather_scope="event" target="пикнике" include_advice="false";
 «нужен ли зонт на пикник?» -> query_weather_context weather_scope="event" target="пикник" include_advice="true";
 «что у нас в покупках?» -> query_purchases status=planned; «какие комедии мы ещё не смотрели?» -> query_films status=want genre="Комедия";
-«что у меня завтра?» -> query_calendar date_from=date_to="завтра";
+«покажи мой календарь завтра списком» -> query_calendar date_from=date_to="завтра";
 «что в афише в августе?» -> query_afisha date_from=date_to="в августе"."""
 
 
