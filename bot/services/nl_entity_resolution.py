@@ -48,6 +48,14 @@ def resolve_entities(data: dict[str, Any], kind: IntentKind, target: str, *, own
         sources, title_fields = [("afisha", data.get("afisha", []))], ("title",)
     for bucket, items in sources:
         for item in items if isinstance(items, list) else []:
+            if kind in {IntentKind.UPDATE_CALENDAR_EVENT, IntentKind.DELETE_CALENDAR_EVENT} and item.get("source") == "afisha":
+                if kind is IntentKind.UPDATE_CALENDAR_EVENT:
+                    source_id = str(item.get("source_id") or "")
+                    canonical = next((row for row in data.get("afisha", []) if str(row.get("id")) == source_id), None)
+                    if canonical and normalize_for_match(str(canonical.get("title") or "")) == needle:
+                        if not any(row.item_id == source_id and row.bucket == "afisha" for row in candidates):
+                            candidates.append(EntityCandidate(source_id, "afisha", dict(canonical)))
+                continue
             if kind in {IntentKind.UPDATE_CALENDAR_EVENT, IntentKind.DELETE_CALENDAR_EVENT} and item.get("source") != "manual":
                 continue
             if kind in {IntentKind.UPDATE_CALENDAR_EVENT, IntentKind.DELETE_CALENDAR_EVENT} and not include_past:

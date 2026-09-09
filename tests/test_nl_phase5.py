@@ -80,6 +80,20 @@ def test_afisha_matching_is_case_insensitive():
     assert len(resolve_entities(base_data(), IntentKind.DELETE_AFISHA_EVENT, "КОНЦЕРТ")) == 1
 
 
+def test_calendar_projection_resolves_to_canonical_afisha():
+    data = base_data()
+    data["calendars"]["vova"].append({
+        "id": "cal_afisha_a1_vova", "owner": "vova", "title": "Концерт",
+        "date": "2026-08-15", "start_time": "19:00", "end_time": "",
+        "comment": "", "source": "afisha", "source_id": "a1",
+    })
+    candidates = resolve_entities(
+        data, IntentKind.UPDATE_CALENDAR_EVENT, "концерт", owner="vova",
+        now=FIXED_NOW, timezone="UTC",
+    )
+    assert [(candidate.item_id, candidate.bucket) for candidate in candidates] == [("a1", "afisha")]
+
+
 @pytest.mark.parametrize("target", ["a beautiful mind", "ИГРЫ РАЗУМА"])
 def test_film_matching_is_case_insensitive_without_changing_canonical_title(target):
     data = base_data()
@@ -149,6 +163,27 @@ def test_calendar_partial_updates_preserve_other_field(monkeypatch, tmp_path):
     existing.mutate_existing(IntentKind.UPDATE_CALENDAR_EVENT, args(current, "vova", {"start_time": "20:00"}))
     current = store.load()["calendars"]["vova"][0]
     assert (current["date"], current["start_time"]) == ("2026-08-14", "20:00")
+
+
+def test_invalid_calendar_patch_is_atomic(monkeypatch, tmp_path):
+    store = install_storage(monkeypatch, tmp_path); item = store.load()["calendars"]["vova"][0]
+    result = existing.mutate_existing(
+        IntentKind.UPDATE_CALENDAR_EVENT,
+        args(item, "vova", {"end_time": "17:00"}),
+    )
+    assert result.status == "invalid"
+    assert store.load()["calendars"]["vova"][0] == item
+
+
+def test_afisha_place_and_end_fields_patch_without_replacement(monkeypatch, tmp_path):
+    store = install_storage(monkeypatch, tmp_path); item = store.load()["afisha"][0]
+    result = existing.mutate_existing(IntentKind.UPDATE_AFISHA_EVENT, args(item, "afisha", {
+        "place": "VK Stadium", "end_date": "2026-08-15", "end_time": "22:00",
+    }))
+    assert result.status == "updated"
+    current = store.load()["afisha"][0]
+    assert (current["title"], current["date"], current["time"]) == ("Концерт", "2026-08-15", "19:00")
+    assert (current["place"], current["end_date"], current["end_time"]) == ("VK Stadium", "2026-08-15", "22:00")
 
 
 def test_conflict_missing_and_idempotent_delete(monkeypatch, tmp_path):
