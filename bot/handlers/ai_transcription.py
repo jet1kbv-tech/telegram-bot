@@ -84,7 +84,7 @@ async def receive_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
                        media_duration_seconds)
         await update.message.reply_text(f"Файл слишком большой. Максимальный размер — {max_bytes // 1024 // 1024} МБ.")
         return WAITING_FOR_AI_TRANSCRIPTION
-    await update.message.reply_text("⏳ Загружаю и расшифровываю запись…")
+    progress = await update.message.reply_text("⏳ Обрабатываю запись…")
     workdir = Path(tempfile.mkdtemp(prefix="telegram-transcription-"))
     os.chmod(workdir, 0o700)
     media_path = workdir / filename
@@ -103,7 +103,7 @@ async def receive_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             logger.warning("AI transcription stage=validation outcome=rejected media_type=%s file_size_bytes=%s "
                            "duration_seconds=%s category=file_too_large", media_type, downloaded_size,
                            media_duration_seconds)
-            await update.message.reply_text(f"Файл слишком большой. Максимальный размер — {max_bytes // 1024 // 1024} МБ.")
+            await _resolve_progress(progress, f"⚠️ Файл слишком большой. Максимальный размер — {max_bytes // 1024 // 1024} МБ.")
             return WAITING_FOR_AI_TRANSCRIPTION
         stage = "provider_creation"
         master_service: PolzaMasterTranscriptionService | None = context.application.bot_data.get(
@@ -123,13 +123,14 @@ async def receive_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
                        "file_size_bytes=%s duration_seconds=%s category=%s exception_class=%s elapsed_seconds=%.3f",
                        stage, media_type, file_size_bytes, media_duration_seconds, category, type(exc).__name__,
                        time.monotonic() - started)
-        await update.message.reply_text("Не получилось начать расшифровку. Попробуй ещё раз чуть позже.")
+        await _resolve_progress(progress, "⚠️ Не получилось начать расшифровку. Отправь запись ещё раз чуть позже.")
         return MENU
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
     now = datetime.now(timezone.utc).isoformat()
     job = {"id": uuid.uuid4().hex, "type": "transcription", "provider": "aiesa", "actor": get_username(update),
            "telegram_chat_id": update.effective_chat.id, "provider_job_id": provider_job_id,
+           "status_message_id": int(getattr(progress, "message_id", 0) or 0),
            "original_filename": filename, "status": "processing", "created_at": now, "updated_at": now,
            "delivered_at": "", "attempts": 0, "next_attempt_at": "", "media_type": media_type,
            "file_size_bytes": downloaded_size, "duration_seconds": media_duration_seconds,
@@ -225,6 +226,7 @@ async def process_transcription_jobs(context: ContextTypes.DEFAULT_TYPE) -> None
                 with docx_path.open("rb") as document:
                     await context.bot.send_document(job["telegram_chat_id"], document=document, filename=filename, caption=caption)
                 _set_job(job["id"], status="completed", delivered_at=datetime.now(timezone.utc).isoformat(), attempts=0)
+                await _clear_job_progress(context, job)
                 logger.info("AI transcription job_id=%s actor=%s stage=completed attempt=%s provider=aiesa "
                             "duration_seconds=%s minutes_billed=%s speaker_count=%s segment_count=%s source=%s "
                             "cleanup=%s delivery=success final_job_state=completed elapsed_seconds=%.3f", job["id"],
@@ -293,10 +295,12 @@ def _retry(job: dict[str, Any], now: datetime, *, stage: str, category: str) -> 
 
 async def _notify_failure(context: ContextTypes.DEFAULT_TYPE, job: dict[str, Any], category: str) -> None:
     try:
-        await context.bot.send_message(
-            job["telegram_chat_id"],
-            "Не получилось расшифровать эту запись. Аудио можно отправить ещё раз.",
-        )
+        text = "⚠️ Не получилось расшифровать эту запись. Отправь аудио ещё раз."
+        message_id = int(job.get("status_message_id") or 0)
+        if message_id:
+            await context.bot.edit_message_text(text, chat_id=job["telegram_chat_id"], message_id=message_id)
+        else:
+            await context.bot.send_message(job["telegram_chat_id"], text)
         outcome = "success"
     except Exception as exc:
         outcome = "failed"
@@ -305,6 +309,25 @@ async def _notify_failure(context: ContextTypes.DEFAULT_TYPE, job: dict[str, Any
                          category, type(exc).__name__)
     logger.info("AI transcription job_id=%s actor=%s stage=failure_notification outcome=%s category=%s "
                 "final_job_state=failed", job["id"], job["actor"], outcome, category)
+
+
+async def _resolve_progress(message: Any, text: str) -> None:
+    """Resolve one operation status without exposing Telegram failures to users."""
+    try:
+        await message.edit_text(text)
+    except Exception:
+        logger.warning("AI transcription stage=status_resolution outcome=failed", exc_info=True)
+
+
+async def _clear_job_progress(context: ContextTypes.DEFAULT_TYPE, job: dict[str, Any]) -> None:
+    message_id = int(job.get("status_message_id") or 0)
+    if not message_id:
+        return
+    try:
+        await context.bot.delete_message(chat_id=job["telegram_chat_id"], message_id=message_id)
+    except Exception:
+        logger.warning("AI transcription job_id=%s actor=%s stage=status_resolution outcome=failed",
+                       job["id"], job["actor"], exc_info=True)
 
 
 def _media_type(message: Any) -> str:

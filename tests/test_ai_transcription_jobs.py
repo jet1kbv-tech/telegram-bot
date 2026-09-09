@@ -22,12 +22,20 @@ class Bot:
     def __init__(self):
         self.messages = []
         self.documents = []
+        self.edits = []
+        self.deleted = []
 
     async def send_message(self, chat_id, text):
         self.messages.append((chat_id, text))
 
     async def send_document(self, chat_id, **kwargs):
         self.documents.append((chat_id, kwargs["filename"]))
+
+    async def edit_message_text(self, text, **kwargs):
+        self.edits.append((kwargs["chat_id"], kwargs["message_id"], text))
+
+    async def delete_message(self, **kwargs):
+        self.deleted.append((kwargs["chat_id"], kwargs["message_id"]))
 
 
 def job(**changes):
@@ -37,6 +45,7 @@ def job(**changes):
         "status": "processing", "created_at": "", "updated_at": "", "delivered_at": "",
         "attempts": 0, "next_attempt_at": "", "media_type": "voice", "file_size_bytes": 100,
         "duration_seconds": 10, "last_stage": "", "failure_category": "",
+        "status_message_id": 0,
     }
     value.update(changes)
     return value
@@ -61,7 +70,22 @@ async def test_provider_timeout_exhaustion_fails_and_notifies(monkeypatch):
     assert stored.data["ai_jobs"][0]["status"] == "failed"
     assert stored.data["ai_jobs"][0]["failure_category"] == "timeout"
     assert len(ctx.bot.messages) == 1
-    assert "отправить ещё раз" in ctx.bot.messages[0][1]
+    assert "Отправь аудио ещё раз" in ctx.bot.messages[0][1]
+
+
+async def test_failure_edits_persisted_processing_message_without_retry_button(monkeypatch):
+    class Service:
+        async def status(self, provider_job_id):
+            raise AiesaError("http_400")
+
+    stored = MemoryStorage(job(status_message_id=77))
+    monkeypatch.setattr(ai_transcription, "storage", stored)
+    ctx = context(Service())
+    await ai_transcription.process_transcription_jobs(ctx)
+
+    assert ctx.bot.messages == []
+    assert ctx.bot.edits == [(123, 77, "⚠️ Не получилось расшифровать эту запись. Отправь аудио ещё раз.")]
+    assert "http" not in ctx.bot.edits[0][2].lower()
 
 
 @pytest.mark.parametrize("category", ["http_400", "malformed_result", "empty_transcript"])
@@ -124,7 +148,7 @@ async def test_successful_job_completes_and_delivers_docx(monkeypatch):
         async def result(self, result_url):
             return AiesaResult(1, (segment,), 1)
 
-    stored = MemoryStorage(job())
+    stored = MemoryStorage(job(status_message_id=88))
     monkeypatch.setattr(ai_transcription, "storage", stored)
     ctx = context(Service())
     await ai_transcription.process_transcription_jobs(ctx)
@@ -132,6 +156,7 @@ async def test_successful_job_completes_and_delivers_docx(monkeypatch):
     assert stored.data["ai_jobs"][0]["status"] == "completed"
     assert stored.data["ai_jobs"][0]["delivered_at"]
     assert len(ctx.bot.documents) == 1
+    assert ctx.bot.deleted == [(123, 88)]
 
 
 async def test_telegram_download_failure_is_reported_and_temp_is_cleaned(monkeypatch, tmp_path: Path):
@@ -153,6 +178,10 @@ async def test_telegram_download_failure_is_reported_and_temp_is_cleaned(monkeyp
 
         async def reply_text(self, text):
             self.replies.append(text)
+            return SimpleNamespace(message_id=44, edit_text=self.edit_text)
+
+        async def edit_text(self, text):
+            self.replies[-1] = text
 
     workdir = tmp_path / "download-workdir"
     monkeypatch.setattr(ai_transcription, "ensure_access", lambda update: _true())
@@ -164,7 +193,7 @@ async def test_telegram_download_failure_is_reported_and_temp_is_cleaned(monkeyp
 
     await ai_transcription.receive_media(update, ctx)
 
-    assert any("Не получилось начать" in reply for reply in message.replies)
+    assert message.replies == ["⚠️ Не получилось начать расшифровку. Отправь запись ещё раз чуть позже."]
     assert not workdir.exists()
 
 

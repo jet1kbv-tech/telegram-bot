@@ -1,12 +1,56 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 from bot.keyboards.common import section_menu_keyboard
 from bot.services import film_catalog
+from bot.handlers import film_recommendations as recommendation_handler
 from bot.services.film_recommendations import RecommendationCandidate, RecommendationConstraints
 from bot.handlers.film_recommendations import relax_constraints, recommendation_menu_keyboard
 from bot.services.nl_intent import IntentKind
 from bot.services.nl_intent_decoder import decode_intent, decode_provider_envelope, normalize_recommendation_genres
 from bot.storage import JsonStorage
+
+
+async def test_read_only_recommendation_failure_retains_safe_retry(monkeypatch):
+    class FailingService:
+        async def recommend(self, *args, **kwargs):
+            raise RuntimeError("HTTP 503 provider details")
+
+    class Response:
+        async def reply_text(self, text, **kwargs):
+            self.text, self.markup = text, kwargs["reply_markup"]
+
+    monkeypatch.setattr(recommendation_handler, "_service", FailingService())
+    monkeypatch.setattr(recommendation_handler.storage, "load", lambda: {"films": []})
+    context = SimpleNamespace(user_data={})
+    response = Response()
+    constraints = RecommendationConstraints(media_type="movie")
+
+    await recommendation_handler._run(SimpleNamespace(), context, "vova", "external", constraints,
+                                      response=response)
+
+    assert "503" not in response.text and "provider" not in response.text.lower()
+    assert response.markup.inline_keyboard[0][0].callback_data == "filmrec:retry"
+    assert context.user_data[recommendation_handler.SESSION_KEY]["constraints"] == constraints
+
+
+async def test_recommendation_retry_callback_rechecks_authorization(monkeypatch):
+    called = False
+
+    async def denied(update):
+        return False
+
+    async def should_not_run(*args, **kwargs):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(recommendation_handler, "ensure_access", denied)
+    monkeypatch.setattr(recommendation_handler, "_run", should_not_run)
+    update = SimpleNamespace(callback_query=SimpleNamespace(data="filmrec:retry"))
+
+    await recommendation_handler.film_recommendation_callback_router(update, SimpleNamespace(user_data={}))
+
+    assert called is False
 
 
 def test_films_menu_and_recommendation_start_menu_keep_backlog():
