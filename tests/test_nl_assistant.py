@@ -64,6 +64,7 @@ def configured(monkeypatch):
     monkeypatch.setattr(nl_assistant, "get_user_name", lambda update: "Вова")
     monkeypatch.setattr(nl_assistant, "get_allowed_profile", lambda update: {"wishlist_owner": "vova"})
     monkeypatch.setattr(nl_assistant, "_notify_calendar", AsyncMock())
+    monkeypatch.setattr(nl_assistant, "_notify_afisha", AsyncMock())
 
 
 def purchase_intent():
@@ -89,6 +90,31 @@ def test_purchase_has_preview_and_no_mutation_before_confirmation(monkeypatch):
     cb = update(callback_data=f"ai:c:{proposal_id}")
     assert run(nl_assistant.nl_callback_router(cb, ctx)) == SECTION
     create.assert_called_once()
+
+
+def test_confirmed_afisha_creation_notifies_partner_exactly_once(monkeypatch):
+    parser = FakeParser(ParsedIntent(IntentKind.ADD_AFISHA_EVENT, {
+        "title": "Концерт", "place": None, "date_expression": "2026-09-14",
+        "time_expression": "19:00", "end_date_expression": None,
+        "end_time_expression": None, "link": None,
+    }))
+    nl_assistant._parser = parser
+    item = {"id": "a1", "title": "Концерт", "date": "2026-09-14", "time": "19:00",
+            "end_date": "", "end_time": "", "place": "", "link": "", "status": "active"}
+    create = Mock(return_value=item)
+    notify = AsyncMock()
+    monkeypatch.setattr(nl_assistant, "create_afisha_event", create)
+    monkeypatch.setattr(nl_assistant, "_notify_afisha", notify)
+    upd, ctx = update(), context()
+
+    run(nl_assistant.nl_text_handler(upd, ctx))
+    create.assert_not_called()
+    proposal_id = ctx.user_data["ai_active_proposal_id"]
+    callback = update(callback_data=f"ai:c:{proposal_id}")
+    run(nl_assistant.nl_callback_router(callback, ctx))
+
+    create.assert_called_once()
+    notify.assert_awaited_once_with(ctx, callback, item)
 
 
 @pytest.mark.parametrize(("error", "expected"), [

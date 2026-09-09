@@ -193,6 +193,7 @@ from bot.runtime import (
     configure_notification_enrichment,
     menu_router,
     notify_other_user_about_calendar_item,
+    notify_other_user_about_afisha_item,
     notify_other_user_about_wishlist_item,
     safe_edit_message,
     section_router,
@@ -251,7 +252,8 @@ def build_app() -> Application:
         item_keyboard=item_keyboard,
         notify_other_user_about_wishlist_item=notify_other_user_about_wishlist_item,
     )
-    configure_afisha_handlers(build_item_text=build_item_text, item_keyboard=item_keyboard)
+    configure_afisha_handlers(build_item_text=build_item_text, item_keyboard=item_keyboard,
+                              notify_other_user_about_afisha_item=notify_other_user_about_afisha_item)
     configure_places_handlers(safe_edit_message=safe_edit_message)
     configure_purchases_handlers(safe_edit_message=safe_edit_message)
 
@@ -286,6 +288,7 @@ def build_app() -> Application:
         configure_nl_assistant(
             parser=PolzaIntentParser(api_key=polza_key, model=polza_model, timeout_seconds=AI_INTENT_TIMEOUT_SECONDS),
             notify_calendar=notify_other_user_about_calendar_item,
+            notify_afisha=notify_other_user_about_afisha_item,
             weather_provider=weather_provider,
         )
         logger.info("AI/NL assistant enabled with configured Polza model")

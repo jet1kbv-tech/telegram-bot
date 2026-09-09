@@ -429,6 +429,39 @@ async def notify_other_user_about_calendar_item(context: ContextTypes.DEFAULT_TY
         logger.exception("Не удалось отправить уведомление второму участнику о календарном событии")
 
 
+async def notify_other_user_about_afisha_item(context: ContextTypes.DEFAULT_TYPE, update: Update, item: dict[str, Any]) -> None:
+    username = get_username(update)
+    profile = ALLOWED_USERS.get(username)
+    if not profile:
+        return
+
+    other_username = next((candidate for candidate in ALLOWED_USERS if candidate != username), None)
+    if not other_username:
+        return
+
+    data = storage.load()
+    chat_id = data.get("meta", {}).get("user_chats", {}).get(other_username)
+    if not chat_id:
+        logger.info("Не найден chat_id для %s — уведомление о новой Афише пропущено", other_username)
+        return
+
+    when = format_event_dt(item)
+    if item.get("date") and not item.get("time"):
+        try:
+            when = datetime.strptime(str(item["date"]), "%Y-%m-%d").strftime("%d.%m.%Y")
+        except ValueError:
+            pass
+    lines = [
+        f"🎟 {profile['name']} добавил(а) в Афишу:",
+        str(item.get("title") or "Без названия"),
+        when,
+    ]
+    try:
+        await context.bot.send_message(chat_id=chat_id, text="\n".join(lines))
+    except TelegramError:
+        logger.exception("Не удалось отправить уведомление второму участнику о новом событии Афиши")
+
+
 async def check_afisha_notifications(context: ContextTypes.DEFAULT_TYPE) -> None:
     data = storage.load()
     now = datetime.now()
