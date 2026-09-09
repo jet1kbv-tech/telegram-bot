@@ -125,7 +125,6 @@ from bot.storage import (
     delete_item_by_id,
     find_item,
     format_event_dt,
-    is_calendar_event_actual,
     make_id,
     normalize_calendar_event,
     normalize_event,
@@ -290,7 +289,7 @@ async def show_list(update: Update, section: str, page: int = 0, owner: str | No
     elif section == "backlog" and status_filter in BACKLOG_STATUSES:
         items = [item for item in items if item.get("status") == status_filter]
     elif section == "afisha":
-        items = get_actual_afisha_items(items)
+        items = get_actual_afisha_items(data)
 
     _, current_page, total_pages = paginate_items(items, page)
     text = build_list_text(section, items, current_page, total_pages, owner, status_filter)

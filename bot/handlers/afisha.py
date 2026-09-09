@@ -21,8 +21,9 @@ from bot.services.afisha_calendar_sync import (
     project_afisha_to_calendars,
     remove_afisha_from_calendars,
 )
+from bot.services.event_lifetime import is_event_effectively_actual
 from bot.storage import find_item, normalize_event, sort_events, storage
-from bot.storage import format_event_dt, is_event_actual
+from bot.storage import format_event_dt
 from bot.utils import (ensure_access, get_wishlist_owner_by_user, item_status_label,
                        normalize_entity_title, remember_current_chat)
 from bot.services.actions.afisha import create_afisha_event
@@ -72,9 +73,9 @@ def build_afisha_list_button_text(item: dict[str, Any]) -> str:
     return f"{format_event_dt(item)} · {item['title']}"
 
 
-def get_actual_afisha_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    now = datetime.now()
-    actual_items = [item for item in items if is_event_actual(item, now)]
+def get_actual_afisha_items(data: dict[str, Any], now: datetime | None = None) -> list[dict[str, Any]]:
+    actual_items = [item for item in data.get("afisha", [])
+                    if is_event_effectively_actual(data, "afisha", item, now)]
     return sort_events(actual_items)
 
 

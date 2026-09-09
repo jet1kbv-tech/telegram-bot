@@ -259,7 +259,7 @@ def parse_event_end_dt(item: dict[str, Any]) -> datetime | None:
         return None
 
 
-def event_effective_end_dt(item: dict[str, Any]) -> datetime | None:
+def event_explicit_end_dt(item: dict[str, Any]) -> datetime | None:
     return parse_event_end_dt(item) or parse_event_dt(item)
 
 
@@ -277,7 +277,7 @@ def format_event_dt(item: dict[str, Any]) -> str:
 
 def is_event_actual(item: dict[str, Any], now: datetime | None = None) -> bool:
     now = now or datetime.now()
-    event_end_dt = event_effective_end_dt(item)
+    event_end_dt = event_explicit_end_dt(item)
     if not event_end_dt:
         return False
     return item.get("status") == "active" and event_end_dt >= now
