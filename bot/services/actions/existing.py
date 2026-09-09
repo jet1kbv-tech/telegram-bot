@@ -61,14 +61,14 @@ def mutate_existing(kind: IntentKind, arguments: dict[str, Any]) -> MutationResu
         elif kind is IntentKind.UPDATE_FILM:
             item.update(changes)
         elif kind is IntentKind.UPDATE_CALENDAR_EVENT:
-            item.update(changes)
-            normalized = normalize_calendar_event(item, bucket)
+            candidate = {**item, **changes}
+            normalized = normalize_calendar_event(candidate, bucket)
             if normalized is None: return MutationResult("invalid")
             item.clear(); item.update(normalized); item["notified_24h"] = False
             data["calendars"][bucket] = sort_calendar_events(items)
         else:
-            item.update(changes)
-            normalized = normalize_event(item)
+            candidate = {**item, **changes}
+            normalized = normalize_event(candidate)
             if normalized is None: return MutationResult("invalid")
             item.clear(); item.update(normalized); item["notified_24h"] = False; item["notified_morning"] = False
             data["afisha"] = sort_events(items)

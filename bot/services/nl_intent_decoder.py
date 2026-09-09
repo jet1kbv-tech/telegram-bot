@@ -49,9 +49,9 @@ _FIELDS: dict[IntentKind, dict[str, tuple[type, ...]]] = {
     IntentKind.DELETE_PURCHASE: {"target": (str,)},
     IntentKind.UPDATE_FILM: {"target": (str,), "status": (str, type(None)), "comment": (str, type(None))},
     IntentKind.DELETE_FILM: {"target": (str,)},
-    IntentKind.UPDATE_CALENDAR_EVENT: {"target": (str,), "title": (str, type(None)), "date_expression": (str, type(None)), "time_expression": (str, type(None))},
+    IntentKind.UPDATE_CALENDAR_EVENT: {"target": (str,), "title": (str, type(None)), "date_expression": (str, type(None)), "time_expression": (str, type(None)), "end_time_expression": (str, type(None))},
     IntentKind.DELETE_CALENDAR_EVENT: {"target": (str,)},
-    IntentKind.UPDATE_AFISHA_EVENT: {"target": (str,), "title": (str, type(None)), "date_expression": (str, type(None)), "time_expression": (str, type(None))},
+    IntentKind.UPDATE_AFISHA_EVENT: {"target": (str,), "title": (str, type(None)), "place": (str, type(None)), "date_expression": (str, type(None)), "time_expression": (str, type(None)), "end_date_expression": (str, type(None)), "end_time_expression": (str, type(None))},
     IntentKind.DELETE_AFISHA_EVENT: {"target": (str,)},
     IntentKind.ATTACH_EVENT_FILE: {
         "target": (str,), "semantic_type": (str, type(None)), "transport_type": (str, type(None)),

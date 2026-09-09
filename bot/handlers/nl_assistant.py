@@ -148,7 +148,7 @@ _VALUE_LABELS = {
 
 
 def _human_value(field: str, value: Any) -> str:
-    if field == "date":
+    if field in {"date", "end_date"}:
         return _human_date(value)
     if field == "price" and value is not None:
         return f"{value:,} ₽".replace(",", " ")
@@ -165,6 +165,10 @@ def _candidate_label(candidate: EntityCandidate) -> str:
 
 
 def _select_candidate(proposal: ActionProposal, candidate: EntityCandidate, actor_name: str) -> None:
+    if proposal.intent is IntentKind.UPDATE_CALENDAR_EVENT and candidate.bucket == "afisha":
+        proposal.intent = IntentKind.UPDATE_AFISHA_EVENT
+        if "start_time" in proposal.arguments:
+            proposal.arguments["time"] = proposal.arguments.pop("start_time")
     args, item = proposal.arguments, candidate.item
     changes: dict[str, Any] = {}
     mapping = {"date": "date", "time": "time", "start_time": "start_time"}
@@ -248,13 +252,18 @@ def _prepare(kind: IntentKind, arguments: dict[str, Any], now: datetime) -> tupl
             _, end = resolve_date_range(str(to_expression or from_expression), now=now, timezone=BOT_TIMEZONE)
             args["date_from"], args["date_to"] = start, end
     elif kind in {IntentKind.UPDATE_CALENDAR_EVENT, IntentKind.UPDATE_AFISHA_EVENT}:
-        for source, target in (("date_expression", "date"), ("time_expression", "start_time" if kind is IntentKind.UPDATE_CALENDAR_EVENT else "time")):
+        temporal = [("date_expression", "date"),
+                    ("time_expression", "start_time" if kind is IntentKind.UPDATE_CALENDAR_EVENT else "time"),
+                    ("end_time_expression", "end_time")]
+        if kind is IntentKind.UPDATE_AFISHA_EVENT:
+            temporal.append(("end_date_expression", "end_date"))
+        for source, target in temporal:
             expression = args.pop(source, None)
             if expression:
                 try:
-                    args[target] = resolve_date_expression(expression, now=now, timezone=BOT_TIMEZONE) if target == "date" else resolve_time_expression(expression)
+                    args[target] = resolve_date_expression(expression, now=now, timezone=BOT_TIMEZONE) if target in {"date", "end_date"} else resolve_time_expression(expression)
                 except DateExpressionError:
-                    missing.append("date" if target == "date" else "time")
+                    missing.append(target)
     return args, missing
 
 
@@ -600,7 +609,7 @@ def _preview(proposal: ActionProposal) -> str:
                     "\nПри удалении события они тоже исчезнут из бота."
                 )
             return f"🗑 Удалить\n\n{item.get('title') or 'Без названия'}{details}{warning}\n\nПока ничего не удалено."
-        labels = {"title": "Название", "price": "Стоимость", "priority": "Приоритет", "buyer": "Исполнитель", "status": "Статус", "comment": "Комментарий", "link": "Ссылка", "date": "Дата", "time": "Время", "start_time": "Время"}
+        labels = {"title": "Название", "price": "Стоимость", "priority": "Приоритет", "buyer": "Исполнитель", "status": "Статус", "comment": "Комментарий", "link": "Ссылка", "date": "Дата", "time": "Время", "start_time": "Время", "end_date": "Дата окончания", "end_time": "Время окончания", "place": "Место"}
         lines = ["✏️ Изменить", "", str(item.get("title") or "Без названия"), ""]
         lines.extend(f"{labels.get(field, field)}: {_human_value(field, item.get(field))} → {_human_value(field, value)}" for field, value in changes.items())
         lines.extend(["", "Пока ничего не изменено."])
@@ -682,6 +691,12 @@ async def nl_callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE)
     proposal.status = "executing"
     try:
         if proposal.intent in _MUTATION_KINDS:
+            if proposal.intent is IntentKind.UPDATE_CALENDAR_EVENT:
+                profile = get_allowed_profile(update) or {}
+                if proposal.arguments.get("_bucket") != str(profile.get("wishlist_owner") or ""):
+                    discard_proposal(context.user_data, proposal)
+                    await _safe_query_edit(query, "Событие больше недоступно. Отправь команду ещё раз.", reply_markup=_menu_keyboard())
+                    return _idle_state(context)
             result = mutate_existing(proposal.intent, proposal.arguments)
             if result.status == "conflict":
                 discard_proposal(context.user_data, proposal)
