@@ -183,6 +183,7 @@ def normalize_ai_job(raw: Any) -> dict[str, Any] | None:
         "id": str(raw["id"]), "type": "transcription", "provider": "aiesa",
         "actor": str(raw["actor"]), "telegram_chat_id": raw["telegram_chat_id"],
         "provider_job_id": str(raw["provider_job_id"]),
+        "status_message_id": normalize_nonnegative_int(raw.get("status_message_id")),
         "original_filename": str(raw.get("original_filename") or "audio"),
         "status": status, "created_at": str(raw.get("created_at") or ""),
         "updated_at": str(raw.get("updated_at") or ""),

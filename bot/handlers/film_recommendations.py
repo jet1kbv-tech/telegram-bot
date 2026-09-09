@@ -1,6 +1,7 @@
 """Telegram carousel for deterministic movie recommendations."""
 from __future__ import annotations
 
+import logging
 import secrets
 import time
 from dataclasses import asdict
@@ -25,6 +26,7 @@ _service: MovieRecommendationService | None = None
 _safe_edit: Callable[..., Any] | None = None
 _build_item: Callable[..., str] | None = None
 _item_keyboard: Callable[..., Any] | None = None
+logger = logging.getLogger(__name__)
 
 
 def configure_film_recommendations(*, service: MovieRecommendationService | None, safe_edit_message,
@@ -101,6 +103,11 @@ async def _run(update: Update, context: ContextTypes.DEFAULT_TYPE, actor: str, s
                constraints: RecommendationConstraints, response: Any | None = None,
                shown: set[tuple[str, str, str]] | None = None, generation: int = 0) -> int:
     films = storage.load().get("films", [])
+    # Discovery is read-only. Retain only bounded, non-private parameters so a
+    # provider failure can be retried without repeating a domain mutation.
+    retry_session = {"id": _token(), "actor": actor, "source": source, "constraints": constraints,
+                     "expires": time.time() + SESSION_TTL}
+    context.user_data[SESSION_KEY] = retry_session
     try:
         if source == "want":
             candidates = [c for f in films if f.get("status") == "want" if (c := stored_film_to_candidate(f))]
@@ -112,7 +119,9 @@ async def _run(update: Update, context: ContextTypes.DEFAULT_TYPE, actor: str, s
             if _service is None: raise RecommendationUnavailable()
             scores = await _service.recommend(films, actor=actor, constraints=constraints,
                                               shown=shown, generation=generation)
-    except Exception:
+    except Exception as exc:
+        logger.warning("AI recommendation operation=discovery actor=%s stage=provider_call outcome=failed "
+                       "exception_class=%s retryable=true", actor, type(exc).__name__, exc_info=True)
         keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Попробовать снова", callback_data="filmrec:retry")],
             [InlineKeyboardButton("📚 Из нашего списка", callback_data="filmrec:want")],
             [InlineKeyboardButton("❌ Закрыть", callback_data="filmrec:close")]])
