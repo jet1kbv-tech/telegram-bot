@@ -165,8 +165,9 @@ def _candidate_label(candidate: EntityCandidate) -> str:
 
 
 def _select_candidate(proposal: ActionProposal, candidate: EntityCandidate, actor_name: str) -> None:
-    if proposal.intent is IntentKind.UPDATE_CALENDAR_EVENT and candidate.bucket == "afisha":
-        proposal.intent = IntentKind.UPDATE_AFISHA_EVENT
+    if proposal.intent in {IntentKind.UPDATE_CALENDAR_EVENT, IntentKind.DELETE_CALENDAR_EVENT} and candidate.bucket == "afisha":
+        proposal.intent = (IntentKind.UPDATE_AFISHA_EVENT if proposal.intent is IntentKind.UPDATE_CALENDAR_EVENT
+                           else IntentKind.DELETE_AFISHA_EVENT)
         if "start_time" in proposal.arguments:
             proposal.arguments["time"] = proposal.arguments.pop("start_time")
     args, item = proposal.arguments, candidate.item
@@ -264,6 +265,10 @@ def _prepare(kind: IntentKind, arguments: dict[str, Any], now: datetime) -> tupl
                     args[target] = resolve_date_expression(expression, now=now, timezone=BOT_TIMEZONE) if target in {"date", "end_date"} else resolve_time_expression(expression)
                 except DateExpressionError:
                     missing.append(target)
+    elif kind in {IntentKind.DELETE_CALENDAR_EVENT, IntentKind.DELETE_AFISHA_EVENT}:
+        expression = args.pop("date_expression", None)
+        if expression:
+            args["_target_date"] = resolve_date_expression(expression, now=now, timezone=BOT_TIMEZONE)
     return args, missing
 
 
@@ -393,10 +398,14 @@ async def nl_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             profile = get_allowed_profile(update) or {}
             owner = str(profile.get("wishlist_owner") or "")
             candidates = resolve_entities(storage.load(), parsed.intent, arguments["target"], owner=owner,
-                                           include_past=False, now=now, timezone=BOT_TIMEZONE)
+                                           include_past=False, target_date=arguments.get("_target_date"),
+                                           now=now, timezone=BOT_TIMEZONE)
             logger.info("NL entity resolution intent=%s status=%s candidate_count=%s", parsed.intent.value, "found" if candidates else "missing", len(candidates))
             if not candidates:
-                await response.reply_text("Не нашёл такую запись. Проверь название или открой нужный раздел вручную.", reply_markup=_menu_keyboard())
+                text = ("Не нашёл подходящее событие. Уточни название или дату."
+                        if parsed.intent in {IntentKind.DELETE_CALENDAR_EVENT, IntentKind.DELETE_AFISHA_EVENT}
+                        else "Не нашёл такую запись. Проверь название или открой нужный раздел вручную.")
+                await response.reply_text(text, reply_markup=_menu_keyboard())
                 return _idle_state(context)
             proposal = create_proposal(context.user_data, intent=parsed.intent, arguments=arguments,
                                        actor_key=get_username(update), now=now, ttl_seconds=AI_PROPOSAL_TTL_SECONDS,
@@ -608,7 +617,8 @@ def _preview(proposal: ActionProposal) -> str:
                     f"\n\nК событию прикреплено {args['_attachment_count']} документов."
                     "\nПри удалении события они тоже исчезнут из бота."
                 )
-            return f"🗑 Удалить\n\n{item.get('title') or 'Без названия'}{details}{warning}\n\nПока ничего не удалено."
+            place = f"\n{item['place']}" if item.get("place") else ""
+            return f"🗑 Удалить событие?\n\n{item.get('title') or 'Без названия'}{details}{place}{warning}\n\nПока ничего не удалено."
         labels = {"title": "Название", "price": "Стоимость", "priority": "Приоритет", "buyer": "Исполнитель", "status": "Статус", "comment": "Комментарий", "link": "Ссылка", "date": "Дата", "time": "Время", "start_time": "Время", "end_date": "Дата окончания", "end_time": "Время окончания", "place": "Место"}
         lines = ["✏️ Изменить", "", str(item.get("title") or "Без названия"), ""]
         lines.extend(f"{labels.get(field, field)}: {_human_value(field, item.get(field))} → {_human_value(field, value)}" for field, value in changes.items())
@@ -664,7 +674,8 @@ async def nl_callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE)
         proposal.status = "cancelled"
         discard_proposal(context.user_data, proposal)
         logger.info("NL proposal cancelled intent=%s", proposal.intent.value)
-        await _safe_query_edit(query, "Действие отменено. Ничего не изменилось.", reply_markup=_menu_keyboard())
+        text = "Удаление отменено." if proposal.intent in {IntentKind.DELETE_CALENDAR_EVENT, IntentKind.DELETE_AFISHA_EVENT} else "Действие отменено. Ничего не изменилось."
+        await _safe_query_edit(query, text, reply_markup=_menu_keyboard())
         return _idle_state(context)
     if action == "r" and len(parts) == 4:
         candidates = proposal.arguments.get("_candidates", [])
@@ -691,7 +702,7 @@ async def nl_callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE)
     proposal.status = "executing"
     try:
         if proposal.intent in _MUTATION_KINDS:
-            if proposal.intent is IntentKind.UPDATE_CALENDAR_EVENT:
+            if proposal.intent in {IntentKind.UPDATE_CALENDAR_EVENT, IntentKind.DELETE_CALENDAR_EVENT}:
                 profile = get_allowed_profile(update) or {}
                 if proposal.arguments.get("_bucket") != str(profile.get("wishlist_owner") or ""):
                     discard_proposal(context.user_data, proposal)
@@ -700,15 +711,26 @@ async def nl_callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE)
             result = mutate_existing(proposal.intent, proposal.arguments)
             if result.status == "conflict":
                 discard_proposal(context.user_data, proposal)
-                await _safe_query_edit(query, "Объект изменился с момента подтверждения. Проверь актуальные данные и попробуй ещё раз.", reply_markup=_menu_keyboard())
+                text = ("Событие изменилось после запроса. Попробуй удалить его ещё раз."
+                        if proposal.intent.name.startswith("DELETE_") else
+                        "Объект изменился с момента подтверждения. Проверь актуальные данные и попробуй ещё раз.")
+                await _safe_query_edit(query, text, reply_markup=_menu_keyboard())
                 return _idle_state(context)
             if result.status in {"missing", "already_deleted"}:
                 discard_proposal(context.user_data, proposal)
-                await _safe_query_edit(query, "Объекта больше нет.", reply_markup=_menu_keyboard())
+                text = ("Событие уже удалено или больше недоступно."
+                        if proposal.intent.name.startswith("DELETE_") else "Объекта больше нет.")
+                await _safe_query_edit(query, text, reply_markup=_menu_keyboard())
                 return SECTION
             if result.status not in {"updated", "deleted"}:
                 raise ValueError("mutation_failed")
-            text = "Объект удалён." if result.status == "deleted" else "Объект обновлён."
+            if result.status == "deleted" and proposal.intent in {IntentKind.DELETE_CALENDAR_EVENT, IntentKind.DELETE_AFISHA_EVENT}:
+                selected = proposal.arguments["_selected"]
+                clock = selected.get("start_time") or selected.get("time")
+                when = _human_date(selected.get("date")) + (f" {clock}" if clock else "")
+                text = f"✅ Событие удалено\n\n{selected.get('title') or 'Без названия'}\n{when}"
+            else:
+                text = "Объект удалён." if result.status == "deleted" else "Объект обновлён."
         if proposal.intent is IntentKind.ADD_MOVIE_OR_TV:
             discard_proposal(context.user_data, proposal)
             await _safe_query_edit(query, "Ищу фильм или сериал…")
@@ -732,7 +754,12 @@ async def nl_callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE)
             text = "Событие сохранено:\n\n" + build_afisha_item_text(item)
         elif proposal.intent not in _MUTATION_KINDS:
             raise ValueError("unsupported_proposal")
-    except ValueError:
+    except Exception:
+        if proposal.intent in {IntentKind.DELETE_CALENDAR_EVENT, IntentKind.DELETE_AFISHA_EVENT}:
+            discard_proposal(context.user_data, proposal)
+            logger.warning("NL event deletion failed intent=%s", proposal.intent.value, exc_info=True)
+            await _safe_query_edit(query, "⚠️ Не удалось удалить событие. Попробуй ещё раз.", reply_markup=_menu_keyboard())
+            return _idle_state(context)
         proposal.status = "pending"
         logger.info("NL proposal domain validation failed intent=%s", proposal.intent.value, exc_info=True)
         await _safe_query_edit(query, "Не удалось применить предложение. Проверь данные через «Изменить».", reply_markup=_keyboard(proposal.proposal_id))

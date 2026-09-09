@@ -33,7 +33,7 @@ normalize_reference = normalize_for_match
 
 
 def resolve_entities(data: dict[str, Any], kind: IntentKind, target: str, *, owner: str = "",
-                     include_past: bool = False, now: datetime | None = None,
+                     include_past: bool = False, target_date: str | None = None, now: datetime | None = None,
                      timezone: str = "Europe/Moscow") -> list[EntityCandidate]:
     needle = normalize_for_match(target)
     candidates: list[EntityCandidate] = []
@@ -49,19 +49,20 @@ def resolve_entities(data: dict[str, Any], kind: IntentKind, target: str, *, own
     for bucket, items in sources:
         for item in items if isinstance(items, list) else []:
             if kind in {IntentKind.UPDATE_CALENDAR_EVENT, IntentKind.DELETE_CALENDAR_EVENT} and item.get("source") == "afisha":
-                if kind is IntentKind.UPDATE_CALENDAR_EVENT:
-                    source_id = str(item.get("source_id") or "")
-                    canonical = next((row for row in data.get("afisha", []) if str(row.get("id")) == source_id), None)
-                    if canonical and normalize_for_match(str(canonical.get("title") or "")) == needle:
-                        if not any(row.item_id == source_id and row.bucket == "afisha" for row in candidates):
-                            candidates.append(EntityCandidate(source_id, "afisha", dict(canonical)))
+                source_id = str(item.get("source_id") or "")
+                canonical = next((row for row in data.get("afisha", []) if str(row.get("id")) == source_id), None)
+                if (canonical and normalize_for_match(str(canonical.get("title") or "")) == needle
+                        and (not target_date or canonical.get("date") == target_date)):
+                    if not any(row.item_id == source_id and row.bucket == "afisha" for row in candidates):
+                        candidates.append(EntityCandidate(source_id, "afisha", dict(canonical)))
                 continue
             if kind in {IntentKind.UPDATE_CALENDAR_EVENT, IntentKind.DELETE_CALENDAR_EVENT} and item.get("source") != "manual":
                 continue
             if kind in {IntentKind.UPDATE_CALENDAR_EVENT, IntentKind.DELETE_CALENDAR_EVENT} and not include_past:
                 if _calendar_event_is_past(item, now=now, timezone=timezone):
                     continue
-            if any(normalize_for_match(str(item.get(field) or "")) == needle for field in title_fields):
+            if (not target_date or item.get("date") == target_date) and any(
+                    normalize_for_match(str(item.get(field) or "")) == needle for field in title_fields):
                 candidates.append(EntityCandidate(str(item.get("id") or ""), bucket, dict(item)))
     if kind in {IntentKind.UPDATE_CALENDAR_EVENT, IntentKind.DELETE_CALENDAR_EVENT}:
         candidates.sort(key=lambda candidate: _calendar_sort_key(candidate.item))

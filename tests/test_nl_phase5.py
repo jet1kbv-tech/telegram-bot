@@ -94,6 +94,24 @@ def test_calendar_projection_resolves_to_canonical_afisha():
     assert [(candidate.item_id, candidate.bucket) for candidate in candidates] == [("a1", "afisha")]
 
 
+def test_calendar_projection_delete_resolves_to_canonical_afisha_and_honors_date():
+    data = base_data()
+    data["calendars"]["vova"].append({
+        "id": "cal_afisha_a1_vova", "owner": "vova", "title": "Концерт",
+        "date": "2026-08-15", "start_time": "19:00", "end_time": "",
+        "comment": "", "source": "afisha", "source_id": "a1",
+    })
+    candidates = resolve_entities(
+        data, IntentKind.DELETE_CALENDAR_EVENT, "концерт", owner="vova",
+        target_date="2026-08-15", now=FIXED_NOW, timezone="UTC",
+    )
+    assert [(candidate.item_id, candidate.bucket) for candidate in candidates] == [("a1", "afisha")]
+    assert not resolve_entities(
+        data, IntentKind.DELETE_CALENDAR_EVENT, "концерт", owner="vova",
+        target_date="2026-08-16", now=FIXED_NOW, timezone="UTC",
+    )
+
+
 @pytest.mark.parametrize("target", ["a beautiful mind", "ИГРЫ РАЗУМА"])
 def test_film_matching_is_case_insensitive_without_changing_canonical_title(target):
     data = base_data()

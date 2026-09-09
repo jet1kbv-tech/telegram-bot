@@ -50,9 +50,9 @@ _FIELDS: dict[IntentKind, dict[str, tuple[type, ...]]] = {
     IntentKind.UPDATE_FILM: {"target": (str,), "status": (str, type(None)), "comment": (str, type(None))},
     IntentKind.DELETE_FILM: {"target": (str,)},
     IntentKind.UPDATE_CALENDAR_EVENT: {"target": (str,), "title": (str, type(None)), "date_expression": (str, type(None)), "time_expression": (str, type(None)), "end_time_expression": (str, type(None))},
-    IntentKind.DELETE_CALENDAR_EVENT: {"target": (str,)},
+    IntentKind.DELETE_CALENDAR_EVENT: {"target": (str,), "date_expression": (str, type(None))},
     IntentKind.UPDATE_AFISHA_EVENT: {"target": (str,), "title": (str, type(None)), "place": (str, type(None)), "date_expression": (str, type(None)), "time_expression": (str, type(None)), "end_date_expression": (str, type(None)), "end_time_expression": (str, type(None))},
-    IntentKind.DELETE_AFISHA_EVENT: {"target": (str,)},
+    IntentKind.DELETE_AFISHA_EVENT: {"target": (str,), "date_expression": (str, type(None))},
     IntentKind.ATTACH_EVENT_FILE: {
         "target": (str,), "semantic_type": (str, type(None)), "transport_type": (str, type(None)),
         "origin": (str, type(None)), "destination": (str, type(None)),
@@ -285,9 +285,9 @@ _BRANCH_PROPERTIES: dict[IntentKind, dict[str, Any]] = {
     IntentKind.UPDATE_FILM: {"target": {"type": "string"}, "status": {"type": ["string", "null"], "enum": ["want", "watched", None]}, "comment": {"type": ["string", "null"]}},
     IntentKind.DELETE_FILM: {"target": {"type": "string"}},
     IntentKind.UPDATE_CALENDAR_EVENT: {"target": {"type": "string"}, "title": {"type": ["string", "null"]}, "date_expression": {"type": ["string", "null"]}, "time_expression": {"type": ["string", "null"]}},
-    IntentKind.DELETE_CALENDAR_EVENT: {"target": {"type": "string"}},
+    IntentKind.DELETE_CALENDAR_EVENT: {"target": {"type": "string"}, "date_expression": {"type": ["string", "null"]}},
     IntentKind.UPDATE_AFISHA_EVENT: {"target": {"type": "string"}, "title": {"type": ["string", "null"]}, "date_expression": {"type": ["string", "null"]}, "time_expression": {"type": ["string", "null"]}},
-    IntentKind.DELETE_AFISHA_EVENT: {"target": {"type": "string"}},
+    IntentKind.DELETE_AFISHA_EVENT: {"target": {"type": "string"}, "date_expression": {"type": ["string", "null"]}},
     IntentKind.ATTACH_EVENT_FILE: {
         "target": {"type": "string"},
         "semantic_type": {"type": ["string", "null"], "enum": ["transport_ticket", "voucher", "accommodation", "insurance", "reservation", "other", None]},

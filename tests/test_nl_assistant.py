@@ -117,6 +117,39 @@ def test_confirmed_afisha_creation_notifies_partner_exactly_once(monkeypatch):
     notify.assert_awaited_once_with(ctx, callback, item)
 
 
+def test_nl_afisha_delete_requires_confirmation_and_runs_once_without_notification(monkeypatch):
+    nl_assistant._parser = FakeParser(ParsedIntent(
+        IntentKind.DELETE_AFISHA_EVENT, {"target": "Концерт", "date_expression": "15 сентября"},
+    ))
+    item = {"id": "a1", "title": "Концерт", "date": "2026-09-15", "time": "19:00", "place": "VK Stadium"}
+    monkeypatch.setattr(nl_assistant.storage, "load", lambda: {
+        "afisha": [item], "calendars": {"vova": [], "sasha": []}, "event_attachments": [],
+    })
+    monkeypatch.setattr(nl_assistant, "resolve_entities", lambda *args, **kwargs: [
+        nl_assistant.EntityCandidate("a1", "afisha", item),
+    ])
+    mutate = Mock(return_value=SimpleNamespace(status="deleted", item=item))
+    monkeypatch.setattr(nl_assistant, "mutate_existing", mutate)
+    ctx, initial = context(), update(text="Удали концерт 15 сентября")
+
+    run(nl_assistant.nl_text_handler(initial, ctx))
+    mutate.assert_not_called()
+    preview = initial.effective_message.waiting.edit_text.await_args.args[0]
+    assert preview.startswith("🗑 Удалить событие?")
+    assert "Концерт\n15.09.2026 в 19:00\nVK Stadium" in preview
+
+    proposal_id = ctx.user_data["ai_active_proposal_id"]
+    callback = update(callback_data=f"ai:c:{proposal_id}")
+    run(nl_assistant.nl_callback_router(callback, ctx))
+    run(nl_assistant.nl_callback_router(update(callback_data=f"ai:c:{proposal_id}"), ctx))
+
+    mutate.assert_called_once()
+    nl_assistant._notify_afisha.assert_not_awaited()
+    assert callback.callback_query.edit_message_text.await_args.args[0] == (
+        "✅ Событие удалено\n\nКонцерт\n15.09.2026 19:00"
+    )
+
+
 @pytest.mark.parametrize(("error", "expected"), [
     (IntentParserTimeout("timeout"), "слишком много времени"),
     (IntentParserUnavailable("down"), "Сейчас не получается"),
@@ -364,6 +397,18 @@ def test_event_delete_candidate_selection_counts_source_attachments(monkeypatch,
     proposal = SimpleNamespace(intent=kind, arguments={"target": "Поездка"})
     nl_assistant._select_candidate(proposal, nl_assistant.EntityCandidate("event1", bucket, item), "Вова")
     assert proposal.arguments["_attachment_count"] == 1
+
+
+def test_calendar_projection_selection_becomes_canonical_afisha_delete(monkeypatch):
+    item = {"id": "a1", "title": "Концерт", "date": "2026-08-15", "time": "19:00"}
+    monkeypatch.setattr(nl_assistant, "storage", SimpleNamespace(load=lambda: {
+        "afisha": [item], "calendars": {"vova": [], "sasha": []}, "event_attachments": [],
+    }))
+    proposal = SimpleNamespace(intent=IntentKind.DELETE_CALENDAR_EVENT, arguments={"target": "Концерт"})
+    nl_assistant._select_candidate(proposal, nl_assistant.EntityCandidate("a1", "afisha", item), "Вова")
+    assert proposal.intent is IntentKind.DELETE_AFISHA_EVENT
+    assert proposal.arguments["_bucket"] == "afisha"
+    assert proposal.arguments["_id"] == "a1"
 
 
 def test_waiting_edit_failure_falls_back_to_single_reply():

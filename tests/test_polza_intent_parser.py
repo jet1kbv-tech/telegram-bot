@@ -543,9 +543,9 @@ CANONICAL_BY_INTENT = {
     "update_film": {"target": "Дюна", "status": None, "comment": None},
     "delete_film": {"target": "Дюна"},
     "update_calendar_event": {"target": "Врач", "title": None, "date_expression": None, "time_expression": None, "end_time_expression": None},
-    "delete_calendar_event": {"target": "Врач"},
+    "delete_calendar_event": {"target": "Врач", "date_expression": None},
     "update_afisha_event": {"target": "Концерт", "title": None, "place": None, "date_expression": None, "time_expression": None, "end_date_expression": None, "end_time_expression": None},
-    "delete_afisha_event": {"target": "Концерт"},
+    "delete_afisha_event": {"target": "Концерт", "date_expression": None},
     "query_purchases": {"status": "planned", "priority": "any", "buyer": "any", "operation": "list"},
     "query_films": {"status": "want", "media_type": "any", "genre": None, "operation": "list"},
     "query_calendar": {"date_from": None, "date_to": None, "target": None, "operation": "list"},
@@ -570,7 +570,7 @@ def test_production_afisha_calendar_shape_is_not_accepted_for_afisha():
 
 def test_delete_calendar_receives_exact_canonical_arguments():
     payload = provider_envelope("delete_calendar_event", CANONICAL_BY_INTENT["delete_calendar_event"])
-    assert normalize_provider_envelope(payload)["arguments"] == {"target": "Врач"}
+    assert normalize_provider_envelope(payload)["arguments"] == {"target": "Врач", "date_expression": None}
 
 
 def test_omitted_provider_values_become_canonical_nulls():
