@@ -2,14 +2,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from bot.services.context_engine import (
-    ContextBundle, DocumentContext, TripContext, build_context_bundle,
+    ContextBundle, DocumentContext, EventContext, TripContext, build_context_bundle,
     documents_for_context, find_trip_by_destination, find_trip_contexts,
 )
 from bot.services.event_attachment_display import date_time_text, transport_icon_label
+from bot.services.nl_dates import resolve_date_range, zoned_now
+from bot.services.nl_entity_resolution import normalize_reference
+
+_MONTHS = ("", "января", "февраля", "марта", "апреля", "мая", "июня", "июля",
+           "августа", "сентября", "октября", "ноября", "декабря")
+_WEEKDAYS = ("Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье")
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,6 +24,87 @@ class ContextQueryResult:
     text: str
     candidate_count: int
     trip: TripContext | None = None
+
+
+def _event_candidates(bundle: ContextBundle, target: str | None) -> tuple[EventContext, ...]:
+    needle = normalize_reference(target or "")
+    return tuple(event for event in bundle.events
+                 if not needle or needle in normalize_reference(event.title))
+
+
+def _event_label(event: EventContext) -> str:
+    return f"{event.title or 'Событие'} — {event.date.day} {_MONTHS[event.date.month]}"
+
+
+def _select_event(bundle: ContextBundle, target: str | None) -> tuple[str, EventContext | None, tuple[EventContext, ...]]:
+    candidates = _event_candidates(bundle, target)
+    if not candidates:
+        return "not_found", None, candidates
+    if len(candidates) > 1:
+        return "ambiguous", None, candidates
+    return "found", candidates[0], candidates
+
+
+def _ambiguity(candidates: tuple[EventContext, ...]) -> str:
+    lines = ["Нашёл несколько событий:", ""]
+    lines.extend(f"{index}. {_event_label(event)}" for index, event in enumerate(candidates, 1))
+    return "\n".join(lines + ["", "Какое ты имеешь в виду?"])
+
+
+def _document_label(document: DocumentContext) -> str:
+    if document.semantic_type == "transport_ticket":
+        return transport_icon_label(document.transport_type)[1].casefold()
+    return {"voucher": "ваучер / проживание", "reservation": "бронь", "insurance": "страховка"}.get(
+        document.semantic_type, "документ")
+
+
+def _event_query(bundle: ContextBundle, query_type: str, target: str | None,
+                 date_expression: str | None, now: datetime, timezone: str) -> ContextQueryResult:
+    if query_type == "events":
+        if not date_expression:
+            return ContextQueryResult("missing", "Уточни дату или период.", 0)
+        lower, upper = resolve_date_range(date_expression, now=now, timezone=timezone)
+        ranged = tuple(event for event in bundle.events if date.fromisoformat(lower) <= event.date <= date.fromisoformat(upper))
+        if not ranged:
+            return ContextQueryResult("not_found", f"На {date_expression.strip()} ничего не запланировано.", 0)
+        first = date.fromisoformat(lower)
+        heading = f"📅 {_WEEKDAYS[first.weekday()]}, {first.day} {_MONTHS[first.month]}" if lower == upper else f"📅 {date_expression.strip().capitalize()}"
+        lines = []
+        for event in ranged:
+            prefix = event.start_time.strftime("%H:%M") if event.start_time else event.date.strftime("%d.%m")
+            place = f" · {event.location_text}" if event.location_text else ""
+            lines.append(f"{prefix} — {event.title or 'Событие'}{place}")
+        return ContextQueryResult("found", "\n".join([heading, "", *lines]), len(ranged))
+
+    if query_type == "next_event":
+        local_now = zoned_now(timezone, now).replace(tzinfo=None)
+        future = tuple(event for event in _event_candidates(bundle, target)
+                       if datetime.combine(event.date, event.start_time or datetime.min.time()) >= local_now)
+        if not future:
+            return ContextQueryResult("not_found", "Не нашёл такое событие.", 0)
+        outcome, event, candidates = "found", future[0], future
+    else:
+        outcome, event, candidates = _select_event(bundle, target)
+    if outcome == "not_found":
+        return ContextQueryResult(outcome, "Не нашёл такое событие.", 0)
+    if outcome == "ambiguous":
+        return ContextQueryResult(outcome, _ambiguity(candidates), len(candidates))
+    assert event is not None
+    title = event.title or "Событие"
+    if query_type == "event_time" and event.start_time is None:
+        return ContextQueryResult("missing", f"{title} нашёл, но время для него не указано.", 1)
+    if query_type in {"next_event", "event_date", "event_time"}:
+        value = date_time_text(event.date, event.start_time if query_type != "event_date" else None)
+        if not value:
+            return ContextQueryResult("missing", f"{title} нашёл, но время для него не указано.", 1)
+        return ContextQueryResult("found", f"📅 {title} — {value}.", 1)
+    if query_type == "event_place":
+        text = f"{title} — {event.location_text}." if event.location_text else f"{title} нашёл, но место для него не указано."
+        return ContextQueryResult("found" if event.location_text else "missing", text, 1)
+    documents = documents_for_context(bundle, event)
+    if not documents:
+        return ContextQueryResult("missing", f"К событию «{title}» документов не прикреплено.", 1)
+    return ContextQueryResult("found", "\n".join([f"📎 К событию «{title}» прикреплено:", *[f"• {_document_label(row)}" for row in documents]]), 1)
 
 
 def _ticket(bundle: ContextBundle, trip: TripContext, direction: str) -> DocumentContext | None:
@@ -48,9 +135,15 @@ def _block(label: str, document: DocumentContext, *, arrival: bool = False) -> l
 
 def query_context(data: dict[str, Any], *, actor_key: str, now: datetime, timezone: str,
                   query_type: str, destination: str | None = None,
-                  transport_type: str | None = None) -> ContextQueryResult:
+                  transport_type: str | None = None, target: str | None = None,
+                  date_expression: str | None = None, person: str | None = None) -> ContextQueryResult:
     """Resolve facts locally; provider-derived arguments never contain actor or facts."""
-    bundle = build_context_bundle(data, actor_key, now, timezone, include_past=True)
+    # ``person`` is intentionally ignored for authorization: actor scope is
+    # derived by the application and cannot be widened by provider output.
+    event_query = query_type in {"events", "next_event", "event_time", "event_date", "event_place", "event_documents"}
+    bundle = build_context_bundle(data, actor_key, now, timezone, include_past=not event_query)
+    if event_query:
+        return _event_query(bundle, query_type, target, date_expression, now, timezone)
     trips = find_trip_by_destination(bundle, destination) if destination else find_trip_contexts(bundle)
     if transport_type:
         trips = tuple(trip for trip in trips if any(
@@ -71,8 +164,8 @@ def query_context(data: dict[str, Any], *, actor_key: str, now: datetime, timezo
         value = date_time_text(outbound.departure_date, outbound.departure_time)
         if not value:
             return ContextQueryResult("missing", "Поездку нашёл, но дата и время отправления пока не сохранены.", 1, trip)
-        lines = [_heading(trip, outbound.transport_type), "", "Отправление:", value]
-        if outbound.origin: lines.append(outbound.origin)
+        route = _route(outbound)
+        lines = [f"{transport_icon_label(outbound.transport_type)[0]} {route or trip.city_hint or trip.destination}", value]
         return ContextQueryResult("found", "\n".join(lines), 1, trip)
     if query_type == "arrival":
         if not outbound:
@@ -80,8 +173,8 @@ def query_context(data: dict[str, Any], *, actor_key: str, now: datetime, timezo
         value = date_time_text(outbound.arrival_date, outbound.arrival_time)
         if not value:
             return ContextQueryResult("missing", "Поездку нашёл, но информация о прибытии в билете пока не сохранена.", 1, trip)
-        lines = [_heading(trip, outbound.transport_type), "", "Прибытие:", value]
-        if outbound.destination: lines.append(outbound.destination)
+        route = _route(outbound)
+        lines = [f"{transport_icon_label(outbound.transport_type)[0]} {route or trip.city_hint or trip.destination}", f"Прибытие: {value}"]
         return ContextQueryResult("found", "\n".join(lines), 1, trip)
     if query_type == "return":
         if not returning:
@@ -91,8 +184,12 @@ def query_context(data: dict[str, Any], *, actor_key: str, now: datetime, timezo
             return ContextQueryResult("missing", "Обратный билет нашёл, но дата и время отправления пока не сохранены.", 1, trip)
         return ContextQueryResult("found", "\n".join([_heading(trip, returning.transport_type), "", "Обратно:", value] + ([_route(returning)] if _route(returning) else [])), 1, trip)
     if query_type == "documents":
-        count = len(documents)
-        return ContextQueryResult("found", f"🧳 Поездка в {trip.city_hint or trip.destination}\n\nДокументы: {count}", 1, trip)
+        if not documents:
+            return ContextQueryResult("missing", "К этой поездке документов не прикреплено.", 1, trip)
+        return ContextQueryResult("found", "\n".join([
+            f"📎 К поездке в {trip.city_hint or trip.destination} прикреплено:",
+            *[f"• {_document_label(row)}" for row in documents],
+        ]), 1, trip)
     lines = [f"🧳 Поездка в {trip.city_hint or trip.destination}"]
     if outbound:
         lines += [""] + _block("Туда", outbound)

@@ -18,7 +18,7 @@ def ticket(identity="out", **changes):
     return row
 
 
-@pytest.mark.parametrize(("kind", "expected"), [("departure", "Отправление"), ("arrival", "Прибытие"), ("overview", "Документы: 1"), ("documents", "Документы: 1")])
+@pytest.mark.parametrize(("kind", "expected"), [("departure", "23:38"), ("arrival", "Прибытие"), ("overview", "Документы: 1"), ("documents", "билет на поезд")])
 def test_local_context_answers(kind, expected):
     result = query_context(snapshot(ticket()), actor_key="vova", now=NOW, timezone="Europe/Moscow", query_type=kind, destination="Воронеж", transport_type=None)
     assert result.outcome == "found" and expected in result.text
@@ -46,7 +46,8 @@ def test_private_calendar_is_actor_scoped():
 def test_context_decoder_is_strict_and_bounded():
     parsed = decode_provider_envelope('{"intent":"query_context","arguments":[{"name":"query_type","value":"arrival"},{"name":"destination","value":"Воронеж"}]}')
     assert parsed.intent is IntentKind.QUERY_CONTEXT
-    assert parsed.arguments == {"query_type": "arrival", "destination": "Воронеж", "transport_type": None}
+    assert parsed.arguments == {"query_type": "arrival", "destination": "Воронеж", "transport_type": None,
+                                "target": None, "date_expression": None, "person": None}
     with pytest.raises(IntentParserInvalidOutput):
         decode_intent({"intent":"query_context","arguments":{"query_type":"weather","destination":"Воронеж","transport_type":None}})
     with pytest.raises(IntentParserInvalidOutput):
@@ -78,6 +79,7 @@ def test_production_context_provider_envelopes_decode(text, query_type, destinat
     assert parsed.intent is IntentKind.QUERY_CONTEXT
     assert parsed.arguments == {
         "query_type": query_type, "destination": destination, "transport_type": transport_type,
+        "target": None, "date_expression": None, "person": None,
     }
 
 
