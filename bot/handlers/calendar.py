@@ -23,11 +23,11 @@ from bot.storage import (
     delete_item_by_id,
     find_item,
     format_calendar_event_range,
-    get_calendar_items,
     normalize_calendar_event,
     sort_calendar_events,
     storage,
 )
+from bot.services.event_lifetime import is_event_effectively_actual
 from bot.utils import ensure_access, normalize_entity_title, owner_label, paginate_items, remember_current_chat
 from bot.services.actions.calendar import create_personal_calendar_event
 
@@ -201,7 +201,10 @@ async def show_calendar_menu(update: Update) -> int:
 async def show_calendar_owner(update: Update, owner: str, page: int = 0) -> int:
     query = update.callback_query
     data = storage.load()
-    items = get_calendar_items(data, owner)
+    items = sort_calendar_events([
+        item for item in data.get("calendars", {}).get(owner, [])
+        if is_event_effectively_actual(data, "calendar", item)
+    ])
     _, current_page, _ = paginate_items(items, page)
     text = build_calendar_owner_text(owner, items, current_page)
     safe_edit_message = _require_safe_edit_message()

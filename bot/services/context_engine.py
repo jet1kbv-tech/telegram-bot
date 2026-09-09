@@ -14,7 +14,8 @@ from typing import Any, Iterable
 from zoneinfo import ZoneInfo
 
 from bot.services.event_attachment_query import attachment_visible_parent
-from bot.storage import event_effective_end_dt, parse_event_dt, parse_calendar_event_end_dt, parse_calendar_event_start_dt
+from bot.services.event_lifetime import get_effective_event_end
+from bot.storage import event_explicit_end_dt, parse_event_dt, parse_calendar_event_end_dt, parse_calendar_event_start_dt
 
 TRIP_LINK_WINDOW = timedelta(days=3)
 RETURN_LINK_WINDOW = timedelta(days=14)
@@ -145,7 +146,7 @@ def collect_visible_events(data: dict[str, Any], actor_key: str, now: datetime, 
                            include_past: bool = False) -> tuple[EventContext, ...]:
     zone, lower, upper = _timezone(timezone), _as_date(date_from), _as_date(date_to)
     local_now = _local_naive(now, zone)
-    rows: list[tuple[datetime, EventContext]] = []
+    rows: list[tuple[datetime, datetime, EventContext]] = []
     for item in data.get("calendars", {}).get(actor_key, []):
         if not isinstance(item, dict) or item.get("source") != "manual":
             continue
@@ -154,19 +155,19 @@ def collect_visible_events(data: dict[str, Any], actor_key: str, now: datetime, 
             context = EventContext(_opaque("evt", ["calendar", str(item.get("id"))]), "calendar", "calendar",
                 str(item.get("id") or ""), str(item.get("title") or ""), start.date(), start.time(),
                 end.date() if end else None, end.time() if end else None, actor_key, False, None)
-            rows.append((start, context))
+            rows.append((start, get_effective_event_end(data, "calendar", item) or end or start, context))
     for item in data.get("afisha", []):
         if not isinstance(item, dict) or item.get("status") != "active":
             continue
-        start, end = parse_event_dt(item), event_effective_end_dt(item)
+        start, end = parse_event_dt(item), event_explicit_end_dt(item)
         if start:
             context = EventContext(_opaque("evt", ["afisha", str(item.get("id"))]), "afisha", "afisha",
                 str(item.get("id") or ""), str(item.get("title") or ""), start.date(), start.time(),
                 end.date() if end else None, end.time() if end else None, "shared", True,
                 str(item.get("place") or "").strip() or None)
-            rows.append((start, context))
-    selected = [(stamp, context) for stamp, context in rows
-                if (include_past or datetime.combine(context.end_date or context.date, context.end_time or context.start_time or time.min) >= local_now)
+            rows.append((start, get_effective_event_end(data, "afisha", item) or end or start, context))
+    selected = [(stamp, context) for stamp, effective_end, context in rows
+                if (include_past or effective_end >= local_now)
                 and (not lower or context.date >= lower) and (not upper or context.date <= upper)]
     return tuple(context for _, context in sorted(selected, key=lambda row: (row[0], row[1].canonical_parent_type, row[1].canonical_parent_id)))
 
