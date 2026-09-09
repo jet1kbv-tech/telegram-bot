@@ -5,7 +5,30 @@ on:
     branches: [ main ]
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install test dependencies
+        run: python -m pip install -r requirements.txt pytest
+
+      - name: Run tests
+        run: python -m pytest
+
+      - name: Compile Python sources
+        run: python -m compileall -q bot main.py
+
   deploy:
+    needs: test
     runs-on: ubuntu-latest
 
     steps:
@@ -15,9 +38,29 @@ jobs:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script_stop: true
           script: |
+            set -euo pipefail
+
+            data_file=/root/telegram-bot-data/data.json
+            backup_dir=/root/telegram-bot-data/backups
+            mkdir -p "$backup_dir"
+            if [ -f "$data_file" ]; then
+              timestamp=$(date -u +%Y%m%dT%H%M%S%NZ)
+              cp -- "$data_file" "$backup_dir/deploy-data-${timestamp}.json"
+            fi
+
+            mapfile -t deploy_backups < <(
+              find "$backup_dir" -maxdepth 1 -type f -name 'deploy-data-*.json' -printf '%f\n' | sort
+            )
+            excess=$((${#deploy_backups[@]} - 30))
+            for ((index = 0; index < excess; index++)); do
+              rm -- "$backup_dir/${deploy_backups[$index]}"
+            done
+
             cd /root/telegram-bot
-            git pull origin main
-            source venv/bin/activate
-            pip install -r requirements.txt
-            systemctl restart telegram-bot
+            git pull --ff-only origin main
+            /root/telegram-bot/venv/bin/python -m pip install -r requirements.txt
+            /root/telegram-bot/venv/bin/python -m compileall -q bot main.py
+            systemctl restart telegram-bot.service
+            systemctl is-active --quiet telegram-bot.service

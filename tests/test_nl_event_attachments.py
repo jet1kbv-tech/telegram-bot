@@ -154,12 +154,15 @@ def test_exact_match_canonicalizes_date_and_time_for_every_batch_file(monkeypatc
     assert state == handler.SELECTING_NL_ATTACHMENT_EVENT
     state = run(handler.nl_attachment_callback_router(callback(f"nla:s:{operation.operation_id}"), context))
     assert state == handler.CONFIRMING_NL_ATTACHMENT
-    assert operation.metadata["date"] == "2026-08-31" and "date_expression" not in operation.metadata
+    now = zoned_now("Europe/Moscow")
+    expected_year = now.year + ((now.month, now.day) > (8, 31))
+    expected_date = f"{expected_year}-08-31"
+    assert operation.metadata["date"] == expected_date and "date_expression" not in operation.metadata
     run(handler.nl_attachment_callback_router(callback(f"nla:c:{operation.operation_id}"), context))
     saved = store.save.call_args.args[0]["event_attachments"]
     assert len(saved) == 2
     assert {(item["date"], item["departure_time"], item["origin"], item["destination"]) for item in saved} == {
-        ("2026-08-31", "08:10", "Москва", "Воронеж")}
+        (expected_date, "08:10", "Москва", "Воронеж")}
     assert all("date_expression" not in item for item in saved)
 
 

@@ -12,6 +12,7 @@ from typing import Any
 from bot.config import (
     AFISHA_STATUSES,
     BACKLOG_STATUSES,
+    DATA_FILE,
     FILM_STATUSES,
     KNOWN_WISHLIST_OWNERS,
     LEISURE_STATUSES,
@@ -24,7 +25,6 @@ FILM_REACTION_VALUES = frozenset({"like", "neutral", "dislike"})
 FILM_REACTION_ACTORS = frozenset({"vova", "sasha"})
 
 logger = logging.getLogger(__name__)
-DATA_FILE = Path(os.getenv("DATA_FILE", "data.json"))
 
 
 class JsonStorage:
