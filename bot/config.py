@@ -19,7 +19,7 @@ def _positive_int_env(name: str, default: int) -> int:
         raise ValueError(f"{name} must be a positive integer")
     return value
 
-DATA_FILE = Path("data.json")
+DATA_FILE = Path(os.getenv("DATA_FILE", "data.json"))
 PAGE_SIZE = 10
 NOTIFY_LOOKAHEAD_MIN = 23 * 60
 NOTIFY_LOOKAHEAD_MAX = 25 * 60
