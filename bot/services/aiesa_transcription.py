@@ -60,10 +60,12 @@ def is_transient_status(status_code: int) -> bool:
 
 
 class AiesaTranscriptionService:
-    def __init__(self, public: str, secret: str, *, client: httpx.AsyncClient | None = None, timeout: float = 120):
+    def __init__(self, public: str, secret: str, *, client: httpx.AsyncClient | None = None,
+                 read_timeout: float = 3600, write_timeout: float = 600):
         if not public or not secret:
             raise ValueError("Aiesa credentials are required")
-        self.public, self.secret, self.client, self.timeout = public, secret, client, timeout
+        self.public, self.secret, self.client = public, secret, client
+        self.timeout = httpx.Timeout(connect=30, read=read_timeout, write=write_timeout, pool=30)
 
     async def _request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
         try:

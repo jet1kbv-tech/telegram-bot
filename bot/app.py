@@ -18,7 +18,8 @@ from bot.config import (AI_ATTACHMENT_MAX_BYTES, AI_ATTACHMENT_TIMEOUT_SECONDS,
                         WEATHER_CACHE_TTL_SECONDS, WEATHER_TIMEOUT_SECONDS, AIESA_API_PUBLIC,
                         AIESA_API_SECRET, AIESA_TRANSCRIPTION_POLL_SECONDS,
                         AI_TRANSCRIPTION_MAX_FILE_BYTES, AI_TRANSCRIPTION_CLEANUP_MODEL,
-                        POLZA_TRANSCRIPTION_MODEL)
+                        AI_TRANSCRIPTION_PROVIDER_READ_TIMEOUT_SECONDS,
+                        AI_TRANSCRIPTION_UPLOAD_TIMEOUT_SECONDS, POLZA_TRANSCRIPTION_MODEL)
 from bot.handlers.ai_transcription import ai_callback, process_transcription_jobs, receive_media
 from bot.services.aiesa_transcription import AiesaTranscriptionService
 from bot.services.polza_master_transcription import PolzaMasterTranscriptionService
@@ -294,10 +295,15 @@ def build_app() -> Application:
     app.bot_data["transcription_max_bytes"] = AI_TRANSCRIPTION_MAX_FILE_BYTES
     app.bot_data["master_transcriptions"] = {}
     if AIESA_API_PUBLIC and AIESA_API_SECRET:
-        app.bot_data["aiesa_service"] = AiesaTranscriptionService(AIESA_API_PUBLIC, AIESA_API_SECRET)
+        app.bot_data["aiesa_service"] = AiesaTranscriptionService(
+            AIESA_API_PUBLIC, AIESA_API_SECRET,
+            read_timeout=AI_TRANSCRIPTION_PROVIDER_READ_TIMEOUT_SECONDS,
+            write_timeout=AI_TRANSCRIPTION_UPLOAD_TIMEOUT_SECONDS)
         if polza_key and POLZA_TRANSCRIPTION_MODEL:
             app.bot_data["master_transcription_service"] = PolzaMasterTranscriptionService(
-                polza_key, POLZA_TRANSCRIPTION_MODEL)
+                polza_key, POLZA_TRANSCRIPTION_MODEL,
+                read_timeout=AI_TRANSCRIPTION_PROVIDER_READ_TIMEOUT_SECONDS,
+                write_timeout=AI_TRANSCRIPTION_UPLOAD_TIMEOUT_SECONDS)
         if polza_key and AI_TRANSCRIPTION_CLEANUP_MODEL:
             app.bot_data["transcript_cleaner"] = PolzaTranscriptCleaner(polza_key, AI_TRANSCRIPTION_CLEANUP_MODEL)
         logger.info("AI transcription enabled provider=aiesa master=%s cleanup=%s",

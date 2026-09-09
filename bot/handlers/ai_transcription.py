@@ -6,6 +6,7 @@ import mimetypes
 import os
 import shutil
 import tempfile
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -73,20 +74,38 @@ async def receive_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         await update.message.reply_text("Расшифровка сейчас не настроена. Попробуй ещё раз позже.")
         return MENU
     media, filename, content_type = selected
+    media_type = _media_type(update.message)
+    file_size_bytes = int(getattr(media, "file_size", 0) or 0)
+    media_duration_seconds = int(getattr(media, "duration", 0) or 0)
     max_bytes = context.application.bot_data["transcription_max_bytes"]
-    if media.file_size and media.file_size > max_bytes:
+    if file_size_bytes > max_bytes:
+        logger.warning("AI transcription stage=validation outcome=rejected media_type=%s file_size_bytes=%s "
+                       "duration_seconds=%s category=file_too_large", media_type, file_size_bytes,
+                       media_duration_seconds)
         await update.message.reply_text(f"Файл слишком большой. Максимальный размер — {max_bytes // 1024 // 1024} МБ.")
         return WAITING_FOR_AI_TRANSCRIPTION
     await update.message.reply_text("⏳ Загружаю и расшифровываю запись…")
     workdir = Path(tempfile.mkdtemp(prefix="telegram-transcription-"))
     os.chmod(workdir, 0o700)
     media_path = workdir / filename
+    started = time.monotonic()
+    stage = "telegram_download"
     try:
+        logger.info("AI transcription stage=telegram_download outcome=started media_type=%s file_size_bytes=%s "
+                    "duration_seconds=%s", media_type, file_size_bytes, media_duration_seconds)
         telegram_file = await media.get_file()
         await telegram_file.download_to_drive(media_path)
-        if media_path.stat().st_size > max_bytes:
+        downloaded_size = media_path.stat().st_size
+        logger.info("AI transcription stage=telegram_download outcome=success media_type=%s file_size_bytes=%s "
+                    "duration_seconds=%s elapsed_seconds=%.3f", media_type, downloaded_size,
+                    media_duration_seconds, time.monotonic() - started)
+        if downloaded_size > max_bytes:
+            logger.warning("AI transcription stage=validation outcome=rejected media_type=%s file_size_bytes=%s "
+                           "duration_seconds=%s category=file_too_large", media_type, downloaded_size,
+                           media_duration_seconds)
             await update.message.reply_text(f"Файл слишком большой. Максимальный размер — {max_bytes // 1024 // 1024} МБ.")
             return WAITING_FOR_AI_TRANSCRIPTION
+        stage = "provider_creation"
         master_service: PolzaMasterTranscriptionService | None = context.application.bot_data.get(
             "master_transcription_service")
         aiesa_call = service.create(media_path, filename, content_type)
@@ -98,8 +117,12 @@ async def receive_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
                         master.outcome, master.failure_category or "none")
         else:
             provider_job_id = await aiesa_call
-    except (AiesaError, OSError):
-        logger.warning("AI transcription creation failed provider=aiesa category=bounded")
+    except Exception as exc:
+        category = exc.category if isinstance(exc, AiesaError) else "download_or_creation_failure"
+        logger.warning("AI transcription stage=%s outcome=failed provider=aiesa media_type=%s "
+                       "file_size_bytes=%s duration_seconds=%s category=%s exception_class=%s elapsed_seconds=%.3f",
+                       stage, media_type, file_size_bytes, media_duration_seconds, category, type(exc).__name__,
+                       time.monotonic() - started)
         await update.message.reply_text("Не получилось начать расшифровку. Попробуй ещё раз чуть позже.")
         return MENU
     finally:
@@ -108,9 +131,14 @@ async def receive_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     job = {"id": uuid.uuid4().hex, "type": "transcription", "provider": "aiesa", "actor": get_username(update),
            "telegram_chat_id": update.effective_chat.id, "provider_job_id": provider_job_id,
            "original_filename": filename, "status": "processing", "created_at": now, "updated_at": now,
-           "delivered_at": "", "attempts": 0, "next_attempt_at": ""}
+           "delivered_at": "", "attempts": 0, "next_attempt_at": "", "media_type": media_type,
+           "file_size_bytes": downloaded_size, "duration_seconds": media_duration_seconds,
+           "last_stage": "provider_processing", "failure_category": ""}
     storage.update(lambda data: data.setdefault("ai_jobs", []).append(job))
-    logger.info("AI transcription created provider=aiesa")
+    logger.info("AI transcription job_id=%s actor=%s stage=creation outcome=success provider=aiesa "
+                "media_type=%s file_size_bytes=%s duration_seconds=%s final_job_state=processing elapsed_seconds=%.3f",
+                job["id"], job["actor"], media_type, downloaded_size, media_duration_seconds,
+                time.monotonic() - started)
     return MENU
 
 
@@ -123,18 +151,28 @@ async def process_transcription_jobs(context: ContextTypes.DEFAULT_TYPE) -> None
     for job in jobs:
         if job["status"] in {"completed", "failed"} or not _due(job, now):
             continue
+        started = time.monotonic()
+        stage = "provider_status"
+        attempt = int(job.get("attempts") or 0) + 1
         try:
             status = await service.status(job["provider_job_id"])
-            logger.info("AI transcription polling provider=aiesa status=%s", status.status)
+            logger.info("AI transcription job_id=%s actor=%s stage=%s attempt=%s provider=aiesa "
+                        "provider_status=%s elapsed_seconds=%.3f", job["id"], job["actor"], stage,
+                        attempt, status.status, time.monotonic() - started)
             if status.status in TERMINAL_PROVIDER_STATUSES:
-                _set_job(job["id"], status="failed")
-                await context.bot.send_message(job["telegram_chat_id"], "Не получилось расшифровать эту запись.")
+                _set_job(job["id"], status="failed", last_stage=stage,
+                         failure_category=f"provider_status_{status.status}")
+                await _notify_failure(context, job, f"provider_status_{status.status}")
                 continue
             if status.status != "completed":
                 _set_job(job["id"], attempts=0, next_attempt_at="")
                 continue
-            _set_job(job["id"], status="postprocessing")
+            stage = "provider_result"
+            _set_job(job["id"], status="postprocessing", last_stage=stage)
             result = await service.result(status.result_json_url or "")
+            if not result.segments or not any(segment.text.strip() for segment in result.segments):
+                raise AiesaError("empty_transcript")
+            stage = "postprocessing"
             turns = normalize_segments(result.segments)
             master = context.application.bot_data.get("master_transcriptions", {}).pop(job["provider_job_id"], None)
             selection = select_best_transcript(turns, master)
@@ -172,6 +210,7 @@ async def process_transcription_jobs(context: ContextTypes.DEFAULT_TYPE) -> None
             cleaner_obj = context.application.bot_data.get("transcript_cleaner")
             cleaner = cleaner_obj.clean_chunk if cleaner_obj else None
             turns, cleanup = await cleanup_best_effort(turns, cleaner)
+            stage = "docx_generation"
             workdir = Path(tempfile.mkdtemp(prefix="telegram-transcription-result-"))
             os.chmod(workdir, 0o700)
             try:
@@ -179,27 +218,39 @@ async def process_transcription_jobs(context: ContextTypes.DEFAULT_TYPE) -> None
                 docx_path = workdir / filename
                 create_docx(docx_path, original_filename=job["original_filename"], processed_at=now.replace(tzinfo=None),
                             duration_seconds=result.duration_seconds, speaker_count=result.speaker_count, turns=turns)
-                _set_job(job["id"], status="delivering")
+                stage = "telegram_delivery"
+                _set_job(job["id"], status="delivering", last_stage=stage)
                 caption = (f"✅ Расшифровка готова\n\n🎙 {job['original_filename']}\n"
                            f"⏱ {duration_text(result.duration_seconds)}\n👥 Спикеров: {result.speaker_count}")
                 with docx_path.open("rb") as document:
                     await context.bot.send_document(job["telegram_chat_id"], document=document, filename=filename, caption=caption)
                 _set_job(job["id"], status="completed", delivered_at=datetime.now(timezone.utc).isoformat(), attempts=0)
-                logger.info("AI transcription completed provider=aiesa duration_seconds=%s minutes_billed=%s speaker_count=%s "
-                            "segment_count=%s source=%s cleanup=%s delivery=success", result.duration_seconds,
-                            status.minutes_billed, result.speaker_count, len(result.segments), source, cleanup)
+                logger.info("AI transcription job_id=%s actor=%s stage=completed attempt=%s provider=aiesa "
+                            "duration_seconds=%s minutes_billed=%s speaker_count=%s segment_count=%s source=%s "
+                            "cleanup=%s delivery=success final_job_state=completed elapsed_seconds=%.3f", job["id"],
+                            job["actor"], attempt, result.duration_seconds,
+                            status.minutes_billed, result.speaker_count, len(result.segments), source, cleanup,
+                            time.monotonic() - started)
             finally:
                 shutil.rmtree(workdir, ignore_errors=True)
         except AiesaError as exc:
             if exc.transient:
-                _retry(job, now)
+                exhausted = _retry(job, now, stage=stage, category=exc.category)
+                if exhausted:
+                    await _notify_failure(context, job, exc.category)
             else:
-                _set_job(job["id"], status="failed")
-                await context.bot.send_message(job["telegram_chat_id"], "Не получилось расшифровать эту запись.")
-            logger.warning("AI transcription provider failure provider=aiesa category=%s transient=%s", exc.category, exc.transient)
-        except Exception:
-            _retry(job, now)
-            logger.exception("AI transcription processing failure provider=aiesa category=internal")
+                _set_job(job["id"], status="failed", last_stage=stage, failure_category=exc.category)
+                await _notify_failure(context, job, exc.category)
+            logger.warning("AI transcription job_id=%s actor=%s stage=%s attempt=%s provider=aiesa category=%s "
+                           "transient=%s exception_class=%s elapsed_seconds=%.3f", job["id"], job["actor"], stage,
+                           attempt, exc.category, exc.transient, type(exc).__name__, time.monotonic() - started)
+        except Exception as exc:
+            exhausted = _retry(job, now, stage=stage, category="internal")
+            if exhausted:
+                await _notify_failure(context, job, "internal")
+            logger.exception("AI transcription job_id=%s actor=%s stage=%s attempt=%s provider=aiesa "
+                             "category=internal exception_class=%s elapsed_seconds=%.3f", job["id"], job["actor"],
+                             stage, attempt, type(exc).__name__, time.monotonic() - started)
 
 
 def _due(job: dict[str, Any], now: datetime) -> bool:
@@ -227,10 +278,37 @@ def _set_job(job_id: str, **changes: Any) -> None:
     storage.update(mutate)
 
 
-def _retry(job: dict[str, Any], now: datetime) -> None:
+def _retry(job: dict[str, Any], now: datetime, *, stage: str, category: str) -> bool:
     attempts = int(job.get("attempts") or 0) + 1
     if attempts >= 8:
-        _set_job(job["id"], status="failed", attempts=attempts)
-        return
-    _set_job(job["id"], status="postprocessing" if job.get("status") in {"postprocessing", "delivering"} else "processing",
-             attempts=attempts, next_attempt_at=(now + timedelta(seconds=min(900, 15 * 2 ** attempts))).isoformat())
+        _set_job(job["id"], status="failed", attempts=attempts, next_attempt_at="", last_stage=stage,
+                 failure_category=category)
+        return True
+    target_status = "processing" if stage == "provider_status" else "postprocessing"
+    _set_job(job["id"], status=target_status,
+             attempts=attempts, next_attempt_at=(now + timedelta(seconds=min(900, 15 * 2 ** attempts))).isoformat(),
+             last_stage=stage, failure_category=category)
+    return False
+
+
+async def _notify_failure(context: ContextTypes.DEFAULT_TYPE, job: dict[str, Any], category: str) -> None:
+    try:
+        await context.bot.send_message(
+            job["telegram_chat_id"],
+            "Не получилось расшифровать эту запись. Аудио можно отправить ещё раз.",
+        )
+        outcome = "success"
+    except Exception as exc:
+        outcome = "failed"
+        logger.exception("AI transcription job_id=%s actor=%s stage=failure_notification outcome=failed "
+                         "category=%s exception_class=%s final_job_state=failed", job["id"], job["actor"],
+                         category, type(exc).__name__)
+    logger.info("AI transcription job_id=%s actor=%s stage=failure_notification outcome=%s category=%s "
+                "final_job_state=failed", job["id"], job["actor"], outcome, category)
+
+
+def _media_type(message: Any) -> str:
+    for name in ("audio", "voice", "document", "video", "video_note"):
+        if getattr(message, name, None) is not None:
+            return name
+    return "unknown"
