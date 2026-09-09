@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes, ConversationHandler
@@ -32,16 +32,19 @@ from bot.services.actions.afisha import create_afisha_event
 
 _build_item_text: Callable[[str, dict[str, Any]], str] | None = None
 _item_keyboard: Callable[..., InlineKeyboardMarkup] | None = None
+_notify_other_user_about_afisha_item: Callable[[ContextTypes.DEFAULT_TYPE, Update, dict[str, Any]], Awaitable[None]] | None = None
 
 
 def configure_afisha_handlers(
     *,
     build_item_text: Callable[[str, dict[str, Any]], str],
     item_keyboard: Callable[..., InlineKeyboardMarkup],
+    notify_other_user_about_afisha_item: Callable[[ContextTypes.DEFAULT_TYPE, Update, dict[str, Any]], Awaitable[None]],
 ) -> None:
-    global _build_item_text, _item_keyboard
+    global _build_item_text, _item_keyboard, _notify_other_user_about_afisha_item
     _build_item_text = build_item_text
     _item_keyboard = item_keyboard
+    _notify_other_user_about_afisha_item = notify_other_user_about_afisha_item
 
 
 def _require_build_item_text() -> Callable[[str, dict[str, Any]], str]:
@@ -366,6 +369,8 @@ async def add_event_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text("Не удалось сохранить событие: проверь дату и время.")
         return SECTION
 
+    if _notify_other_user_about_afisha_item is not None:
+        await _notify_other_user_about_afisha_item(context, update, normalized_item)
 
     for key in ["event_title", "event_place", "event_date", "event_time", "event_end_date", "event_end_time"]:
         context.user_data.pop(key, None)

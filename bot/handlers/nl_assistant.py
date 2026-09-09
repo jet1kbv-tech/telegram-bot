@@ -45,15 +45,18 @@ logger = logging.getLogger(__name__)
 
 _parser: IntentParser | None = None
 _notify_calendar: Callable[[ContextTypes.DEFAULT_TYPE, Update, dict[str, Any]], Awaitable[None]] | None = None
+_notify_afisha: Callable[[ContextTypes.DEFAULT_TYPE, Update, dict[str, Any]], Awaitable[None]] | None = None
 _weather_provider: WeatherProvider | None = None
 
 
 def configure_nl_assistant(*, parser: IntentParser,
                            notify_calendar: Callable[[ContextTypes.DEFAULT_TYPE, Update, dict[str, Any]], Awaitable[None]],
+                           notify_afisha: Callable[[ContextTypes.DEFAULT_TYPE, Update, dict[str, Any]], Awaitable[None]],
                            weather_provider: WeatherProvider | None = None) -> None:
-    global _parser, _notify_calendar, _weather_provider
+    global _parser, _notify_calendar, _notify_afisha, _weather_provider
     _parser = parser
     _notify_calendar = notify_calendar
+    _notify_afisha = notify_afisha
     _weather_provider = weather_provider
 
 
@@ -709,6 +712,8 @@ async def nl_callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE)
             text = "Событие сохранено:\n\n" + build_calendar_event_text(item)
         elif proposal.intent is IntentKind.ADD_AFISHA_EVENT:
             item = create_afisha_event(proposal.arguments)
+            if _notify_afisha is not None:
+                await _notify_afisha(context, update, item)
             text = "Событие сохранено:\n\n" + build_afisha_item_text(item)
         elif proposal.intent not in _MUTATION_KINDS:
             raise ValueError("unsupported_proposal")
