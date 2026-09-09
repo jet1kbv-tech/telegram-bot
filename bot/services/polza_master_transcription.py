@@ -7,6 +7,7 @@ import logging
 import mimetypes
 from pathlib import Path
 import re
+import time
 from typing import Literal
 
 import httpx
@@ -49,15 +50,18 @@ class MasterTranscriptionResult:
 
 
 class PolzaMasterTranscriptionService:
-    def __init__(self, api_key: str, model: str, *, timeout: float = 120,
+    def __init__(self, api_key: str, model: str, *, read_timeout: float = 3600,
+                 write_timeout: float = 600,
                  client: httpx.AsyncClient | None = None):
         if not api_key or not model:
             raise ValueError("Polza master transcription configuration is required")
-        self.api_key, self.model, self.timeout, self.client = api_key, model, timeout, client
+        self.api_key, self.model, self.client = api_key, model, client
+        self.timeout = httpx.Timeout(connect=30, read=read_timeout, write=write_timeout, pool=30)
 
     async def transcribe(self, media_path: Path, filename: str, content_type: str | None,
                          *, language: str = "ru") -> MasterTranscriptionResult:
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        started = time.monotonic()
         try:
             # Polza's audio endpoint accepts a base64 Data URL, not a multipart upload. Keep
             # the encoding request-local and never expose it through results or diagnostics.
@@ -79,8 +83,8 @@ class PolzaMasterTranscriptionService:
                 async with httpx.AsyncClient(timeout=self.timeout) as client:
                     response = await client.post(POLZA_AUDIO_TRANSCRIPTIONS_URL, headers=headers,
                                                  json=payload)
-            logger.info("Polza master request mime=%s body_bytes=%s status=%s",
-                        mime_type, request_body_bytes, response.status_code)
+            logger.info("Polza master request stage=provider_response mime=%s body_bytes=%s status=%s elapsed_seconds=%.3f",
+                        mime_type, request_body_bytes, response.status_code, time.monotonic() - started)
             del data_url, payload
             response.raise_for_status()
             response_payload = response.json()
@@ -90,8 +94,9 @@ class PolzaMasterTranscriptionService:
                 return MasterTranscriptionResult("failed", self.model, failure_category="malformed_response")
             logger.info("Polza master provider outcome=success category=none")
             return MasterTranscriptionResult("success", self.model, text=text.strip())
-        except httpx.TimeoutException:
-            logger.info("Polza master provider outcome=failed category=timeout")
+        except httpx.TimeoutException as exc:
+            logger.info("Polza master provider stage=provider_request outcome=failed category=timeout "
+                        "exception_class=%s elapsed_seconds=%.3f", type(exc).__name__, time.monotonic() - started)
             return MasterTranscriptionResult("failed", self.model, failure_category="timeout")
         except httpx.HTTPStatusError as exc:
             category = "rate_limited" if exc.response.status_code == 429 else (

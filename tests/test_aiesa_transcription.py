@@ -77,3 +77,20 @@ async def test_malformed_and_network_timeout_are_bounded():
 def test_retry_classification():
     assert is_transient_status(429) and is_transient_status(500) and is_transient_status(503)
     assert not is_transient_status(400) and not is_transient_status(404)
+
+async def test_long_running_requests_use_long_read_and_upload_timeouts(tmp_path: Path):
+    media = tmp_path / "long.ogg"
+    media.write_bytes(b"audio")
+
+    def handler(request: httpx.Request):
+        timeouts = request.extensions["timeout"]
+        assert timeouts["read"] == 3600
+        assert timeouts["write"] == 600
+        return httpx.Response(201, json={"transcription_id": "long-job"})
+
+    client = client_for(handler)
+    try:
+        service = AiesaTranscriptionService("p", "s", client=client)
+        assert await service.create(media, "long.ogg", "audio/ogg") == "long-job"
+    finally:
+        await client.aclose()

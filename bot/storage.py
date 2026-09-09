@@ -189,6 +189,11 @@ def normalize_ai_job(raw: Any) -> dict[str, Any] | None:
         "delivered_at": str(raw.get("delivered_at") or ""),
         "attempts": normalize_nonnegative_int(raw.get("attempts")),
         "next_attempt_at": str(raw.get("next_attempt_at") or ""),
+        "media_type": str(raw.get("media_type") or "unknown"),
+        "file_size_bytes": normalize_nonnegative_int(raw.get("file_size_bytes")),
+        "duration_seconds": normalize_nonnegative_int(raw.get("duration_seconds")),
+        "last_stage": str(raw.get("last_stage") or ""),
+        "failure_category": str(raw.get("failure_category") or ""),
     }
 
 

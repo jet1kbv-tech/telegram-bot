@@ -131,3 +131,13 @@ async def test_master_malformed_success_is_bounded(tmp_path: Path, response):
     assert result.outcome == "failed"
     assert result.failure_category == "malformed_response"
     assert result.text == ""
+
+async def test_master_long_request_uses_long_read_timeout(tmp_path: Path):
+    def handler(request: httpx.Request):
+        timeouts = request.extensions["timeout"]
+        assert timeouts["read"] == 3600
+        assert timeouts["write"] == 600
+        return httpx.Response(200, json={"text": "готово"})
+
+    result = await _transcribe(tmp_path, handler)
+    assert result.outcome == "success"
