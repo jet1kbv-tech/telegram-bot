@@ -31,7 +31,7 @@ from bot.handlers.nl_attachment_retrieval import begin_attachment_query
 from bot.handlers.nl_attachment_mutations import begin_attachment_mutation
 from bot.services.nl_query_contexts import create_query_context, get_query_context
 from bot.services.queries import choose_random, next_event, query_afisha, query_calendar, query_films, query_purchases
-from bot.services.context_queries import query_context
+from bot.services.context_queries import execute_context_query
 from bot.services.weather import WeatherError, WeatherProvider
 from bot.services.weather_context import query_weather_context
 from bot.states import (
@@ -332,8 +332,11 @@ async def nl_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if parsed.intent is IntentKind.QUERY_CONTEXT:
             profile = get_allowed_profile(update) or {}
             actor_key = str(profile.get("wishlist_owner") or "")
-            result = query_context(storage.load(), actor_key=actor_key, now=now, timezone=BOT_TIMEZONE,
-                                   **parsed.arguments)
+            def run_context_query(data):
+                return execute_context_query(data, actor_key=actor_key, now=now, timezone=BOT_TIMEZONE,
+                                             **parsed.arguments)
+
+            result, _ = storage.update(run_context_query)
             logger.info("NL context query intent=query_context query_type=%s outcome=%s candidate_count=%s",
                         parsed.arguments["query_type"], result.outcome, result.candidate_count)
             if result.trip is not None and result.candidate_count == 1:
