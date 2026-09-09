@@ -1,8 +1,9 @@
-name: Deploy Bot
+name: CI and Manual Production Deploy
 
 on:
   push:
     branches: [ main ]
+  workflow_dispatch:
 
 jobs:
   test:
@@ -28,8 +29,11 @@ jobs:
         run: python -m compileall -q bot main.py
 
   deploy:
+    name: Manual production deploy
+    if: github.event_name == 'workflow_dispatch'
     needs: test
     runs-on: ubuntu-latest
+    environment: production
 
     steps:
       - name: Deploy to VPS
