@@ -67,7 +67,7 @@ _FIELDS: dict[IntentKind, dict[str, tuple[type, ...]]] = {
     IntentKind.QUERY_CONTEXT: {
         "query_type": (str,), "destination": (str, type(None)),
         "transport_type": (str, type(None)), "target": (str, type(None)),
-        "date_expression": (str, type(None)), "person": (str, type(None)),
+        "date_expression": (str, type(None)), "person": (str, type(None)), "follow_up": (bool,),
     },
     IntentKind.QUERY_WEATHER_CONTEXT: {
         "weather_scope": (str,), "target": (str, type(None)), "location": (str, type(None)),
@@ -134,7 +134,7 @@ _PROVIDER_TECHNICAL_DEFAULTS: dict[IntentKind, dict[str, Any]] = {
     IntentKind.QUERY_WEATHER_CONTEXT: {"include_advice": False},
     IntentKind.QUERY_CONTEXT: {
         "destination": None, "transport_type": None, "target": None,
-        "date_expression": None, "person": None,
+        "date_expression": None, "person": None, "follow_up": False,
     },
 }
 
@@ -144,6 +144,7 @@ _PROVIDER_TECHNICAL_DEFAULTS: dict[IntentKind, dict[str, Any]] = {
 _PROVIDER_BOOLEAN_FIELDS: dict[IntentKind, frozenset[str]] = {
     IntentKind.QUERY_EVENT_ATTACHMENTS: frozenset({"return_all"}),
     IntentKind.QUERY_WEATHER_CONTEXT: frozenset({"include_advice"}),
+    IntentKind.QUERY_CONTEXT: frozenset({"follow_up"}),
 }
 
 
@@ -218,7 +219,7 @@ def decode_intent(raw: str | dict[str, Any]) -> ParsedIntent:
     if kind in {IntentKind.QUERY_CALENDAR, IntentKind.QUERY_AFISHA} and arguments["operation"] not in {"list", "count", "next"}:
         raise IntentParserInvalidOutput("invalid_query_arguments")
     if kind is IntentKind.QUERY_CONTEXT:
-        if arguments["query_type"] not in {"departure", "arrival", "return", "documents", "overview",
+        if arguments["query_type"] not in {"departure", "arrival", "return", "documents", "overview", "origin", "destination",
                                                 "events", "next_event", "event_time", "event_date",
                                                 "event_place", "event_documents"}:
             raise IntentParserInvalidOutput("invalid_query_type")
@@ -316,12 +317,13 @@ _BRANCH_PROPERTIES: dict[IntentKind, dict[str, Any]] = {
         "return_all": {"type": "boolean"},
     },
     IntentKind.QUERY_CONTEXT: {
-        "query_type": {"type": "string", "enum": ["departure", "arrival", "return", "documents", "overview", "events", "next_event", "event_time", "event_date", "event_place", "event_documents"]},
+        "query_type": {"type": "string", "enum": ["departure", "arrival", "return", "documents", "overview", "origin", "destination", "events", "next_event", "event_time", "event_date", "event_place", "event_documents"]},
         "destination": {"type": ["string", "null"]},
         "transport_type": {"type": ["string", "null"], "enum": [*TRANSPORT_TYPES, None]},
         "target": {"type": ["string", "null"]},
         "date_expression": {"type": ["string", "null"]},
         "person": {"type": ["string", "null"], "enum": ["self", "vova", "sasha", "both", None]},
+        "follow_up": {"type": "boolean"},
     },
     IntentKind.QUERY_WEATHER_CONTEXT: {
         "weather_scope": {"type": "string", "enum": ["date", "arrival", "trip", "event", "current"]},

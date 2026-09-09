@@ -18,6 +18,7 @@ from bot.config import (
     LEISURE_STATUSES,
     WISHLIST_STATUSES,
 )
+from bot.services.context_sessions import normalize_context_sessions
 
 PURCHASE_BUCKETS = ("planned", "bought")
 PURCHASE_PRIORITIES = {"high", "medium", "low", ""}
@@ -67,6 +68,7 @@ class JsonStorage:
             "meta": {
                 "user_chats": {},
                 "trip_reminder_deliveries": [],
+                "context_sessions": {},
             },
         }
 
@@ -166,6 +168,7 @@ class JsonStorage:
                 value for value in deliveries
                 if isinstance(value, str) and len(value) == 64
             })
+        data["meta"]["context_sessions"] = normalize_context_sessions(meta.get("context_sessions"))
         return data
 
 
