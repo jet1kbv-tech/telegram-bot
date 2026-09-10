@@ -26,9 +26,12 @@ provider-supplied IDs, semantic search, or generic query language.
 Trip resolution uses visible `TripContext` objects and requires one match for
 trip-anchored questions. Multiple matches produce clarification. The trip
 interval starts at outbound departure. It ends at return arrival, then return
-departure when arrival is absent. Without a return, outbound arrival is used;
-if absent, a later linked event effective end is the last defensible fallback.
-Otherwise the answer explicitly reports that the end is unknown.
+departure when arrival is absent. Without a return, outbound arrival and the
+reliable effective ends of linked canonical trip events are considered
+together, and the latest defensible bound at or after departure is used. This
+lets an explicitly multi-day trip outlive its outbound travel segment without
+allowing an unrelated event to extend it. If neither source provides a bound,
+the answer explicitly reports that the end is unknown.
 
 Event overlap is inclusive and compares normalized local `datetime` bounds.
 The event end is the BUG-01 effective lifetime, falling back to explicit end or

@@ -49,11 +49,24 @@ def trip_interval(bundle: ContextBundle, trip: TripContext) -> tuple[datetime, d
         if returning.departure_date is not None:
             return start, datetime.combine(returning.departure_date, returning.departure_time or time.min)
         return None
+    # Without a structured return, outbound arrival is only one defensible end
+    # candidate.  A canonical trip event can explicitly span beyond the travel
+    # day (for example Sep 12-15 while only the outbound ticket is attached),
+    # so retain the latest bound belonging to this trip rather than collapsing
+    # the stay to the arrival instant.  Unlinked events are never considered.
+    candidates = []
     if outbound.arrival_date is not None:
-        return start, datetime.combine(outbound.arrival_date, outbound.arrival_time or time.max)
-    linked = [event.effective_end for event in bundle.events
-              if event.context_id in set(trip.linked_event_ids) and event.effective_end and event.effective_end > start]
-    return (start, max(linked)) if linked else None
+        candidates.append(datetime.combine(
+            outbound.arrival_date, outbound.arrival_time or time.max))
+    linked_ids = set(trip.linked_event_ids)
+    candidates.extend(
+        event.effective_end
+        for event in bundle.events
+        if event.context_id in linked_ids
+        and event.effective_end is not None
+        and event.effective_end >= start
+    )
+    return (start, max(candidates)) if candidates else None
 
 
 def events_overlapping_trip(bundle: ContextBundle, trip: TripContext) -> tuple[EventContext, ...] | None:

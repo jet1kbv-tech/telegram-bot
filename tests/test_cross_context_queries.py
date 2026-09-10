@@ -4,7 +4,9 @@ from datetime import datetime, timezone
 import pytest
 
 from bot.services.context_queries import execute_context_query, query_context
+from bot.services.context_engine import build_context_bundle
 from bot.services.context_sessions import get_context_session
+from bot.services.cross_context_queries import trip_interval
 from bot.services.nl_intent import IntentParserInvalidOutput
 from bot.services.nl_intent_decoder import decode_provider_envelope
 
@@ -75,7 +77,7 @@ def test_overlap_excludes_outside_projection_and_orders_chronologically():
     assert result.text.index("Раньше") < result.text.index("Позже")
 
 
-def test_trip_resolution_ambiguity_not_found_and_missing_end():
+def test_trip_resolution_ambiguity_not_found_and_minimal_linked_end():
     first = event("one", "Питер 1", "2026-09-12")
     second = event("two", "Питер 2", "2026-10-12")
     docs = trip_tickets("one", returning=False) + [document("out2", "two", "transport_ticket",
@@ -85,7 +87,7 @@ def test_trip_resolution_ambiguity_not_found_and_missing_end():
     assert ask(snapshot(afisha=[first], documents=trip_tickets("one")), "events_during_trip",
                destination="Казань").outcome == "not_found"
     missing = snapshot(afisha=[event("one", "Питер 1", "2026-09-12", "08:00")], documents=trip_tickets("one", arrival=False, returning=False))
-    assert ask(missing, "events_during_trip", destination="Питер").outcome == "missing"
+    assert ask(missing, "events_during_trip", destination="Питер").outcome == "not_found"
 
 
 def test_arrival_day_is_explicit_and_does_not_fallback():
@@ -95,6 +97,91 @@ def test_arrival_day_is_explicit_and_does_not_fallback():
     assert "Встреча" in result.text and "Не сегодня" not in result.text
     no_arrival = snapshot(afisha=base, documents=trip_tickets(arrival=False, returning=False))
     assert ask(no_arrival, "events_on_trip_arrival", destination="Питер").outcome == "missing"
+
+
+def test_no_return_uses_later_linked_trip_event_lifetime():
+    data = snapshot(
+        afisha=[
+            event("trip", "Питер", "2026-09-12", "08:00",
+                  end_date="2026-09-15", end_time="23:00"),
+            event("plan", "План 14 сентября", "2026-09-14", "19:00"),
+        ],
+        documents=trip_tickets(returning=False),
+    )
+
+    result = ask(data, "events_during_trip", destination="Питер")
+
+    assert result.outcome == "found"
+    assert "План 14 сентября" in result.text
+
+
+def test_no_return_keeps_outbound_arrival_when_linked_lifetime_is_not_later():
+    data = snapshot(
+        afisha=[
+            event("trip", "Питер", "2026-09-12", "08:00"),
+            event("later", "После приезда", "2026-09-13", "10:00"),
+        ],
+        documents=trip_tickets(returning=False),
+    )
+    bundle = build_context_bundle(data, "vova", NOW, "Europe/Moscow")
+
+    interval = trip_interval(bundle, bundle.trips[0])
+
+    assert interval is not None
+    assert interval[1] == datetime(2026, 9, 12, 12, 0)
+    assert ask(data, "events_during_trip", destination="Питер").outcome == "not_found"
+
+
+def test_structured_return_arrival_wins_over_later_linked_event_lifetime():
+    data = snapshot(
+        afisha=[event("trip", "Питер", "2026-09-12", "08:00",
+                      end_date="2026-09-20", end_time="23:00")],
+        documents=trip_tickets(),
+    )
+    bundle = build_context_bundle(data, "vova", NOW, "Europe/Moscow")
+
+    interval = trip_interval(bundle, bundle.trips[0])
+
+    assert interval is not None
+    assert interval[1] == datetime(2026, 9, 15, 22, 0)
+
+
+def test_return_departure_remains_fallback_when_return_arrival_is_missing():
+    tickets = trip_tickets()
+    tickets[1]["arrival_date"] = None
+    tickets[1]["arrival_time"] = None
+    data = snapshot(
+        afisha=[event("trip", "Питер", "2026-09-12", "08:00",
+                      end_date="2026-09-20", end_time="23:00")],
+        documents=tickets,
+    )
+    bundle = build_context_bundle(data, "vova", NOW, "Europe/Moscow")
+
+    interval = trip_interval(bundle, bundle.trips[0])
+
+    assert interval is not None
+    assert interval[1] == datetime(2026, 9, 15, 18, 0)
+
+
+def test_unrelated_event_lifetime_never_extends_trip_without_return():
+    data = snapshot(
+        afisha=[
+            event("trip", "Питер", "2026-09-12", "08:00"),
+            event("unrelated", "Длинное другое событие", "2026-09-13", "10:00",
+                  end_date="2026-09-20", end_time="23:00"),
+            event("plan", "Поздний план", "2026-09-14", "19:00"),
+        ],
+        documents=trip_tickets(returning=False),
+    )
+    bundle = build_context_bundle(data, "vova", NOW, "Europe/Moscow")
+
+    interval = trip_interval(bundle, bundle.trips[0])
+
+    assert interval is not None
+    assert interval[1] == datetime(2026, 9, 12, 12, 0)
+    result = ask(data, "events_during_trip", destination="Питер")
+    assert "Длинное другое событие" not in result.text
+    assert "Поздний план" not in result.text
 
 
 def test_trip_document_coverage_types_and_missing_return():
