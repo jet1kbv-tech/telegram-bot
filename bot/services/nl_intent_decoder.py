@@ -67,7 +67,8 @@ _FIELDS: dict[IntentKind, dict[str, tuple[type, ...]]] = {
     IntentKind.QUERY_CONTEXT: {
         "query_type": (str,), "destination": (str, type(None)),
         "transport_type": (str, type(None)), "target": (str, type(None)),
-        "date_expression": (str, type(None)), "person": (str, type(None)), "follow_up": (bool,),
+        "date_expression": (str, type(None)), "person": (str, type(None)),
+        "semantic_type": (str, type(None)), "follow_up": (bool,),
     },
     IntentKind.QUERY_WEATHER_CONTEXT: {
         "weather_scope": (str,), "target": (str, type(None)), "location": (str, type(None)),
@@ -134,7 +135,7 @@ _PROVIDER_TECHNICAL_DEFAULTS: dict[IntentKind, dict[str, Any]] = {
     IntentKind.QUERY_WEATHER_CONTEXT: {"include_advice": False},
     IntentKind.QUERY_CONTEXT: {
         "destination": None, "transport_type": None, "target": None,
-        "date_expression": None, "person": None, "follow_up": False,
+        "date_expression": None, "person": None, "semantic_type": None, "follow_up": False,
     },
 }
 
@@ -221,7 +222,10 @@ def decode_intent(raw: str | dict[str, Any]) -> ParsedIntent:
     if kind is IntentKind.QUERY_CONTEXT:
         if arguments["query_type"] not in {"departure", "arrival", "return", "documents", "overview", "origin", "destination",
                                                 "events", "next_event", "event_time", "event_date",
-                                                "event_place", "event_documents"}:
+                                                "event_place", "event_documents", "events_during_trip",
+                                                "events_on_trip_arrival", "trips_missing_documents",
+                                                "trips_missing_return", "events_with_documents",
+                                                "events_without_documents", "events_with_document_type"}:
             raise IntentParserInvalidOutput("invalid_query_type")
         if arguments["transport_type"] not in _TRANSPORT_VALUES:
             raise IntentParserInvalidOutput("invalid_transport_type")
@@ -229,6 +233,8 @@ def decode_intent(raw: str | dict[str, Any]) -> ParsedIntent:
             raise IntentParserInvalidOutput("empty_destination")
         if arguments["person"] not in {None, "self", "vova", "sasha", "both"}:
             raise IntentParserInvalidOutput("invalid_person")
+        if arguments["semantic_type"] not in {None, "transport_ticket", "voucher", "reservation", "insurance", "other"}:
+            raise IntentParserInvalidOutput("invalid_semantic_type")
     if kind is IntentKind.QUERY_WEATHER_CONTEXT and arguments["weather_scope"] not in {"date", "arrival", "trip", "event", "current"}:
         raise IntentParserInvalidOutput("invalid_weather_scope")
     if kind is IntentKind.UNSUPPORTED and arguments["category"] not in _UNSUPPORTED:
@@ -317,12 +323,13 @@ _BRANCH_PROPERTIES: dict[IntentKind, dict[str, Any]] = {
         "return_all": {"type": "boolean"},
     },
     IntentKind.QUERY_CONTEXT: {
-        "query_type": {"type": "string", "enum": ["departure", "arrival", "return", "documents", "overview", "origin", "destination", "events", "next_event", "event_time", "event_date", "event_place", "event_documents"]},
+        "query_type": {"type": "string", "enum": ["departure", "arrival", "return", "documents", "overview", "origin", "destination", "events", "next_event", "event_time", "event_date", "event_place", "event_documents", "events_during_trip", "events_on_trip_arrival", "trips_missing_documents", "trips_missing_return", "events_with_documents", "events_without_documents", "events_with_document_type"]},
         "destination": {"type": ["string", "null"]},
         "transport_type": {"type": ["string", "null"], "enum": [*TRANSPORT_TYPES, None]},
         "target": {"type": ["string", "null"]},
         "date_expression": {"type": ["string", "null"]},
         "person": {"type": ["string", "null"], "enum": ["self", "vova", "sasha", "both", None]},
+        "semantic_type": {"type": ["string", "null"], "enum": ["transport_ticket", "voucher", "reservation", "insurance", "other", None]},
         "follow_up": {"type": "boolean"},
     },
     IntentKind.QUERY_WEATHER_CONTEXT: {
