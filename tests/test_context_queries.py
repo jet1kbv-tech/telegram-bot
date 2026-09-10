@@ -47,7 +47,7 @@ def test_context_decoder_is_strict_and_bounded():
     parsed = decode_provider_envelope('{"intent":"query_context","arguments":[{"name":"query_type","value":"arrival"},{"name":"destination","value":"Воронеж"}]}')
     assert parsed.intent is IntentKind.QUERY_CONTEXT
     assert parsed.arguments == {"query_type": "arrival", "destination": "Воронеж", "transport_type": None,
-                                "target": None, "date_expression": None, "person": None, "follow_up": False}
+                                "target": None, "date_expression": None, "person": None, "semantic_type": None, "follow_up": False}
     with pytest.raises(IntentParserInvalidOutput):
         decode_intent({"intent":"query_context","arguments":{"query_type":"weather","destination":"Воронеж","transport_type":None}})
     with pytest.raises(IntentParserInvalidOutput):
@@ -79,7 +79,7 @@ def test_production_context_provider_envelopes_decode(text, query_type, destinat
     assert parsed.intent is IntentKind.QUERY_CONTEXT
     assert parsed.arguments == {
         "query_type": query_type, "destination": destination, "transport_type": transport_type,
-        "target": None, "date_expression": None, "person": None, "follow_up": False,
+        "target": None, "date_expression": None, "person": None, "semantic_type": None, "follow_up": False,
     }
 
 

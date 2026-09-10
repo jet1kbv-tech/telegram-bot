@@ -37,6 +37,9 @@ class EventContext:
     owner_scope: str
     is_shared: bool
     location_text: str | None
+    # Derived BUG-01 lifetime.  This is deliberately separate from the
+    # user-authored explicit end fields above.
+    effective_end: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,20 +155,22 @@ def collect_visible_events(data: dict[str, Any], actor_key: str, now: datetime, 
             continue
         start, end = parse_calendar_event_start_dt(item), parse_calendar_event_end_dt(item)
         if start:
+            effective_end = get_effective_event_end(data, "calendar", item) or end or start
             context = EventContext(_opaque("evt", ["calendar", str(item.get("id"))]), "calendar", "calendar",
                 str(item.get("id") or ""), str(item.get("title") or ""), start.date(), start.time(),
-                end.date() if end else None, end.time() if end else None, actor_key, False, None)
-            rows.append((start, get_effective_event_end(data, "calendar", item) or end or start, context))
+                end.date() if end else None, end.time() if end else None, actor_key, False, None, effective_end)
+            rows.append((start, effective_end, context))
     for item in data.get("afisha", []):
         if not isinstance(item, dict) or item.get("status") != "active":
             continue
         start, end = parse_event_dt(item), event_explicit_end_dt(item)
         if start:
+            effective_end = get_effective_event_end(data, "afisha", item) or end or start
             context = EventContext(_opaque("evt", ["afisha", str(item.get("id"))]), "afisha", "afisha",
                 str(item.get("id") or ""), str(item.get("title") or ""), start.date(), start.time(),
                 end.date() if end else None, end.time() if end else None, "shared", True,
-                str(item.get("place") or "").strip() or None)
-            rows.append((start, get_effective_event_end(data, "afisha", item) or end or start, context))
+                str(item.get("place") or "").strip() or None, effective_end)
+            rows.append((start, effective_end, context))
     selected = [(stamp, context) for stamp, effective_end, context in rows
                 if (include_past or effective_end >= local_now)
                 and (not lower or context.date >= lower) and (not upper or context.date <= upper)]
@@ -269,7 +274,10 @@ def find_trip_contexts(bundle: ContextBundle) -> tuple[TripContext, ...]:
 
 def find_trip_by_destination(bundle: ContextBundle, destination: str) -> tuple[TripContext, ...]:
     key = _location_key(destination)
-    return tuple(trip for trip in bundle.trips if trip.destination_key == key)
+    aliases = {"питер": "санкт петербург", "спб": "санкт петербург"}
+    key = aliases.get(key, key)
+    return tuple(trip for trip in bundle.trips
+                 if aliases.get(trip.destination_key, trip.destination_key) == key)
 
 
 def find_event_context(bundle: ContextBundle, parent_type: str, parent_id: str) -> EventContext | None:

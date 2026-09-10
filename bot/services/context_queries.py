@@ -13,6 +13,10 @@ from bot.services.event_attachment_display import date_time_text, transport_icon
 from bot.services.nl_dates import resolve_date_range, zoned_now
 from bot.services.nl_entity_resolution import normalize_reference
 from bot.services.context_sessions import clear_context_session, get_context_session, set_context_session
+from bot.services.cross_context_queries import (
+    date_bounds, direction_document, events_on_arrival, events_overlapping_trip,
+    in_range, limited, trip_documents,
+)
 
 _MONTHS = ("", "января", "февраля", "марта", "апреля", "мая", "июня", "июля",
            "августа", "сентября", "октября", "ноября", "декабря")
@@ -92,6 +96,36 @@ def _event_candidates(bundle: ContextBundle, target: str | None) -> tuple[EventC
 
 def _event_label(event: EventContext) -> str:
     return f"{event.title or 'Событие'} — {event.date.day} {_MONTHS[event.date.month]}"
+
+
+def _event_row(event: EventContext) -> str:
+    clock = f", {event.start_time:%H:%M}" if event.start_time else ""
+    return f"• {event.date.day} {_MONTHS[event.date.month]}{clock} — {event.title or 'Событие'}"
+
+
+def _trip_row(trip: TripContext) -> str:
+    return f"• {trip.city_hint or trip.destination} — выезд {trip.trip_start.day} {_MONTHS[trip.trip_start.month]}"
+
+
+def _with_remainder(lines: list[str], remainder: int) -> list[str]:
+    return lines + ([f"И ещё {remainder}…"] if remainder else [])
+
+
+def _person_allows_event(event: EventContext, person: str | None, actor_key: str) -> bool:
+    # A provider name can narrow the already actor-scoped bundle, never widen it.
+    if person in {None, "self"}:
+        return True
+    if person == "both" or person != actor_key:
+        return event.is_shared
+    return event.is_shared or event.owner_scope == actor_key
+
+
+def _person_allows_trip(bundle: ContextBundle, trip: TripContext, person: str | None,
+                        actor_key: str) -> bool:
+    if person in {None, "self", actor_key}:
+        return True
+    linked = set(trip.linked_event_ids)
+    return bool(linked) and all(event.is_shared for event in bundle.events if event.context_id in linked)
 
 
 def _select_event(bundle: ContextBundle, target: str | None) -> tuple[str, EventContext | None, tuple[EventContext, ...]]:
@@ -195,16 +229,106 @@ def _block(label: str, document: DocumentContext, *, arrival: bool = False) -> l
     return lines
 
 
+def _cross_query(bundle: ContextBundle, *, query_type: str, destination: str | None,
+                 transport_type: str | None, date_expression: str | None,
+                 person: str | None, semantic_type: str | None, actor_key: str,
+                 now: datetime, timezone: str) -> ContextQueryResult:
+    bounds = date_bounds(date_expression, now, timezone)
+    trips = find_trip_by_destination(bundle, destination) if destination else find_trip_contexts(bundle)
+    trips = tuple(trip for trip in trips
+                  if in_range(trip.trip_start.date(), bounds)
+                  and _person_allows_trip(bundle, trip, person, actor_key))
+    if transport_type:
+        trips = tuple(trip for trip in trips if any(
+            document.transport_type == transport_type
+            for document in trip_documents(bundle, trip)
+            if document.semantic_type == "transport_ticket"))
+
+    if query_type in {"events_during_trip", "events_on_trip_arrival"}:
+        if not trips:
+            suffix = f" в {destination}" if destination else ""
+            return ContextQueryResult("not_found", f"Не нашёл сохранённую поездку{suffix}.", 0)
+        if len(trips) > 1:
+            rows, remainder = limited(trips)
+            text = _with_remainder(["Нашёл несколько подходящих поездок:", "", *map(_trip_row, rows)], remainder)
+            return ContextQueryResult("ambiguous", "\n".join([*text, "", "Какую ты имеешь в виду?"]), len(trips))
+        trip = trips[0]
+        events = (events_overlapping_trip(bundle, trip) if query_type == "events_during_trip"
+                  else events_on_arrival(bundle, trip))
+        if events is None:
+            detail = ("дату окончания" if query_type == "events_during_trip" else "дату прибытия")
+            return ContextQueryResult("missing", f"Поездку нашёл, но не могу надёжно определить {detail}.", 1, trip)
+        events = tuple(event for event in events if _person_allows_event(event, person, actor_key))
+        place = trip.city_hint or trip.destination
+        if not events:
+            text = ("На время этой поездки других событий не найдено." if query_type == "events_during_trip"
+                    else "В день приезда других событий не найдено.")
+            return ContextQueryResult("not_found", text, 1, trip)
+        rows, remainder = limited(events)
+        heading = (f"На время поездки в {place}:" if query_type == "events_during_trip"
+                   else f"В день приезда в {place}:")
+        return ContextQueryResult("found", "\n".join(_with_remainder([heading, "", *map(_event_row, rows)], remainder)), 1, trip)
+
+    if query_type in {"trips_missing_documents", "trips_missing_return"}:
+        if query_type == "trips_missing_return":
+            rows = tuple(trip for trip in trips
+                         if direction_document(bundle, trip, "outbound") is not None
+                         and direction_document(bundle, trip, "return") is None)
+            heading = "Без прикреплённого обратного транспортного сегмента:"
+        else:
+            rows = tuple(trip for trip in trips if not any(
+                semantic_type is None or document.semantic_type == semantic_type
+                for document in trip_documents(bundle, trip)))
+            heading = "Без документов:" if semantic_type is None else f"Без документов типа «{_semantic_label(semantic_type)}»:"
+        if not rows:
+            return ContextQueryResult("not_found", "Подходящих поездок не найдено.", 0)
+        rows = tuple(sorted(rows, key=lambda trip: (trip.trip_start, trip.context_id)))
+        visible, remainder = limited(rows)
+        return ContextQueryResult("found", "\n".join(_with_remainder([heading, "", *map(_trip_row, visible)], remainder)), len(rows))
+
+    events = tuple(event for event in bundle.events
+                   if in_range(event.date, bounds) and _person_allows_event(event, person, actor_key))
+    selected = []
+    for event in events:
+        all_documents = documents_for_context(bundle, event)
+        documents = tuple(document for document in all_documents
+                          if semantic_type is None or document.semantic_type == semantic_type)
+        if (query_type == "events_without_documents" and not all_documents) or (
+                query_type in {"events_with_documents", "events_with_document_type"} and documents):
+            selected.append(event)
+    selected.sort(key=lambda event: (event.date, event.start_time or datetime.min.time(),
+                                     event.canonical_parent_type, event.canonical_parent_id))
+    if not selected:
+        return ContextQueryResult("not_found", "Подходящих событий не найдено.", 0)
+    visible, remainder = limited(tuple(selected))
+    heading = "События без документов:" if query_type == "events_without_documents" else "События с документами:"
+    return ContextQueryResult("found", "\n".join(_with_remainder([heading, "", *map(_event_row, visible)], remainder)), len(selected))
+
+
+def _semantic_label(semantic_type: str) -> str:
+    return {"transport_ticket": "транспортный билет", "voucher": "ваучер",
+            "reservation": "бронь", "insurance": "страховка", "other": "документ"}[semantic_type]
+
+
 def query_context(data: dict[str, Any], *, actor_key: str, now: datetime, timezone: str,
                   query_type: str, destination: str | None = None,
                   transport_type: str | None = None, target: str | None = None,
                   date_expression: str | None = None, person: str | None = None,
+                  semantic_type: str | None = None,
                   context_id: str | None = None, context_domain: str | None = None) -> ContextQueryResult:
     """Resolve facts locally; provider-derived arguments never contain actor or facts."""
     # ``person`` is intentionally ignored for authorization: actor scope is
     # derived by the application and cannot be widened by provider output.
+    cross_queries = {"events_during_trip", "events_on_trip_arrival", "trips_missing_documents",
+                     "trips_missing_return", "events_with_documents", "events_without_documents",
+                     "events_with_document_type"}
     event_query = query_type in {"events", "next_event", "event_time", "event_date", "event_place", "event_documents"}
-    bundle = build_context_bundle(data, actor_key, now, timezone, include_past=not event_query)
+    bundle = build_context_bundle(data, actor_key, now, timezone, include_past=not (event_query or query_type in cross_queries))
+    if query_type in cross_queries:
+        return _cross_query(bundle, query_type=query_type, destination=destination,
+                            transport_type=transport_type, date_expression=date_expression,
+                            person=person, semantic_type=semantic_type, actor_key=actor_key,
+                            now=now, timezone=timezone)
     if event_query:
         return _event_query(bundle, query_type, target, date_expression, now, timezone,
                             context_id if context_domain == "event" else None)

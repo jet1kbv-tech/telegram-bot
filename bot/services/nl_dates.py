@@ -96,6 +96,12 @@ def resolve_date_range(expression: str, *, now: datetime, timezone: str) -> tupl
     today = local_now.date()
     text = re.sub(r"\s+", " ", expression.strip().casefold())
     text = re.sub(r"^(?:на|в)\s+", "", text)
+    if text in {"ближайший месяц", "ближайшие 30 дней"}:
+        return today.isoformat(), (today + timedelta(days=30)).isoformat()
+    if text in {"следующий месяц", "в следующем месяце"}:
+        first = date(today.year + (today.month == 12), today.month % 12 + 1, 1)
+        following = date(first.year + (first.month == 12), first.month % 12 + 1, 1)
+        return first.isoformat(), (following - timedelta(days=1)).isoformat()
     if text in {"выходные", "эти выходные", "следующие выходные"}:
         saturday = today + timedelta(days=(5 - today.weekday()) % 7)
         if text == "следующие выходные":
