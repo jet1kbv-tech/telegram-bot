@@ -18,6 +18,7 @@ from bot.services.cross_context_queries import (
     in_range, limited, trip_documents,
 )
 from bot.services.trip_briefing import TripBriefing, build_trip_briefing, render_trip_briefing
+from bot.services.upcoming_brief import UpcomingBrief, build_upcoming_brief, render_upcoming_brief, resolve_brief_range
 
 _MONTHS = ("", "января", "февраля", "марта", "апреля", "мая", "июня", "июля",
            "августа", "сентября", "октября", "ноября", "декабря")
@@ -44,6 +45,7 @@ class ContextQueryResult:
     trip: TripContext | None = None
     event: EventContext | None = None
     briefing: TripBriefing | None = None
+    upcoming_brief: UpcomingBrief | None = None
 
     @property
     def subject(self) -> tuple[str, str] | None:
@@ -326,7 +328,14 @@ def query_context(data: dict[str, Any], *, actor_key: str, now: datetime, timezo
                      "trips_missing_return", "events_with_documents", "events_without_documents",
                      "events_with_document_type"}
     event_query = query_type in {"events", "next_event", "event_time", "event_date", "event_place", "event_documents"}
-    bundle = build_context_bundle(data, actor_key, now, timezone, include_past=not (event_query or query_type in cross_queries))
+    include_past = query_type == "upcoming_brief" or not (event_query or query_type in cross_queries)
+    bundle = build_context_bundle(data, actor_key, now, timezone, include_past=include_past)
+    if query_type == "upcoming_brief":
+        lower, upper = resolve_brief_range(date_expression, now, timezone)
+        brief = build_upcoming_brief(bundle, actor_key=actor_key, date_from=lower, date_to=upper, person=person)
+        return ContextQueryResult("found", render_upcoming_brief(brief, today=zoned_now(timezone, now).date()),
+                                  len(brief.events) + brief.event_remainder + len(brief.trips),
+                                  upcoming_brief=brief)
     if query_type in cross_queries:
         return _cross_query(bundle, query_type=query_type, destination=destination,
                             transport_type=transport_type, date_expression=date_expression,

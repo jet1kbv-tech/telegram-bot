@@ -118,6 +118,20 @@ def resolve_date_range(expression: str, *, now: datetime, timezone: str) -> tupl
         first = date(year, month, 1)
         following = date(year + (month == 12), month % 12 + 1, 1)
         return first.isoformat(), (following - timedelta(days=1)).isoformat()
+    named_range = re.fullmatch(
+        r"(\d{1,2})\s*(?:[-–—]|по)\s*(\d{1,2})\s+([а-яё]+)(?:\s+(\d{4}))?", text)
+    if named_range and named_range.group(3) in MONTHS:
+        first_day, last_day = int(named_range.group(1)), int(named_range.group(2))
+        month, explicit_year = MONTHS[named_range.group(3)], named_range.group(4)
+        try:
+            first = (date(int(explicit_year), month, first_day) if explicit_year
+                     else _next_date(first_day, month, today))
+            last = date(first.year, month, last_day)
+        except ValueError as exc:
+            raise DateExpressionError("invalid_date") from exc
+        if last < first:
+            raise DateExpressionError("invalid_date_range")
+        return first.isoformat(), last.isoformat()
     single = resolve_date_expression(text, now=local_now, timezone=timezone)
     return single, single
 
