@@ -84,7 +84,7 @@ def test_person_can_only_narrow_to_shared_context():
     assert "Секрет" not in sasha.text and "Театр" in sasha.text
 
 
-def test_limit_remainder_and_effective_multiday_overlap():
+def test_limit_remainder_and_effective_multiday_overlap_uses_visible_date():
     snapshot = data(trip=False)
     snapshot["afisha"] = [afisha(f"e{i}", f"План {i}", "2026-09-12", f"{i:02d}:00") for i in range(9)]
     snapshot["afisha"].append(afisha("multi", "Фестиваль", "2026-09-09", "10:00",
@@ -92,6 +92,13 @@ def test_limit_remainder_and_effective_multiday_overlap():
     result = ask(snapshot, date_expression="выходные")
     assert len(result.upcoming_brief.events) == 8 and result.upcoming_brief.event_remainder == 2
     assert "Фестиваль" in result.text and "И ещё 2…" in result.text
+    assert "Среда, 9 сентября" not in result.text
+    assert result.text.index("Завтра") < result.text.index("Фестиваль")
+
+
+def test_event_starting_inside_range_keeps_its_own_display_date():
+    result = ask(data(trip=False), date_expression="выходные")
+    assert "Воскресенье, 13 сентября\n• 19:00 — Театр" in result.text
 
 
 def test_trip_interval_source_dedup_documents_and_generic_semantics():

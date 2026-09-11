@@ -140,8 +140,9 @@ def render_upcoming_brief(value: UpcomingBrief, *, today: date) -> str:
     lines = ["🗓 Ближайшие планы", _range(value.date_from, value.date_to)]
     current = None
     for event in value.events:
-        if event.date != current:
-            current = event.date
+        display_date = max(event.date, value.date_from)
+        if display_date != current:
+            current = display_date
             heading = ("Сегодня" if current == today else "Завтра" if current == today + timedelta(days=1)
                        else f"{WEEKDAYS[current.weekday()]}, {_day(current)}")
             lines += ["", heading]
