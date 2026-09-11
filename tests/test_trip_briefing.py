@@ -112,6 +112,42 @@ def test_multiple_not_found_date_and_transport_filters_preserve_session():
     assert ask(data, query_type="trip_briefing", destination="Питер", transport_type="plane").outcome == "not_found"
 
 
+def test_date_expression_is_scoped_to_briefing_not_existing_trip_queries():
+    data = snapshot()
+    second = snapshot()
+    second["afisha"][0].update(id="trip2", date="2026-10-12")
+    second["event_attachments"][0].update(id="out2", parent_event_id="trip2", date="2026-10-12",
+                                          arrival_date="2026-10-12")
+    second["event_attachments"][1].update(id="back2", parent_event_id="trip2", date="2026-10-15",
+                                          arrival_date="2026-10-15")
+    data["afisha"] += second["afisha"]
+    data["event_attachments"] += second["event_attachments"]
+
+    briefing = ask(data, query_type="trip_briefing", destination="Питер",
+                   date_expression="12 сентября")
+    assert briefing.outcome == "found" and briefing.trip.departure_date == date(2026, 9, 12)
+
+    # Existing FEAT-07 trip queries accepted this provider field but did not use
+    # it for resolution. Keep their ambiguity behavior unchanged.
+    departure = ask(data, query_type="departure", destination="Питер",
+                    date_expression="12 сентября")
+    returning = ask(data, query_type="return", destination="Питер",
+                    date_expression="12 сентября")
+    assert departure.outcome == returning.outcome == "ambiguous"
+    assert departure.candidate_count == returning.candidate_count == 2
+
+
+def test_existing_feat09_follow_up_ignores_new_explicit_filters():
+    data = snapshot()
+    ask(data, query_type="departure", destination="Питер")
+
+    result = ask(data, follow_up=True, query_type="return",
+                 destination="Казань", date_expression="1 января", transport_type="plane")
+
+    assert result.outcome == "found" and "18:00" in result.text
+    assert get_context_session(data, "vova", NOW).domain == "trip"
+
+
 def test_follow_up_reauthorizes_expires_and_reflects_fresh_data():
     data = snapshot()
     ask(data, query_type="departure", destination="Питер")

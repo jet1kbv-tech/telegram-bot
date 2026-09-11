@@ -338,8 +338,9 @@ def query_context(data: dict[str, Any], *, actor_key: str, now: datetime, timezo
     trips = (tuple(trip for trip in bundle.trips if trip.context_id == context_id)
              if context_domain == "trip" and context_id else
              find_trip_by_destination(bundle, destination) if destination else find_trip_contexts(bundle))
-    bounds = date_bounds(date_expression, now, timezone)
-    trips = tuple(trip for trip in trips if in_range(trip.trip_start.date(), bounds))
+    if query_type == "trip_briefing":
+        bounds = date_bounds(date_expression, now, timezone)
+        trips = tuple(trip for trip in trips if in_range(trip.trip_start.date(), bounds))
     if transport_type:
         trips = tuple(trip for trip in trips if any(
             row.transport_type == transport_type for row in documents_for_context(bundle, trip)
