@@ -220,7 +220,7 @@ def decode_intent(raw: str | dict[str, Any]) -> ParsedIntent:
     if kind in {IntentKind.QUERY_CALENDAR, IntentKind.QUERY_AFISHA} and arguments["operation"] not in {"list", "count", "next"}:
         raise IntentParserInvalidOutput("invalid_query_arguments")
     if kind is IntentKind.QUERY_CONTEXT:
-        if arguments["query_type"] not in {"departure", "arrival", "return", "documents", "overview", "origin", "destination",
+        if arguments["query_type"] not in {"departure", "arrival", "return", "documents", "overview", "origin", "destination", "trip_briefing",
                                                 "events", "next_event", "event_time", "event_date",
                                                 "event_place", "event_documents", "events_during_trip",
                                                 "events_on_trip_arrival", "trips_missing_documents",

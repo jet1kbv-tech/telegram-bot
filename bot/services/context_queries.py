@@ -17,6 +17,7 @@ from bot.services.cross_context_queries import (
     date_bounds, direction_document, events_on_arrival, events_overlapping_trip,
     in_range, limited, trip_documents,
 )
+from bot.services.trip_briefing import TripBriefing, build_trip_briefing, render_trip_briefing
 
 _MONTHS = ("", "января", "февраля", "марта", "апреля", "мая", "июня", "июля",
            "августа", "сентября", "октября", "ноября", "декабря")
@@ -30,6 +31,7 @@ FOLLOW_UP_COMPATIBILITY = {
     "trip": {
         "departure": "departure", "event_time": "departure", "arrival": "arrival", "return": "return",
         "documents": "documents", "event_documents": "documents", "origin": "origin", "destination": "destination",
+        "trip_briefing": "trip_briefing",
     },
 }
 
@@ -41,6 +43,7 @@ class ContextQueryResult:
     candidate_count: int
     trip: TripContext | None = None
     event: EventContext | None = None
+    briefing: TripBriefing | None = None
 
     @property
     def subject(self) -> tuple[str, str] | None:
@@ -52,7 +55,7 @@ class ContextQueryResult:
 
 
 def _follow_up_clarification(query_type: str) -> ContextQueryResult:
-    if query_type in {"return", "arrival", "departure", "origin", "destination"}:
+    if query_type in {"return", "arrival", "departure", "origin", "destination", "trip_briefing"}:
         text = "Не понял, к какой поездке относится вопрос. Уточни поездку."
     elif query_type in {"event_place", "event_date"}:
         text = "Не понял, о каком событии речь. Уточни, пожалуйста."
@@ -335,6 +338,8 @@ def query_context(data: dict[str, Any], *, actor_key: str, now: datetime, timezo
     trips = (tuple(trip for trip in bundle.trips if trip.context_id == context_id)
              if context_domain == "trip" and context_id else
              find_trip_by_destination(bundle, destination) if destination else find_trip_contexts(bundle))
+    bounds = date_bounds(date_expression, now, timezone)
+    trips = tuple(trip for trip in trips if in_range(trip.trip_start.date(), bounds))
     if transport_type:
         trips = tuple(trip for trip in trips if any(
             row.transport_type == transport_type for row in documents_for_context(bundle, trip)
@@ -343,8 +348,15 @@ def query_context(data: dict[str, Any], *, actor_key: str, now: datetime, timezo
         suffix = f" в {destination}" if destination else ""
         return ContextQueryResult("not_found", f"Не нашёл сохранённую поездку{suffix}.", 0)
     if len(trips) != 1:
-        return ContextQueryResult("ambiguous", "Нашёл несколько подходящих поездок. Не могу однозначно определить нужную.", len(trips))
+        rows, remainder = limited(tuple(sorted(trips, key=lambda row: (row.trip_start, row.context_id))))
+        lines = _with_remainder(["Нашёл несколько подходящих поездок:", "", *map(_trip_row, rows)], remainder)
+        return ContextQueryResult("ambiguous", "\n".join([*lines, "", "Какую ты имеешь в виду?"]), len(trips))
     trip = trips[0]
+    if query_type == "trip_briefing":
+        briefing = build_trip_briefing(bundle, trip)
+        if briefing is None:
+            return ContextQueryResult("missing", "Поездку нашёл, но транспортные данные недоступны.", 1, trip)
+        return ContextQueryResult("found", render_trip_briefing(briefing), 1, trip, briefing=briefing)
     outbound = _ticket(bundle, trip, "outbound")
     returning = _ticket(bundle, trip, "return")
     documents = documents_for_context(bundle, trip)
