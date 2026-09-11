@@ -220,7 +220,7 @@ def decode_intent(raw: str | dict[str, Any]) -> ParsedIntent:
     if kind in {IntentKind.QUERY_CALENDAR, IntentKind.QUERY_AFISHA} and arguments["operation"] not in {"list", "count", "next"}:
         raise IntentParserInvalidOutput("invalid_query_arguments")
     if kind is IntentKind.QUERY_CONTEXT:
-        if arguments["query_type"] not in {"departure", "arrival", "return", "documents", "overview", "origin", "destination", "trip_briefing",
+        if arguments["query_type"] not in {"departure", "arrival", "return", "documents", "overview", "origin", "destination", "trip_briefing", "upcoming_brief",
                                                 "events", "next_event", "event_time", "event_date",
                                                 "event_place", "event_documents", "events_during_trip",
                                                 "events_on_trip_arrival", "trips_missing_documents",
@@ -323,7 +323,7 @@ _BRANCH_PROPERTIES: dict[IntentKind, dict[str, Any]] = {
         "return_all": {"type": "boolean"},
     },
     IntentKind.QUERY_CONTEXT: {
-        "query_type": {"type": "string", "enum": ["departure", "arrival", "return", "documents", "overview", "origin", "destination", "events", "next_event", "event_time", "event_date", "event_place", "event_documents", "events_during_trip", "events_on_trip_arrival", "trips_missing_documents", "trips_missing_return", "events_with_documents", "events_without_documents", "events_with_document_type"]},
+        "query_type": {"type": "string", "enum": ["departure", "arrival", "return", "documents", "overview", "origin", "destination", "trip_briefing", "upcoming_brief", "events", "next_event", "event_time", "event_date", "event_place", "event_documents", "events_during_trip", "events_on_trip_arrival", "trips_missing_documents", "trips_missing_return", "events_with_documents", "events_without_documents", "events_with_document_type"]},
         "destination": {"type": ["string", "null"]},
         "transport_type": {"type": ["string", "null"], "enum": [*TRANSPORT_TYPES, None]},
         "target": {"type": ["string", "null"]},

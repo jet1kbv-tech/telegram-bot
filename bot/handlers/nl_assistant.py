@@ -35,6 +35,7 @@ from bot.services.context_queries import execute_context_query
 from bot.services.weather import WeatherError, WeatherProvider
 from bot.services.weather_context import query_weather_context
 from bot.services.trip_briefing import render_weather_enrichment
+from bot.services.upcoming_brief import render_upcoming_weather
 from bot.states import (
     ADDING_CALENDAR_EVENT_TITLE, ADDING_EVENT_TITLE, ADDING_FILM_TITLE, ADDING_PURCHASE_TITLE, AI_CLARIFYING, MENU, SECTION,
 )
@@ -337,7 +338,10 @@ async def nl_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 return execute_context_query(data, actor_key=actor_key, now=now, timezone=BOT_TIMEZONE,
                                              **parsed.arguments)
 
-            result, _ = storage.update(run_context_query)
+            if parsed.arguments["query_type"] == "upcoming_brief":
+                result = run_context_query(storage.load())
+            else:
+                result, _ = storage.update(run_context_query)
             logger.info("NL context query intent=query_context query_type=%s outcome=%s candidate_count=%s",
                         parsed.arguments["query_type"], result.outcome, result.candidate_count)
             text = result.text
@@ -348,6 +352,10 @@ async def nl_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     text += f"\n\n{weather}"
                 else:
                     logger.info("trip_briefing weather=unavailable core_preserved=true")
+            if parsed.arguments["query_type"] == "upcoming_brief" and result.upcoming_brief is not None:
+                weather = await render_upcoming_weather(result.upcoming_brief, _weather_provider)
+                if weather:
+                    text += f"\n\n{weather}"
             if result.trip is not None and result.candidate_count == 1:
                 markup = InlineKeyboardMarkup([
                     [InlineKeyboardButton("🧳 Открыть поездку", callback_data=trip_callback("card", result.trip.context_id))],
