@@ -69,9 +69,39 @@ def test_trip_document_query_includes_canonical_parent_documents_without_broaden
                              query_type="overview", destination="Санкт-Петербург")
     assert documents.text.count("билет на поезд") == 2
     assert "• страховка" in documents.text
+    assert documents.attachment_ids == ("back", "insurance", "out")
     assert "Документы: 3" in overview.text
     assert "unrelated" not in {row.attachment_id for row in trip_documents(bundle, trip)}
     assert "private" not in {row.attachment_id for row in bundle.documents}
+
+
+def test_trip_document_semantic_filter_returns_only_tickets_and_deduplicates_ids():
+    outbound = ticket(destination="Санкт-Петербург")
+    duplicate = ticket(destination="Санкт-Петербург")
+    insurance = ticket("insurance", semantic_type="insurance", transport_type=None,
+                       origin=None, destination=None, date=None, departure_time=None,
+                       arrival_date=None, arrival_time=None)
+    data = snapshot(outbound, duplicate, insurance)
+
+    result = query_context(data, actor_key="vova", now=NOW, timezone="UTC",
+                           query_type="documents", destination="Санкт-Петербург",
+                           semantic_type="transport_ticket")
+
+    assert result.outcome == "found"
+    assert result.text.count("билет на поезд") == 2
+    assert "страховка" not in result.text
+    assert result.attachment_ids == ("out",)
+
+
+def test_filtered_trip_documents_no_match_has_no_attachment_ids():
+    data = snapshot(ticket("insurance", semantic_type="insurance", transport_type=None,
+                           origin=None, destination=None, date=None, departure_time=None,
+                           arrival_date=None, arrival_time=None), ticket())
+    result = query_context(data, actor_key="vova", now=NOW, timezone="UTC",
+                           query_type="documents", destination="Воронеж",
+                           semantic_type="reservation")
+    assert result.outcome == "missing"
+    assert result.attachment_ids == ()
 
 
 def test_private_calendar_is_actor_scoped():

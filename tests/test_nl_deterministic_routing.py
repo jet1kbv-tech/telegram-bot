@@ -18,9 +18,14 @@ def parse_named(text, afisha):
 
 def test_production_event_and_trip_follow_up_forms_are_domain_bounded():
     assert short_context_follow_up("А где?", "event").arguments["query_type"] == "event_place"
-    assert short_context_follow_up("А документы?", "event").arguments["query_type"] == "documents"
+    event_documents = short_context_follow_up("А документы?", "event").arguments
+    assert event_documents["query_type"] == "documents"
+    assert event_documents["semantic_type"] is None
     assert short_context_follow_up("А обратно?", "trip").arguments["query_type"] == "return"
-    assert short_context_follow_up("А билеты?", "trip").arguments["query_type"] == "documents"
+    trip_tickets = short_context_follow_up("А билеты?", "trip").arguments
+    assert trip_tickets["query_type"] == "documents"
+    assert trip_tickets["semantic_type"] == "transport_ticket"
+    assert trip_tickets["follow_up"] is True
     assert short_context_follow_up("А обратно?", "event") is None
 
 
