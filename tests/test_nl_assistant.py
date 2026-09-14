@@ -241,6 +241,58 @@ def test_unmatched_or_ambiguous_named_questions_call_provider(monkeypatch, tmp_p
     assert [call[0] for call in parser.calls] == [text]
 
 
+def _calendar_delete_data(*events_by_owner):
+    data = JsonStorage.__new__(JsonStorage).default_data()
+    for owner, event_id, title in events_by_owner:
+        data["calendars"][owner].append({
+            "id": event_id, "owner": owner, "title": title,
+            "date": "2099-09-20", "start_time": "12:00", "end_time": "",
+            "comment": "", "source": "manual", "source_id": "", "notified_24h": False,
+        })
+    return data
+
+
+@pytest.mark.parametrize("stored_title", ["Купить сувениры", "ТЕСТ — Купить сувениры"])
+def test_unique_calendar_delete_bypasses_provider_and_stays_pending(
+        monkeypatch, tmp_path, stored_title):
+    store = JsonStorage(tmp_path / "data.json")
+    store.save(_calendar_delete_data(("vova", "event-1", stored_title)))
+    monkeypatch.setattr(nl_assistant, "storage", store)
+    parser = FakeParser(ParsedIntent(IntentKind.NO_ACTION, {}))
+    nl_assistant._parser = parser
+    before = store.load()
+    upd, ctx = update(text="Удали Купить сувениры"), context()
+
+    assert run(nl_assistant.nl_text_handler(upd, ctx)) == MENU
+
+    assert parser.calls == []
+    proposal = nl_assistant.active_proposal(
+        ctx.user_data, actor_key="wp_bvv", now=nl_assistant.zoned_now(nl_assistant.BOT_TIMEZONE))
+    assert proposal.intent is IntentKind.DELETE_CALENDAR_EVENT
+    assert proposal.arguments["target"] == "Купить сувениры"
+    assert proposal.arguments["_id"] == "event-1"
+    assert upd.effective_message.waiting.edit_text.await_args.args[0].startswith("🗑 Удалить событие?")
+    assert store.load() == before
+
+
+@pytest.mark.parametrize("events", [
+    (),
+    (("vova", "event-1", "ТЕСТ — Купить сувениры"),
+     ("vova", "event-2", "ДРУГОЙ — Купить сувениры")),
+    (("sasha", "event-1", "Купить сувениры"),),
+])
+def test_calendar_delete_falls_through_without_one_actor_owned_match(monkeypatch, tmp_path, events):
+    store = JsonStorage(tmp_path / "data.json")
+    store.save(_calendar_delete_data(*events))
+    monkeypatch.setattr(nl_assistant, "storage", store)
+    parser = FakeParser(ParsedIntent(IntentKind.NO_ACTION, {}))
+    nl_assistant._parser = parser
+
+    run(nl_assistant.nl_text_handler(update(text="Удали Купить сувениры"), context()))
+
+    assert [call[0] for call in parser.calls] == ["Удали Купить сувениры"]
+
+
 def test_no_action_replaces_waiting_message_with_capabilities_and_menu():
     nl_assistant._parser = FakeParser(ParsedIntent(IntentKind.NO_ACTION, {}))
     upd = update(text="привет")
