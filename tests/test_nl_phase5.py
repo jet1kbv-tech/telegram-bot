@@ -32,13 +32,54 @@ def args(item, bucket, changes, expected=None):
     return {"_id": item["id"], "_bucket": bucket, "_changes": changes, "_expected": expected or {key: item.get(key) for key in changes}, "_actor_name": "Вова"}
 
 
-def test_reference_normalization_and_resolution_is_exact():
+def test_reference_normalization_and_non_event_resolution_is_exact():
     data = base_data()
     assert normalize_for_match("  КОФЕМАШИНА   ") == "кофемашина"
     assert len(resolve_entities(data, IntentKind.UPDATE_PURCHASE, "кофемашина")) == 1
     assert not resolve_entities(data, IntentKind.UPDATE_PURCHASE, "кофемаш")
     assert len(resolve_entities(data, IntentKind.UPDATE_FILM, "игры разума")) == 1
     assert len(resolve_entities(data, IntentKind.UPDATE_FILM, "A Beautiful Mind")) == 1
+
+
+@pytest.mark.parametrize("kind", [IntentKind.UPDATE_CALENDAR_EVENT, IntentKind.DELETE_CALENDAR_EVENT])
+def test_calendar_event_mutations_use_staged_substring_resolution(kind):
+    data = base_data()
+    data["calendars"]["vova"][0]["title"] = "ТЕСТ — Купить сувениры"
+    candidates = resolve_entities(data, kind, "Купить сувениры", owner="vova",
+                                  now=FIXED_NOW, timezone="UTC")
+    assert [candidate.item_id for candidate in candidates] == ["c1"]
+
+
+def test_calendar_event_target_has_bounded_meeting_inflection_repair():
+    data = base_data()
+    data["calendars"]["vova"][0]["title"] = "Встреча с барбером"
+    assert [candidate.item_id for candidate in resolve_entities(
+        data, IntentKind.DELETE_CALENDAR_EVENT, "встречу с барбером", owner="vova",
+        now=FIXED_NOW, timezone="UTC",
+    )] == ["c1"]
+
+
+def test_event_exact_match_wins_and_substring_ambiguity_is_preserved():
+    data = base_data()
+    event = data["calendars"]["vova"][0]
+    event["title"] = "Купить сувениры"
+    data["calendars"]["vova"].append({**event, "id": "c3", "title": "ТЕСТ — Купить сувениры"})
+    exact = resolve_entities(data, IntentKind.UPDATE_CALENDAR_EVENT, "Купить сувениры",
+                             owner="vova", now=FIXED_NOW, timezone="UTC")
+    assert [candidate.item_id for candidate in exact] == ["c1"]
+    data["calendars"]["vova"][0]["title"] = "Домой — Купить сувениры"
+    ambiguous = resolve_entities(data, IntentKind.DELETE_CALENDAR_EVENT, "Купить сувениры",
+                                 owner="vova", now=FIXED_NOW, timezone="UTC")
+    assert {candidate.item_id for candidate in ambiguous} == {"c1", "c3"}
+
+
+def test_event_substring_resolution_keeps_private_ownership_isolated():
+    data = base_data()
+    data["calendars"]["vova"][0]["title"] = "ТЕСТ — Купить сувениры"
+    data["calendars"]["sasha"][0]["title"] = "ДРУГОЙ — Купить сувениры"
+    candidates = resolve_entities(data, IntentKind.DELETE_CALENDAR_EVENT, "Купить сувениры",
+                                  owner="vova", now=FIXED_NOW, timezone="UTC")
+    assert [candidate.item_id for candidate in candidates] == ["c1"]
 
 
 @pytest.mark.parametrize("target", ["кофемолка", "КОФЕМОЛКА", "  кофемолка   "])
@@ -89,6 +130,20 @@ def test_calendar_projection_resolves_to_canonical_afisha():
     })
     candidates = resolve_entities(
         data, IntentKind.UPDATE_CALENDAR_EVENT, "концерт", owner="vova",
+        now=FIXED_NOW, timezone="UTC",
+    )
+    assert [(candidate.item_id, candidate.bucket) for candidate in candidates] == [("a1", "afisha")]
+
+
+def test_calendar_projection_substring_resolves_to_canonical_afisha():
+    data = base_data()
+    data["afisha"][0]["title"] = "ТЕСТ — Купить сувениры"
+    data["calendars"]["vova"].append({
+        "id": "projection", "owner": "vova", "title": "ТЕСТ — Купить сувениры",
+        "date": "2026-08-15", "start_time": "19:00", "source": "afisha", "source_id": "a1",
+    })
+    candidates = resolve_entities(
+        data, IntentKind.DELETE_CALENDAR_EVENT, "Купить сувениры", owner="vova",
         now=FIXED_NOW, timezone="UTC",
     )
     assert [(candidate.item_id, candidate.bucket) for candidate in candidates] == [("a1", "afisha")]

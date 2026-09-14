@@ -8,6 +8,7 @@ import pytest
 from bot.handlers import nl_assistant
 from bot.services.nl_intent import IntentKind, IntentParserInvalidOutput, IntentParserTimeout, IntentParserUnavailable, ParsedIntent
 from bot.states import ADDING_CALENDAR_EVENT_TITLE, ADDING_EVENT_TITLE, ADDING_PURCHASE_TITLE, AI_CLARIFYING, MENU, SECTION, SELECTING_FILM_METADATA
+from bot.storage import JsonStorage
 
 
 class FakeParser:
@@ -161,6 +162,83 @@ def test_controlled_parser_failure_replaces_waiting_message(error, expected):
     run(nl_assistant.nl_text_handler(upd, context()))
     assert upd.effective_message.reply_text.await_args_list[0].args[0] == "⏳ Разбираю команду…"
     assert expected in upd.effective_message.waiting.edit_text.await_args.args[0]
+
+
+@pytest.mark.parametrize(("first_text", "first_intent", "follow_text", "expected"), [
+    ("Когда ТЕСТ — Эрмитаж?", ParsedIntent(IntentKind.QUERY_CONTEXT, {
+        "query_type": "event_date", "destination": None, "transport_type": None,
+        "target": "ТЕСТ — Эрмитаж", "date_expression": None, "person": None,
+        "semantic_type": None, "follow_up": False,
+    }), "А где?", "Дворцовая"),
+    ("Когда ТЕСТ — Эрмитаж?", ParsedIntent(IntentKind.QUERY_CONTEXT, {
+        "query_type": "event_date", "destination": None, "transport_type": None,
+        "target": "ТЕСТ — Эрмитаж", "date_expression": None, "person": None,
+        "semantic_type": None, "follow_up": False,
+    }), "А документы?", "документ"),
+    ("Во сколько поезд в Санкт-Петербург?", ParsedIntent(IntentKind.QUERY_CONTEXT, {
+        "query_type": "departure", "destination": "Санкт-Петербург", "transport_type": "train",
+        "target": None, "date_expression": None, "person": None,
+        "semantic_type": None, "follow_up": False,
+    }), "А обратно?", "18:30"),
+    ("Во сколько поезд в Санкт-Петербург?", ParsedIntent(IntentKind.QUERY_CONTEXT, {
+        "query_type": "departure", "destination": "Санкт-Петербург", "transport_type": "train",
+        "target": None, "date_expression": None, "person": None,
+        "semantic_type": None, "follow_up": False,
+    }), "А билеты?", "билет"),
+])
+def test_handler_two_turn_production_follow_ups_bypass_provider(
+        monkeypatch, tmp_path, first_text, first_intent, follow_text, expected):
+    store = JsonStorage(tmp_path / "data.json")
+    data = store.default_data()
+    data["afisha"] = [
+        {"id": "museum", "title": "ТЕСТ — Эрмитаж", "date": "2026-09-20", "time": "12:00",
+         "place": "Дворцовая площадь", "status": "active"},
+        {"id": "trip", "title": "Петербург", "date": "2026-09-12", "time": "08:40", "status": "active"},
+    ]
+    data["event_attachments"] = [
+        {"id": "museum-doc", "parent_type": "afisha", "parent_event_id": "museum",
+         "semantic_type": "other", "telegram_file_id": "museum-file", "telegram_media_type": "document"},
+        {"id": "out", "parent_type": "afisha", "parent_event_id": "trip", "semantic_type": "transport_ticket",
+         "transport_type": "train", "origin": "Москва", "destination": "Санкт-Петербург",
+         "date": "2026-09-12", "departure_time": "08:40", "arrival_date": "2026-09-12",
+         "arrival_time": "12:30", "telegram_file_id": "out-file", "telegram_media_type": "document"},
+        {"id": "back", "parent_type": "afisha", "parent_event_id": "trip", "semantic_type": "transport_ticket",
+         "transport_type": "train", "origin": "Санкт-Петербург", "destination": "Москва",
+         "date": "2026-09-15", "departure_time": "18:30", "arrival_date": "2026-09-15",
+         "arrival_time": "22:20", "telegram_file_id": "back-file", "telegram_media_type": "document"},
+    ]
+    store.save(data)
+    monkeypatch.setattr(nl_assistant, "storage", store)
+    parser = FakeParser(first_intent)
+    nl_assistant._parser = parser
+    ctx = context()
+    run(nl_assistant.nl_text_handler(update(text=first_text), ctx))
+    follow = update(text=follow_text)
+    run(nl_assistant.nl_text_handler(follow, ctx))
+    # Named event questions are deterministic too; trip setup still uses the
+    # provider. In both cases the bounded second turn never calls it.
+    assert len(parser.calls) == (1 if first_intent.arguments["query_type"] == "departure" else 0)
+    assert expected.casefold() in follow.effective_message.waiting.edit_text.await_args.args[0].casefold()
+
+
+@pytest.mark.parametrize(("text", "events"), [
+    ("Когда Новый год?", []),
+    ("Где ресторан Пушкин?", []),
+    ("Когда концерт?", [
+        {"id": "one", "title": "Концерт", "date": "2026-09-20", "time": "12:00", "status": "active"},
+        {"id": "two", "title": "Концерт", "date": "2026-09-21", "time": "12:00", "status": "active"},
+    ]),
+])
+def test_unmatched_or_ambiguous_named_questions_call_provider(monkeypatch, tmp_path, text, events):
+    store = JsonStorage(tmp_path / "data.json")
+    data = store.default_data()
+    data["afisha"] = events
+    store.save(data)
+    monkeypatch.setattr(nl_assistant, "storage", store)
+    parser = FakeParser(ParsedIntent(IntentKind.NO_ACTION, {}))
+    nl_assistant._parser = parser
+    run(nl_assistant.nl_text_handler(update(text=text), context()))
+    assert [call[0] for call in parser.calls] == [text]
 
 
 def test_no_action_replaces_waiting_message_with_capabilities_and_menu():

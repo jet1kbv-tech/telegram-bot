@@ -99,6 +99,13 @@ def _event_candidates(bundle: ContextBundle, target: str | None) -> tuple[EventC
                  if not needle or needle in normalize_reference(event.title))
 
 
+def visible_event_match_count(data: dict[str, Any], *, actor_key: str, target: str,
+                              now: datetime, timezone: str) -> int:
+    """Count a named reference using the canonical actor-scoped event view."""
+    bundle = build_context_bundle(data, actor_key, now, timezone, include_past=False)
+    return len(_event_candidates(bundle, target))
+
+
 def _event_label(event: EventContext) -> str:
     return f"{event.title or 'Событие'} — {event.date.day} {_MONTHS[event.date.month]}"
 
