@@ -142,8 +142,9 @@ def test_deleted_enriched_during_review_and_double_confirmation_are_safe():
 
 
 class Provider:
-    def __init__(self, failures=()):
+    def __init__(self, failures=(), genres=("Ужасы",)):
         self.failures = set(failures)
+        self.genres = genres
         self.searches = []
         self.details = []
 
@@ -160,7 +161,7 @@ class Provider:
         if external_id in self.failures:
             raise MovieMetadataUnavailable("timeout")
         return MovieMetadata(
-            "tmdb", external_id, external_id, year=None, genres=("Ужасы",),
+            "tmdb", external_id, external_id, year=None, genres=self.genres,
             description="Описание", media_type=media_type,
         )
 
@@ -214,6 +215,25 @@ def test_complete_tmdb_identity_repairs_genres_directly_and_is_idempotent(monkey
     assert target["genres"] == ["Ужасы"]
     assert (target["metadata_provider"], target["external_id"], target["media_type"]) == ("tmdb", "42", "tv")
     assert (target["status"], target["added_by"]) == ("want", "Вова")
+
+
+def test_tmdb_russian_tv_genre_repairs_once_and_is_then_complete(monkeypatch):
+    target = film(
+        status="want", metadata_provider="tmdb", external_id="10759",
+        media_type="tv", genres=[],
+    )
+    provider = Provider(genres=("Боевик и Приключения",))
+    monkeypatch.setattr(handler, "storage", Store([target]))
+
+    first = asyncio.run(handler.process_enrichment_batch(provider, pace_seconds=0))
+    second = asyncio.run(handler.process_enrichment_batch(provider, pace_seconds=0))
+
+    assert first.enriched == 1
+    assert target["genres"] == ["Боевик и Приключения"]
+    assert has_recommendation_metadata(target) is True
+    assert second.total == 0
+    assert provider.details == [("tv", "10759")]
+    assert provider.searches == []
 
 
 def test_covered_tmdb_identity_does_not_call_provider(monkeypatch):

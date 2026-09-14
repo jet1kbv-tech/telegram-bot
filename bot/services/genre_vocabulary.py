@@ -21,7 +21,11 @@ _RUSSIAN_ALIASES = {
     "детектив": "mystery", "мелодрама": "romance", "романтика": "romance",
     "фантастика": "science_fiction", "научная фантастика": "science_fiction",
     # This is TMDb's TV genre 10765, rather than either of its two components.
-    "нф и фэнтези": "science_fiction_fantasy", "триллер": "thriller",
+    "боевик и приключения": "action_adventure", "детский": "kids",
+    "новости": "news", "реалити-шоу": "reality",
+    "нф и фэнтези": "science_fiction_fantasy", "мыльная опера": "soap",
+    "ток-шоу": "talk", "военный и политика": "war_politics",
+    "триллер": "thriller",
     "военный": "war", "вестерн": "western",
 }
 
