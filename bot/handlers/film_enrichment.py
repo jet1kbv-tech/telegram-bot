@@ -11,7 +11,10 @@ from telegram.ext import ContextTypes, ConversationHandler
 from bot.services.film_enrichment import (
     EnrichmentDisposition,
     apply_metadata_atomic,
+    apply_recommendation_metadata_atomic,
+    can_repair_recommendation_metadata,
     classify_search_results,
+    has_recommendation_metadata,
     identity_state,
     metadata_matches_film,
 )
@@ -88,16 +91,35 @@ async def process_enrichment_batch(
     pace_seconds: float = 0.2,
 ) -> BatchReport:
     films = storage.load().get("films", [])
-    pending = [item for item in films if identity_state(item) != "complete"]
+    pending = [
+        item for item in films
+        if identity_state(item) != "complete" or can_repair_recommendation_metadata(item)
+    ]
     report = BatchReport(total=len(pending))
     consecutive_errors = 0
 
     for index, snapshot in enumerate(pending):
         film = _film(str(snapshot.get("id") or ""))
-        if film is None or identity_state(film) == "complete":
+        if film is None or (identity_state(film) == "complete" and has_recommendation_metadata(film)):
             report.processed += 1
             continue
-        if identity_state(film) == "partial":
+        if can_repair_recommendation_metadata(film):
+            try:
+                metadata = await provider.get_title_details(
+                    str(film.get("media_type")), str(film.get("external_id") or "").strip()
+                )
+                applied = apply_recommendation_metadata_atomic(storage, str(film.get("id") or ""), metadata)
+                if applied.disposition is EnrichmentDisposition.ENRICHED:
+                    report.enriched += 1
+                elif applied.disposition is EnrichmentDisposition.CONFLICT:
+                    report.conflict.append(_queue_item(film, reason="identity_changed_or_provider_mismatch"))
+                consecutive_errors = 0
+            except MediaMetadataError:
+                logger.info("Film recommendation metadata repair failed for film %s", film.get("id"), exc_info=True)
+                report.provider_error.append(_queue_item(film))
+                consecutive_errors += 1
+            report.processed += 1
+        elif identity_state(film) == "partial":
             report.conflict.append(_queue_item(film, reason="partial_identity"))
             report.processed += 1
             consecutive_errors = 0
@@ -250,11 +272,14 @@ async def film_enrichment_manual_query(update: Update, context: ContextTypes.DEF
 
 async def _show_preflight(query: Any) -> int:
     films = storage.load().get("films", [])
-    missing = sum(identity_state(item) != "complete" for item in films)
-    complete = sum(identity_state(item) == "complete" for item in films)
+    missing = sum(
+        identity_state(item) != "complete" or can_repair_recommendation_metadata(item)
+        for item in films
+    )
+    complete = len(films) - missing
     text = (
         "🎬 Обновление данных фильмов и сериалов из TMDB\n\n"
-        f"Без привязки к TMDB: {missing}\nУже с данными: {complete}\n\n"
+        f"Требуют обновления: {missing}\nДанные полны: {complete}\n\n"
         "Будут обновлены только метаданные.\n"
         "Ваши названия, статусы и комментарии останутся без изменений."
     )
