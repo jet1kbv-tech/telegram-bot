@@ -5,6 +5,7 @@ from enum import Enum
 from typing import Any
 
 from bot.services.film_duplicates import effective_media_type, normalize_movie_title
+from bot.services.genre_vocabulary import canonicalize_genres
 from bot.services.movie_metadata import MovieMetadata, MovieSearchResult
 
 
@@ -56,8 +57,29 @@ def identity_state(film: dict[str, Any]) -> str:
     return "missing"
 
 
+def has_recommendation_metadata(film: dict[str, Any]) -> bool:
+    """Return whether stored fields consumed by preference profiles are usable."""
+    media_type = film.get("media_type")
+    genres = film.get("genres")
+    return (
+        media_type in {"movie", "tv"}
+        and isinstance(genres, (list, tuple))
+        and bool(canonicalize_genres(genres))
+    )
+
+
+def can_repair_recommendation_metadata(film: dict[str, Any]) -> bool:
+    """Only a complete, explicit TMDB identity is safe for direct repair."""
+    return (
+        film.get("metadata_provider") == "tmdb"
+        and bool(str(film.get("external_id") or "").strip())
+        and film.get("media_type") in {"movie", "tv"}
+        and not has_recommendation_metadata(film)
+    )
+
+
 def is_enrichment_candidate(film: dict[str, Any]) -> bool:
-    return identity_state(film) == "missing"
+    return identity_state(film) == "missing" or can_repair_recommendation_metadata(film)
 
 
 def classify_search_results(film: dict[str, Any], results: list[MovieSearchResult]) -> MatchDecision:
@@ -143,6 +165,33 @@ def apply_metadata_atomic(storage: Any, film_id: str, metadata: MovieMetadata) -
             "description": metadata.description,
             "external_rating": metadata.external_rating,
         })
+        return ApplyResult(EnrichmentDisposition.ENRICHED, film=dict(film))
+
+    result, _ = storage.update(mutator)
+    return result
+
+
+def apply_recommendation_metadata_atomic(storage: Any, film_id: str, metadata: MovieMetadata) -> ApplyResult:
+    """Repair genres in place only when the existing TMDB identity still matches."""
+
+    def mutator(data: dict[str, Any]) -> ApplyResult:
+        films = data.get("films", [])
+        film = next((item for item in films if str(item.get("id")) == str(film_id)), None)
+        if film is None:
+            return ApplyResult(EnrichmentDisposition.DELETED)
+        if has_recommendation_metadata(film):
+            return ApplyResult(EnrichmentDisposition.SKIPPED, film=dict(film))
+        if not can_repair_recommendation_metadata(film):
+            return ApplyResult(EnrichmentDisposition.CONFLICT, film=dict(film))
+        if (
+            metadata.metadata_provider != film.get("metadata_provider")
+            or metadata.media_type != film.get("media_type")
+            or metadata.external_id != str(film.get("external_id") or "").strip()
+            or not canonicalize_genres(metadata.genres)
+        ):
+            return ApplyResult(EnrichmentDisposition.CONFLICT, film=dict(film))
+
+        film["genres"] = list(metadata.genres)
         return ApplyResult(EnrichmentDisposition.ENRICHED, film=dict(film))
 
     result, _ = storage.update(mutator)

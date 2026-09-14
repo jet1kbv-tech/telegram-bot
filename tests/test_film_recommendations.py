@@ -137,6 +137,21 @@ def test_current_want_mode_can_disable_circular_interest_stably():
     assert [x.candidate.external_id for x in first] == [x.candidate.external_id for x in second]
 
 
+def test_want_without_genres_fabricates_no_genre_evidence_but_enriched_genres_participate():
+    poor = film(None, status="want", added_by="Вова", genres=[], media_type="")
+    enriched = dict(poor, metadata_provider="tmdb", external_id="42", media_type="movie", genres=["Комедия"])
+
+    poor_profile = build_film_preference_profile([poor], "vova")
+    enriched_profile = build_film_preference_profile([enriched], "vova")
+
+    assert poor_profile.want_interest_count == 0
+    assert poor_profile.want_genres == {}
+    assert rank_candidates([candidate()], poor_profile)[0].taste_score == 0
+    assert enriched_profile.want_interest_count == 1
+    assert set(enriched_profile.want_genres) == {"comedy"}
+    assert rank_candidates([candidate()], enriched_profile)[0].taste_score > 0
+
+
 def test_franchise_family_diversity_and_fallback():
     profile = build_film_preference_profile([], "vova")
     values = [candidate("s1", title="Spider-Man", popularity=100),
