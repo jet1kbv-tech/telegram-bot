@@ -1096,6 +1096,14 @@ def test_query_context_prompt_uses_only_canonical_transport_contract():
     assert 'query_type="overview" destination="Воронеж"' in SYSTEM_PROMPT
     assert 'query_type="documents" destination="Воронеж"' in SYSTEM_PROMPT
 
+
+def test_query_context_prompt_distinguishes_generic_and_typed_event_documents():
+    assert '«События с документами» -> query_context query_type="events_with_documents"' in SYSTEM_PROMPT
+    assert ('«События с бронью» -> query_context query_type="events_with_document_type" '
+            'semantic_type="reservation"' in SYSTEM_PROMPT)
+    assert "бронь/бронирование=reservation" in SYSTEM_PROMPT
+
+
 @pytest.mark.parametrize("text,intent", [
     ("удали билет в Воронеж", "delete_event_attachment"),
     ("удали обратный билет из Воронежа", "delete_event_attachment"),

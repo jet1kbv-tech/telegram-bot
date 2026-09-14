@@ -221,6 +221,46 @@ def test_handler_two_turn_production_follow_ups_bypass_provider(
     assert expected.casefold() in follow.effective_message.waiting.edit_text.await_args.args[0].casefold()
 
 
+def test_typed_event_document_query_bypasses_provider_and_uses_context_query(monkeypatch, tmp_path):
+    store = JsonStorage(tmp_path / "data.json")
+    data = store.default_data()
+    data["afisha"] = [
+        {"id": "spb", "title": "ТЕСТ — Поездка в Санкт-Петербург", "date": "2099-09-18",
+         "time": "10:00", "status": "active"},
+        {"id": "hermitage", "title": "ТЕСТ — Эрмитаж", "date": "2099-09-19",
+         "time": "10:00", "status": "active"},
+        {"id": "kazan", "title": "ТЕСТ — Поездка в Казань", "date": "2099-09-20",
+         "time": "10:00", "status": "active"},
+    ]
+    data["event_attachments"] = [
+        {"id": "spb-ticket", "parent_type": "afisha", "parent_event_id": "spb",
+         "semantic_type": "transport_ticket", "telegram_file_id": "spb-ticket-file",
+         "telegram_media_type": "document"},
+        {"id": "spb-insurance", "parent_type": "afisha", "parent_event_id": "spb",
+         "semantic_type": "insurance", "telegram_file_id": "spb-insurance-file",
+         "telegram_media_type": "document"},
+        {"id": "hermitage-reservation", "parent_type": "afisha", "parent_event_id": "hermitage",
+         "semantic_type": "reservation", "telegram_file_id": "hermitage-reservation-file",
+         "telegram_media_type": "document"},
+        {"id": "kazan-ticket", "parent_type": "afisha", "parent_event_id": "kazan",
+         "semantic_type": "transport_ticket", "telegram_file_id": "kazan-ticket-file",
+         "telegram_media_type": "document"},
+    ]
+    store.save(data)
+    monkeypatch.setattr(nl_assistant, "storage", store)
+    parser = FakeParser(ParsedIntent(IntentKind.NO_ACTION, {}))
+    nl_assistant._parser = parser
+    upd = update(text="События с бронью")
+
+    assert run(nl_assistant.nl_text_handler(upd, context())) == MENU
+
+    assert parser.calls == []
+    response = upd.effective_message.waiting.edit_text.await_args.args[0]
+    assert "ТЕСТ — Эрмитаж" in response
+    assert "ТЕСТ — Поездка в Санкт-Петербург" not in response
+    assert "ТЕСТ — Поездка в Казань" not in response
+
+
 @pytest.mark.parametrize(("text", "events"), [
     ("Когда Новый год?", []),
     ("Где ресторан Пушкин?", []),

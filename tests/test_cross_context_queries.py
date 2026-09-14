@@ -207,6 +207,28 @@ def test_event_document_queries_type_visibility_and_person_cannot_widen():
     assert without.outcome == "not_found"
 
 
+def test_reservation_event_query_excludes_transport_and_insurance_only_events():
+    events = [
+        event("spb", "ТЕСТ — Поездка в Санкт-Петербург", "2026-09-12"),
+        event("hermitage", "ТЕСТ — Эрмитаж", "2026-09-13"),
+        event("kazan", "ТЕСТ — Поездка в Казань", "2026-09-14"),
+    ]
+    documents = [
+        document("spb-out", "spb", "transport_ticket"),
+        document("spb-back", "spb", "transport_ticket"),
+        document("spb-insurance", "spb", "insurance"),
+        document("hermitage-reservation", "hermitage", "reservation"),
+        document("kazan-out", "kazan", "transport_ticket"),
+    ]
+
+    result = ask(snapshot(afisha=events, documents=documents),
+                 "events_with_document_type", semantic_type="reservation")
+
+    assert "ТЕСТ — Эрмитаж" in result.text
+    assert "ТЕСТ — Поездка в Санкт-Петербург" not in result.text
+    assert "ТЕСТ — Поездка в Казань" not in result.text
+
+
 def test_date_range_decoder_read_only_and_context_pointer_rules():
     data = snapshot(afisha=[event("trip", "Питер", "2026-09-12"), event("plan", "План", "2026-09-13")],
                     documents=trip_tickets(returning=False))

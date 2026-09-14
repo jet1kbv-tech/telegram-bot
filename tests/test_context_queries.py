@@ -1,6 +1,8 @@
 from datetime import datetime, timezone
 
+from bot.services.context_engine import build_context_bundle, documents_for_context
 from bot.services.context_queries import query_context
+from bot.services.cross_context_queries import trip_documents
 from bot.services.nl_intent import IntentKind, IntentParserInvalidOutput
 from bot.services.nl_intent_decoder import decode_intent, decode_provider_envelope
 import pytest
@@ -33,6 +35,43 @@ def test_exact_opposite_route_is_return_and_creation_order_irrelevant():
     back = ticket("back", origin="Придача Воронеж-Южный", destination="Москва Казанская", date="2026-09-05", departure_time="18:00", arrival_date="2026-09-06", arrival_time="08:00")
     result = query_context(snapshot(back, ticket()), actor_key="sasha", now=NOW, timezone="UTC", query_type="return", destination="Воронеж")
     assert result.outcome == "found" and "18:00" in result.text
+
+
+def test_trip_document_query_includes_canonical_parent_documents_without_broadening_structure():
+    outbound = ticket(destination="Санкт-Петербург")
+    returning = ticket("back", origin="Санкт-Петербург", destination="Москва Казанская",
+                       date="2026-09-05", departure_time="18:00")
+    insurance = ticket("insurance", semantic_type="insurance", transport_type=None,
+                       origin=None, destination=None, date=None, departure_time=None,
+                       arrival_date=None, arrival_time=None)
+    unrelated = ticket("unrelated", parent_event_id="other", semantic_type="insurance",
+                       transport_type=None, origin=None, destination=None, date=None,
+                       departure_time=None, arrival_date=None, arrival_time=None)
+    private = ticket("private", parent_type="calendar", parent_event_id="private",
+                     semantic_type="insurance", transport_type=None, origin=None,
+                     destination=None, date=None, departure_time=None,
+                     arrival_date=None, arrival_time=None)
+    data = snapshot(outbound, returning, insurance, unrelated, private)
+    data["afisha"].append({"id": "other", "title": "Другое", "date": "2026-09-01",
+                           "time": "20:00", "status": "active"})
+    data["calendars"]["sasha"].append({"id": "private", "title": "Личное",
+        "date": "2026-09-01", "start_time": "20:00", "source": "manual"})
+
+    bundle = build_context_bundle(data, "vova", NOW, "UTC")
+    trip = bundle.trips[0]
+    assert trip.linked_attachment_ids == ("back", "out")
+    assert {row.attachment_id for row in documents_for_context(bundle, trip)} == {"out", "back"}
+    assert {row.attachment_id for row in trip_documents(bundle, trip)} == {"out", "back", "insurance"}
+
+    documents = query_context(data, actor_key="vova", now=NOW, timezone="UTC",
+                              query_type="documents", destination="Санкт-Петербург")
+    overview = query_context(data, actor_key="vova", now=NOW, timezone="UTC",
+                             query_type="overview", destination="Санкт-Петербург")
+    assert documents.text.count("билет на поезд") == 2
+    assert "• страховка" in documents.text
+    assert "Документы: 3" in overview.text
+    assert "unrelated" not in {row.attachment_id for row in trip_documents(bundle, trip)}
+    assert "private" not in {row.attachment_id for row in bundle.documents}
 
 
 def test_private_calendar_is_actor_scoped():
