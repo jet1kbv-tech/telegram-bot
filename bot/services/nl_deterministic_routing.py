@@ -38,6 +38,32 @@ _FOLLOW_UPS = {
     },
 }
 
+_TYPED_EVENT_DOCUMENT_QUERY = re.compile(r"^события\s+со?\s+(.+)$")
+_DOCUMENT_TYPES = {
+    "бронью": "reservation",
+    "бронь": "reservation",
+    "бронированием": "reservation",
+    "бронирование": "reservation",
+    "билетом": "transport_ticket",
+    "билетами": "transport_ticket",
+    "билет": "transport_ticket",
+    "страховкой": "insurance",
+    "страховка": "insurance",
+}
+
+
+def typed_event_document_query(text: str) -> ParsedIntent | None:
+    """Recognize only an explicit event query for one known document type."""
+    match = _TYPED_EVENT_DOCUMENT_QUERY.fullmatch(_normalize_question(text))
+    semantic_type = _DOCUMENT_TYPES.get(match.group(1)) if match else None
+    if semantic_type is None:
+        return None
+    return ParsedIntent(IntentKind.QUERY_CONTEXT, {
+        "query_type": "events_with_document_type", "destination": None,
+        "transport_type": None, "target": None, "date_expression": None,
+        "person": None, "semantic_type": semantic_type, "follow_up": False,
+    })
+
 
 def short_context_follow_up(text: str, domain: str) -> ParsedIntent | None:
     """Recognize only allow-listed phrases compatible with the active subject."""

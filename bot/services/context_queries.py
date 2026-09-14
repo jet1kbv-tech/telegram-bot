@@ -376,7 +376,7 @@ def query_context(data: dict[str, Any], *, actor_key: str, now: datetime, timezo
         return ContextQueryResult("found", render_trip_briefing(briefing), 1, trip, briefing=briefing)
     outbound = _ticket(bundle, trip, "outbound")
     returning = _ticket(bundle, trip, "return")
-    documents = documents_for_context(bundle, trip)
+    documents = trip_documents(bundle, trip)
     if query_type == "departure":
         if not outbound:
             return ContextQueryResult("missing", "Поездку нашёл, но отправление не удалось определить однозначно.", 1, trip)

@@ -35,7 +35,8 @@ from bot.services.context_queries import execute_context_query
 from bot.services.context_sessions import get_context_session
 from bot.services.nl_deterministic_routing import (delete_calendar_event_command,
                                                    named_event_question,
-                                                   short_context_follow_up)
+                                                   short_context_follow_up,
+                                                   typed_event_document_query)
 from bot.services.weather import WeatherError, WeatherProvider
 from bot.services.weather_context import query_weather_context
 from bot.services.trip_briefing import render_weather_enrichment
@@ -316,6 +317,7 @@ async def nl_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         snapshot = storage.load()
         session = get_context_session(snapshot, actor_key, now)
         parsed = short_context_follow_up(text, session.domain) if session is not None else None
+        parsed = parsed or typed_event_document_query(text)
         parsed = parsed or delete_calendar_event_command(
             text, data=snapshot, actor_key=actor_key, now=now, timezone=BOT_TIMEZONE)
         parsed = parsed or named_event_question(
