@@ -53,7 +53,7 @@ def test_orphan_document_does_not_use_provider_and_is_bounded(monkeypatch):
     assert run(handler.orphan_attachment_handler(update, context)) == handler.SELECTING_NL_ATTACHMENT_EVENT
     assert message.reply_text.await_args.args[0] == "К какому событию прикрепить этот документ?"
     markup = message.reply_text.await_args.kwargs["reply_markup"]
-    assert len(markup.inline_keyboard) <= 11
+    assert len(markup.inline_keyboard) <= 19
     assert "🔎 Указать название" in [button.text for row in markup.inline_keyboard for button in row]
 
 
@@ -244,11 +244,50 @@ def test_main_menu_from_zero_candidate_chooser_clears_pending_context(monkeypatc
     assert context.user_data == {}
 
 
-def test_exact_title_fallback_reaches_event_outside_first_eight(monkeypatch):
+def test_orphan_chooser_shows_sixteen_chronological_authorized_canonical_candidates(monkeypatch):
     source = data()
     source["calendars"]["vova"] = [
         {"id": f"c{i}", "owner": "vova", "title": f"Событие {i}", "source": "manual",
-         "date": f"2099-01-{i + 1:02d}", "start_time": "10:00"} for i in range(9)
+         "date": f"2026-09-{14 + i:02d}", "start_time": "10:00"} for i in range(8)
+    ] + [{"id": "kazan", "owner": "vova", "title": "ТЕСТ — Поездка в Казань", "source": "manual",
+          "date": "2026-09-22", "start_time": "10:00"}]
+    source["calendars"]["vova"].append(
+        {"id": "projection", "owner": "vova", "title": "Общая Афиша", "source": "afisha",
+         "source_id": "canonical", "date": "2026-09-23"}
+    )
+    source["calendars"]["sasha"] = [
+        {"id": "secret", "owner": "sasha", "title": "Чужая Казань", "source": "manual", "date": "2026-09-15"}
+    ]
+    source["afisha"] = [
+        {"id": "canonical", "title": "Общая Афиша", "status": "active", "date": "2026-09-23"},
+        {"id": "inactive", "title": "Неактивное", "status": "archived", "date": "2026-09-16"},
+        {"id": "past", "title": "Прошедшее", "status": "active", "date": "2026-09-13"},
+    ]
+    store = SimpleNamespace(load=lambda: source); configure(monkeypatch, store)
+    monkeypatch.setattr(handler, "zoned_now", lambda timezone: __import__("datetime").datetime(2026, 9, 14, 9))
+    message = SimpleNamespace(document=SimpleNamespace(file_id="id", file_unique_id="unique",
+        file_name="ticket.pdf", mime_type="application/pdf"), photo=[], reply_text=AsyncMock())
+    context = SimpleNamespace(user_data={})
+
+    assert run(handler.orphan_attachment_handler(SimpleNamespace(effective_message=message), context)) \
+        == handler.SELECTING_NL_ATTACHMENT_EVENT
+    operation = context.user_data[KEY]
+    titles = [candidate["item"]["title"] for candidate in operation.candidates]
+    assert titles == [f"Событие {i}" for i in range(8)] + ["ТЕСТ — Поездка в Казань", "Общая Афиша"]
+    assert "Чужая Казань" not in titles and "Неактивное" not in titles and "Прошедшее" not in titles
+    assert titles.count("Общая Афиша") == 1
+    callback_data = f"nla:e:{operation.operation_id}:8"
+    assert len(callback_data.encode()) <= 64
+    selected = callback(callback_data)
+    assert run(handler.nl_attachment_callback_router(selected, context)) == handler.SELECTING_NL_ATTACHMENT_EVENT
+    assert operation.parent_id == "kazan"
+
+
+def test_exact_title_fallback_reaches_event_outside_first_sixteen(monkeypatch):
+    source = data()
+    source["calendars"]["vova"] = [
+        {"id": f"c{i}", "owner": "vova", "title": f"Событие {i}", "source": "manual",
+         "date": f"2099-01-{i + 1:02d}", "start_time": "10:00"} for i in range(17)
     ]
     store = SimpleNamespace(load=lambda: source); configure(monkeypatch, store)
     message = SimpleNamespace(document=SimpleNamespace(file_id="id", file_unique_id="unique",
@@ -256,11 +295,11 @@ def test_exact_title_fallback_reaches_event_outside_first_eight(monkeypatch):
     context = SimpleNamespace(user_data={}); update = SimpleNamespace(effective_message=message)
     run(handler.orphan_attachment_handler(update, context))
     operation = context.user_data[KEY]
-    assert all(candidate["item"]["title"] != "Событие 8" for candidate in operation.candidates)
-    title_message = SimpleNamespace(text="Событие 8", reply_text=AsyncMock())
+    assert all(candidate["item"]["title"] != "Событие 16" for candidate in operation.candidates)
+    title_message = SimpleNamespace(text="Событие 16", reply_text=AsyncMock())
     state = run(handler.attachment_event_title_handler(SimpleNamespace(effective_message=title_message), context))
     assert state == handler.SELECTING_NL_ATTACHMENT_EVENT
-    assert operation.parent_id == "c8" and "Что это за документ?" in title_message.reply_text.await_args.args[0]
+    assert operation.parent_id == "c16" and "Что это за документ?" in title_message.reply_text.await_args.args[0]
 
 
 def test_two_file_confirmation_has_one_save_boundary_and_is_idempotent(monkeypatch):

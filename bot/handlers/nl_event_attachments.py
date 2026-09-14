@@ -62,7 +62,7 @@ async def _show_candidates(message: Any, operation, *, intro: str) -> int:
 async def _show_resolution_fallback(message: Any, operation, *, owner: str, now: datetime) -> int:
     """Keep the operation intact while the user deterministically selects its parent."""
     candidates = upcoming_attachment_events(
-        storage.load(), owner=owner, now=now, timezone=BOT_TIMEZONE, limit=8,
+        storage.load(), owner=owner, now=now, timezone=BOT_TIMEZONE, limit=16,
     )
     operation.candidates = [
         {"id": candidate.item_id, "bucket": candidate.bucket, "item": candidate.item}
@@ -164,7 +164,7 @@ async def orphan_attachment_handler(update: Update, context: ContextTypes.DEFAUL
     if draft is None: return ConversationHandler.END
     now = zoned_now(BOT_TIMEZONE); profile = get_allowed_profile(update) or {}
     candidates = upcoming_attachment_events(storage.load(), owner=str(profile.get("wishlist_owner") or ""), now=now,
-                                            timezone=BOT_TIMEZONE, limit=8)
+                                            timezone=BOT_TIMEZONE, limit=16)
     operation = create_pending(context.user_data, actor_key=get_username(update), now=now, metadata={}, files=[draft])
     operation.candidates = [{"id": c.item_id, "bucket": c.bucket, "item": c.item} for c in candidates]
     text = "К какому событию прикрепить этот документ?" if candidates else "Не нашёл ближайших событий. Укажи название."
