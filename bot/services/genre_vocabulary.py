@@ -24,7 +24,8 @@ _RUSSIAN_ALIASES = {
     "боевик и приключения": "action_adventure", "детский": "kids",
     "новости": "news", "реалити-шоу": "reality",
     "нф и фэнтези": "science_fiction_fantasy", "мыльная опера": "soap",
-    "ток-шоу": "talk", "военный и политика": "war_politics",
+    "ток-шоу": "talk", "война и политика": "war_politics",
+    "военный и политика": "war_politics",
     "триллер": "thriller",
     "военный": "war", "вестерн": "western",
 }
