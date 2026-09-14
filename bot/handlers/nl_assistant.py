@@ -311,9 +311,11 @@ async def nl_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         text = message.text or message.caption or ""
         profile = get_allowed_profile(update) or {}
         actor_key = str(profile.get("wishlist_owner") or "")
-        session = get_context_session(storage.load(), actor_key, now)
+        snapshot = storage.load()
+        session = get_context_session(snapshot, actor_key, now)
         parsed = short_context_follow_up(text, session.domain) if session is not None else None
-        parsed = parsed or named_event_question(text)
+        parsed = parsed or named_event_question(
+            text, data=snapshot, actor_key=actor_key, now=now, timezone=BOT_TIMEZONE)
         if parsed is None:
             parsed = await _parser.parse(text, IntentContext(
                 actor_key=get_username(update), local_now=now, timezone=BOT_TIMEZONE,

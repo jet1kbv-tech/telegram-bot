@@ -1,4 +1,14 @@
+from datetime import datetime, timezone
+
 from bot.services.nl_deterministic_routing import named_event_question, short_context_follow_up
+
+
+NOW = datetime(2026, 9, 14, 12, tzinfo=timezone.utc)
+
+
+def parse_named(text, afisha):
+    data = {"calendars": {"vova": [], "sasha": []}, "afisha": afisha, "event_attachments": []}
+    return named_event_question(text, data=data, actor_key="vova", now=NOW, timezone="UTC")
 
 
 def test_production_event_and_trip_follow_up_forms_are_domain_bounded():
@@ -16,6 +26,22 @@ def test_named_event_questions_never_supply_an_invented_date():
         "Где ТЕСТ — Эрмитаж?": ("event_place", "ТЕСТ — Эрмитаж"),
     }
     for text, expected in cases.items():
-        parsed = named_event_question(text)
+        title = expected[1]
+        parsed = parse_named(text, [{
+            "id": text, "title": title, "date": "2026-09-20", "time": "12:00", "status": "active",
+        }])
         assert (parsed.arguments["query_type"], parsed.arguments["target"]) == expected
         assert parsed.arguments["date_expression"] is None
+
+
+def test_unmatched_general_questions_fall_through_to_provider():
+    assert parse_named("Когда Новый год?", []) is None
+    assert parse_named("Где ресторан Пушкин?", []) is None
+
+
+def test_ambiguous_named_event_falls_through_to_provider():
+    events = [
+        {"id": "one", "title": "Концерт", "date": "2026-09-20", "time": "12:00", "status": "active"},
+        {"id": "two", "title": "Концерт", "date": "2026-09-21", "time": "12:00", "status": "active"},
+    ]
+    assert parse_named("Когда концерт?", events) is None

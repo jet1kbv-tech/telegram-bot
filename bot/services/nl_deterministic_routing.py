@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from datetime import datetime
+from typing import Any
 
+from bot.services.context_queries import visible_event_match_count
 from bot.services.nl_intent import IntentKind, ParsedIntent
 
 
@@ -50,8 +53,9 @@ def short_context_follow_up(text: str, domain: str) -> ParsedIntent | None:
 _NAMED_EVENT = re.compile(r"^(когда|во сколько|где)\s+(.+?)\s*[?!.]*$", re.IGNORECASE)
 
 
-def named_event_question(text: str) -> ParsedIntent | None:
-    """Route self-contained named event questions without provider date defaults."""
+def named_event_question(text: str, *, data: dict[str, Any], actor_key: str,
+                         now: datetime, timezone: str) -> ParsedIntent | None:
+    """Route a named question only when its actor-visible event is unique."""
     match = _NAMED_EVENT.fullmatch(unicodedata.normalize("NFKC", text).strip())
     if match is None:
         return None
@@ -60,6 +64,9 @@ def named_event_question(text: str) -> ParsedIntent | None:
     normalized_target = _normalize_question(target)
     if (not target or normalized_target in {"обратно", "мы приезжаем", "приезжаем"}
             or normalized_target.startswith(("поезд ", "самолет ", "автобус "))):
+        return None
+    if visible_event_match_count(
+            data, actor_key=actor_key, target=target, now=now, timezone=timezone) != 1:
         return None
     query_type = {"когда": "event_date", "во сколько": "event_time", "где": "event_place"}[
         question.casefold().replace("ё", "е")

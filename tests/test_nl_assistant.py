@@ -221,6 +221,26 @@ def test_handler_two_turn_production_follow_ups_bypass_provider(
     assert expected.casefold() in follow.effective_message.waiting.edit_text.await_args.args[0].casefold()
 
 
+@pytest.mark.parametrize(("text", "events"), [
+    ("Когда Новый год?", []),
+    ("Где ресторан Пушкин?", []),
+    ("Когда концерт?", [
+        {"id": "one", "title": "Концерт", "date": "2026-09-20", "time": "12:00", "status": "active"},
+        {"id": "two", "title": "Концерт", "date": "2026-09-21", "time": "12:00", "status": "active"},
+    ]),
+])
+def test_unmatched_or_ambiguous_named_questions_call_provider(monkeypatch, tmp_path, text, events):
+    store = JsonStorage(tmp_path / "data.json")
+    data = store.default_data()
+    data["afisha"] = events
+    store.save(data)
+    monkeypatch.setattr(nl_assistant, "storage", store)
+    parser = FakeParser(ParsedIntent(IntentKind.NO_ACTION, {}))
+    nl_assistant._parser = parser
+    run(nl_assistant.nl_text_handler(update(text=text), context()))
+    assert [call[0] for call in parser.calls] == [text]
+
+
 def test_no_action_replaces_waiting_message_with_capabilities_and_menu():
     nl_assistant._parser = FakeParser(ParsedIntent(IntentKind.NO_ACTION, {}))
     upd = update(text="привет")
