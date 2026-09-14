@@ -34,6 +34,45 @@ async def test_read_only_recommendation_failure_retains_safe_retry(monkeypatch):
     assert context.user_data[recommendation_handler.SESSION_KEY]["constraints"] == constraints
 
 
+async def test_current_want_success_logs_only_structural_counts_and_keeps_ranking(monkeypatch, caplog):
+    caplog.set_level("INFO")
+    films = [
+        {"id": "internal-secret-22", "external_id": "external-secret-22", "title": "Private Want Title",
+         "status": "want", "media_type": "movie", "genres": ["Комедия"], "metadata_provider": "tmdb"},
+        {"id": "invalid-secret", "title": "", "status": "want"},
+        {"id": "watched", "title": "Watched Secret", "status": "watched", "media_type": "movie",
+         "genres": ["Драма"], "reactions": {"vova": "like"}},
+    ]
+    captured = {}
+    real_profiles_for_actor = recommendation_handler.profiles_for_actor
+
+    def capture_profiles(items, actor, *, include_want=True):
+        captured["include_want"] = include_want
+        return real_profiles_for_actor(items, actor, include_want=include_want)
+
+    class Response:
+        async def reply_text(self, text, **kwargs):
+            self.text = text
+
+    monkeypatch.setattr(recommendation_handler.storage, "load", lambda: {"films": films})
+    monkeypatch.setattr(recommendation_handler, "profiles_for_actor", capture_profiles)
+    context = SimpleNamespace(user_data={})
+    await recommendation_handler._run(SimpleNamespace(), context, "vova", "want",
+                                      RecommendationConstraints(limit=3), response=Response())
+
+    selected = context.user_data[recommendation_handler.SESSION_KEY]["scores"]
+    assert captured["include_want"] is False
+    assert [score.candidate.title for score in selected] == ["Private Want Title"]
+    diagnostics = [record.getMessage() for record in caplog.records if "outcome=success" in record.getMessage()]
+    assert len(diagnostics) == 1
+    diagnostic = diagnostics[0]
+    assert "source=want" in diagnostic and "actor_mode=vova" in diagnostic
+    assert all(value in diagnostic for value in ("want_pool_count=2", "candidate_count=1",
+                                                  "shown_count=0", "result_count=1"))
+    assert all(secret not in diagnostic for secret in
+               ("Private Want Title", "internal-secret-22", "external-secret-22", "invalid-secret"))
+
+
 async def test_recommendation_retry_callback_rechecks_authorization(monkeypatch):
     called = False
 

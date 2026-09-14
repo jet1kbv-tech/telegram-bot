@@ -66,8 +66,12 @@ class MovieRecommendationService:
         watched = [film for film in films if film.get("status") == "watched"]
         want = [film for film in films if film.get("status") == "want"]
         scores = rank_candidates(candidates, profiles, watched, want, constraints)
-        logger.info("recommendation discovery pools=%d raw=%d unique=%d unseen=%d shown=%d results=%d actor_mode=%s",
-                    len(pools), raw_count, len(unique), len(candidates), len(shown), len(scores), actor)
-        logger.info("recommendation profile reacted_count=%d want_interest_count=%d",
+        logger.info("recommendation operation=discovery outcome=success source=external actor_mode=%s "
+                    "pool_count=%d raw_candidate_count=%d unique_candidate_count=%d "
+                    "unseen_candidate_count=%d shown_count=%d result_count=%d",
+                    actor, len(pools), raw_count, len(unique), len(candidates), len(shown), len(scores))
+        logger.info("recommendation operation=profile source=external actor_mode=%s "
+                    "reacted_count=%d want_interest_count=%d",
+                    actor,
                     sum(p.reacted_count for p in profile_list), sum(p.want_interest_count for p in profile_list))
         return scores

@@ -24,10 +24,13 @@ class Provider:
                     external_rating=8, vote_count=1000, popularity=100) for identifier in ids]
 
 
-def test_broad_discovery_is_bounded_diversified_deduplicated_and_more_pages():
+def test_broad_discovery_is_bounded_diversified_deduplicated_and_more_pages(caplog):
+    caplog.set_level("INFO")
+
     async def run():
         provider = Provider()
-        films = [{"status": "watched", "genres": ["fantasy"], "media_type": "movie", "reactions": {"vova": "like"}},
+        films = [{"id": "internal-secret-91", "title": "Private Fixture Title", "status": "watched",
+                  "genres": ["fantasy"], "media_type": "movie", "reactions": {"vova": "like"}},
                  {"status": "want", "genres": ["comedy"], "media_type": "movie", "added_by": "Вова"}]
         service = MovieRecommendationService(provider)
         first = await service.recommend(films, actor="vova", constraints=RecommendationConstraints(limit=20))
@@ -39,6 +42,13 @@ def test_broad_discovery_is_bounded_diversified_deduplicated_and_more_pages():
                                        shown=identities, generation=1)
         assert identities.isdisjoint({(x.candidate.provider, x.candidate.media_type, x.candidate.external_id) for x in more})
         assert all(call[2]["start_page"] == 2 for call in provider.calls[-MAX_DISCOVERY_REQUESTS:])
+        diagnostics = [record.getMessage() for record in caplog.records if "outcome=success" in record.getMessage()]
+        assert diagnostics
+        assert all("source=external" in message and "actor_mode=vova" in message for message in diagnostics)
+        assert all(key in diagnostics[0] for key in ("pool_count=", "raw_candidate_count=", "unique_candidate_count=",
+                                                     "unseen_candidate_count=", "shown_count=", "result_count="))
+        assert all("Private Fixture Title" not in message and "internal-secret-91" not in message and
+                   "movie-1-shared" not in message for message in diagnostics)
     asyncio.run(run())
 
 

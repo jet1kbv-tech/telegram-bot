@@ -110,11 +110,21 @@ async def _run(update: Update, context: ContextTypes.DEFAULT_TYPE, actor: str, s
     context.user_data[SESSION_KEY] = retry_session
     try:
         if source == "want":
-            candidates = [c for f in films if f.get("status") == "want" if (c := stored_film_to_candidate(f))]
+            want_pool = [film for film in films if film.get("status") == "want"]
+            candidates = [candidate for film in want_pool if (candidate := stored_film_to_candidate(film))]
             local = RecommendationConstraints(**{**asdict(constraints), "exclude_want": False, "min_vote_count": 0})
             # Current Want candidates do not boost themselves: this mode uses
             # explicit watched reactions only.
-            scores = rank_candidates(candidates, profiles_for_actor(films, actor, include_want=False), (), (), local)
+            profiles = profiles_for_actor(films, actor, include_want=False)
+            scores = rank_candidates(candidates, profiles, (), (), local)
+            profile_list = profiles if isinstance(profiles, tuple) else (profiles,)
+            logger.info("recommendation operation=ranking outcome=success source=want actor_mode=%s "
+                        "want_pool_count=%d candidate_count=%d shown_count=%d result_count=%d",
+                        actor, len(want_pool), len(candidates), len(shown or ()), len(scores))
+            logger.info("recommendation operation=profile source=want actor_mode=%s "
+                        "reacted_count=%d want_interest_count=%d",
+                        actor, sum(profile.reacted_count for profile in profile_list),
+                        sum(profile.want_interest_count for profile in profile_list))
         else:
             if _service is None: raise RecommendationUnavailable()
             scores = await _service.recommend(films, actor=actor, constraints=constraints,
