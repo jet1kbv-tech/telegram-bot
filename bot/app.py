@@ -345,6 +345,12 @@ def build_app() -> Application:
             MessageHandler(filters.TEXT & ~filters.COMMAND, handler),
         ]
 
+    def afisha_text_state(handler):
+        return [
+            MessageHandler(filters.Regex(rf"^{MAIN_MENU_TEXT}$"), quick_return_to_main_menu),
+            MessageHandler(filters.TEXT & ~filters.COMMAND, handler),
+        ]
+
     async def ticket_enrichment_home(update, context):
         discard_ticket_enrichment(context)
         return await back_to_main(update, context)
@@ -527,13 +533,13 @@ def build_app() -> Application:
                 CallbackQueryHandler(attachment_query_callback_router, pattern=r"^nlar:"),
                 CallbackQueryHandler(attachment_mutation_callback_router, pattern=r"^nlam:"),
             ],
-            ADDING_EVENT_TITLE: text_state(add_event_title),
-            ADDING_EVENT_PLACE: text_state(add_event_place),
-            ADDING_EVENT_DATE: text_state(add_event_date),
-            ADDING_EVENT_TIME: text_state(add_event_time),
-            ADDING_EVENT_END_DATE: text_state(add_event_end_date),
-            ADDING_EVENT_END_TIME: text_state(add_event_end_time),
-            ADDING_EVENT_LINK: text_state(add_event_link),
+            ADDING_EVENT_TITLE: afisha_text_state(add_event_title),
+            ADDING_EVENT_PLACE: afisha_text_state(add_event_place),
+            ADDING_EVENT_DATE: afisha_text_state(add_event_date),
+            ADDING_EVENT_TIME: afisha_text_state(add_event_time),
+            ADDING_EVENT_END_DATE: afisha_text_state(add_event_end_date),
+            ADDING_EVENT_END_TIME: afisha_text_state(add_event_end_time),
+            ADDING_EVENT_LINK: afisha_text_state(add_event_link),
             EDITING_AFISHA_DATE: text_state(edit_afisha_date),
             EDITING_AFISHA_TIME: text_state(edit_afisha_time),
             PLACE_ADD_NAME: text_state(add_place_name),

@@ -8,6 +8,7 @@ from bot.handlers import afisha
 from bot.runtime import notify_other_user_about_afisha_item
 from bot.services.actions import afisha as afisha_actions
 from bot.storage import JsonStorage
+from bot.utils import normalize_entity_title
 
 
 def _update(username: str, text: str = "-") -> SimpleNamespace:
@@ -47,6 +48,31 @@ def store(monkeypatch: pytest.MonkeyPatch, tmp_path):
     monkeypatch.setattr(afisha, "_item_keyboard", lambda *args, **kwargs: None)
     monkeypatch.setattr(afisha, "_notify_other_user_about_afisha_item", notify_other_user_about_afisha_item)
     return value
+
+
+@pytest.mark.parametrize("text", ["Москва", "Меню", "Города", "ул. Льва Толстого, 16"])
+async def test_manual_afisha_title_accepts_quick_command_words(store, text):
+    context = _context()
+
+    state = await afisha.add_event_title(_update("wp_bvv", text), context)
+
+    assert state == afisha.ADDING_EVENT_PLACE
+    assert context.user_data["event_title"] == normalize_entity_title(text)
+
+
+@pytest.mark.parametrize("text", ["Москва", "Меню", "Города", "ул. Льва Толстого, 16"])
+async def test_manual_afisha_place_preserves_draft_and_prompts_for_date(store, text):
+    context = _context({"event_title": "Тест"})
+    update = _update("wp_bvv", text)
+
+    state = await afisha.add_event_place(update, context)
+
+    assert state == afisha.ADDING_EVENT_DATE
+    assert context.user_data["event_title"] == "Тест"
+    assert context.user_data["event_place"] == text
+    update.message.reply_text.assert_awaited_once_with(
+        "Теперь отправь дату в формате ГГГГ-ММ-ДД, например 2026-04-05"
+    )
 
 
 @pytest.mark.parametrize(("username", "recipient", "creator"), [
