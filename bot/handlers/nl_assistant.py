@@ -32,6 +32,8 @@ from bot.handlers.nl_attachment_mutations import begin_attachment_mutation
 from bot.services.nl_query_contexts import create_query_context, get_query_context
 from bot.services.queries import choose_random, next_event, query_afisha, query_calendar, query_films, query_purchases
 from bot.services.context_queries import execute_context_query
+from bot.services.context_sessions import get_context_session
+from bot.services.nl_deterministic_routing import named_event_question, short_context_follow_up
 from bot.services.weather import WeatherError, WeatherProvider
 from bot.services.weather_context import query_weather_context
 from bot.services.trip_briefing import render_weather_enrichment
@@ -306,10 +308,17 @@ async def nl_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     response = _WaitingResponse(message, waiting)
     now = zoned_now(BOT_TIMEZONE)
     try:
-        parsed = await _parser.parse(message.text or message.caption or "", IntentContext(
-            actor_key=get_username(update), local_now=now, timezone=BOT_TIMEZONE,
-            active_section=context.user_data.get("active_section"),
-        ))
+        text = message.text or message.caption or ""
+        profile = get_allowed_profile(update) or {}
+        actor_key = str(profile.get("wishlist_owner") or "")
+        session = get_context_session(storage.load(), actor_key, now)
+        parsed = short_context_follow_up(text, session.domain) if session is not None else None
+        parsed = parsed or named_event_question(text)
+        if parsed is None:
+            parsed = await _parser.parse(text, IntentContext(
+                actor_key=get_username(update), local_now=now, timezone=BOT_TIMEZONE,
+                active_section=context.user_data.get("active_section"),
+            ))
         if extract_attachment_draft(message) is not None and parsed.intent is not IntentKind.ATTACH_EVENT_FILE:
             # A command-looking caption is parsed once. If it is not the
             # attachment mutation, retain the physical file in the deterministic

@@ -36,6 +36,15 @@ def resolve_entities(data: dict[str, Any], kind: IntentKind, target: str, *, own
                      include_past: bool = False, target_date: str | None = None, now: datetime | None = None,
                      timezone: str = "Europe/Moscow") -> list[EntityCandidate]:
     needle = normalize_for_match(target)
+    event_mutation = kind in {
+        IntentKind.UPDATE_CALENDAR_EVENT, IntentKind.DELETE_CALENDAR_EVENT,
+        IntentKind.UPDATE_AFISHA_EVENT, IntentKind.DELETE_AFISHA_EVENT,
+    }
+    # A deliberately narrow parser-extraction repair for the common accusative
+    # event noun; this is not a general morphology/fuzzy matching layer.
+    match_needles = (needle,)
+    if event_mutation and needle.startswith("встречу "):
+        match_needles += ("встреча " + needle[len("встречу "):],)
     candidates: list[EntityCandidate] = []
     if kind in {IntentKind.UPDATE_PURCHASE, IntentKind.DELETE_PURCHASE}:
         sources = [(bucket, data.get("purchases", {}).get(bucket, [])) for bucket in ("planned", "bought")]
@@ -51,8 +60,10 @@ def resolve_entities(data: dict[str, Any], kind: IntentKind, target: str, *, own
             if kind in {IntentKind.UPDATE_CALENDAR_EVENT, IntentKind.DELETE_CALENDAR_EVENT} and item.get("source") == "afisha":
                 source_id = str(item.get("source_id") or "")
                 canonical = next((row for row in data.get("afisha", []) if str(row.get("id")) == source_id), None)
-                if (canonical and normalize_for_match(str(canonical.get("title") or "")) == needle
-                        and (not target_date or canonical.get("date") == target_date)):
+                canonical_title = normalize_for_match(str((canonical or {}).get("title") or ""))
+                if (canonical and canonical.get("status") == "active"
+                        and (not target_date or canonical.get("date") == target_date)
+                        and any(key == canonical_title or key in canonical_title for key in match_needles)):
                     if not any(row.item_id == source_id and row.bucket == "afisha" for row in candidates):
                         candidates.append(EntityCandidate(source_id, "afisha", dict(canonical)))
                 continue
@@ -61,9 +72,19 @@ def resolve_entities(data: dict[str, Any], kind: IntentKind, target: str, *, own
             if kind in {IntentKind.UPDATE_CALENDAR_EVENT, IntentKind.DELETE_CALENDAR_EVENT} and not include_past:
                 if _calendar_event_is_past(item, now=now, timezone=timezone):
                     continue
+            if (kind in {IntentKind.UPDATE_AFISHA_EVENT, IntentKind.DELETE_AFISHA_EVENT}
+                    and item.get("status") != "active"):
+                continue
             if (not target_date or item.get("date") == target_date) and any(
-                    normalize_for_match(str(item.get(field) or "")) == needle for field in title_fields):
+                    any(key == normalize_for_match(str(item.get(field) or "")) or
+                        (event_mutation and key in normalize_for_match(str(item.get(field) or "")))
+                        for key in match_needles) for field in title_fields):
                 candidates.append(EntityCandidate(str(item.get("id") or ""), bucket, dict(item)))
+    if event_mutation:
+        exact = [candidate for candidate in candidates if any(
+            key == normalize_for_match(str(candidate.item.get("title") or "")) for key in match_needles)]
+        if exact:
+            candidates = exact
     if kind in {IntentKind.UPDATE_CALENDAR_EVENT, IntentKind.DELETE_CALENDAR_EVENT}:
         candidates.sort(key=lambda candidate: _calendar_sort_key(candidate.item))
     return candidates
