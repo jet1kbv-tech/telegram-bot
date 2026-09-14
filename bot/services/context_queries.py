@@ -46,6 +46,7 @@ class ContextQueryResult:
     event: EventContext | None = None
     briefing: TripBriefing | None = None
     upcoming_brief: UpcomingBrief | None = None
+    attachment_ids: tuple[str, ...] = ()
 
     @property
     def subject(self) -> tuple[str, str] | None:
@@ -82,7 +83,8 @@ def execute_context_query(data: dict[str, Any], *, actor_key: str, now: datetime
         return _follow_up_clarification(arguments["query_type"])
     answer = query_context(data, actor_key=actor_key, now=now, timezone=timezone,
                            query_type=compatible, context_id=session.context_id,
-                           context_domain=session.domain)
+                           context_domain=session.domain,
+                           semantic_type=arguments.get("semantic_type"))
     if answer.candidate_count == 0:
         clear_context_session(data, actor_key)
         return ContextQueryResult(
@@ -162,9 +164,16 @@ def _document_label(document: DocumentContext) -> str:
         document.semantic_type, "документ")
 
 
+def _attachment_ids(documents: tuple[DocumentContext, ...]) -> tuple[str, ...]:
+    """Return non-empty canonical identities once, preserving projection order."""
+    return tuple(dict.fromkeys(document.attachment_id for document in documents
+                               if document.attachment_id))
+
+
 def _event_query(bundle: ContextBundle, query_type: str, target: str | None,
                  date_expression: str | None, now: datetime, timezone: str,
-                 context_id: str | None = None) -> ContextQueryResult:
+                 context_id: str | None = None,
+                 semantic_type: str | None = None) -> ContextQueryResult:
     if query_type == "events":
         if not date_expression:
             return ContextQueryResult("missing", "Уточни дату или период.", 0)
@@ -210,9 +219,13 @@ def _event_query(bundle: ContextBundle, query_type: str, target: str | None,
         text = f"{title} — {event.location_text}." if event.location_text else f"{title} нашёл, но место для него не указано."
         return ContextQueryResult("found" if event.location_text else "missing", text, 1, event=event)
     documents = documents_for_context(bundle, event)
+    if semantic_type is not None:
+        documents = tuple(document for document in documents
+                          if document.semantic_type == semantic_type)
     if not documents:
         return ContextQueryResult("missing", f"К событию «{title}» документов не прикреплено.", 1, event=event)
-    return ContextQueryResult("found", "\n".join([f"📎 К событию «{title}» прикреплено:", *[f"• {_document_label(row)}" for row in documents]]), 1, event=event)
+    return ContextQueryResult("found", "\n".join([f"📎 К событию «{title}» прикреплено:", *[f"• {_document_label(row)}" for row in documents]]), 1, event=event,
+                              attachment_ids=_attachment_ids(documents))
 
 
 def _ticket(bundle: ContextBundle, trip: TripContext, direction: str) -> DocumentContext | None:
@@ -350,7 +363,7 @@ def query_context(data: dict[str, Any], *, actor_key: str, now: datetime, timezo
                             now=now, timezone=timezone)
     if event_query:
         return _event_query(bundle, query_type, target, date_expression, now, timezone,
-                            context_id if context_domain == "event" else None)
+                            context_id if context_domain == "event" else None, semantic_type)
     trips = (tuple(trip for trip in bundle.trips if trip.context_id == context_id)
              if context_domain == "trip" and context_id else
              find_trip_by_destination(bundle, destination) if destination else find_trip_contexts(bundle))
@@ -377,6 +390,9 @@ def query_context(data: dict[str, Any], *, actor_key: str, now: datetime, timezo
     outbound = _ticket(bundle, trip, "outbound")
     returning = _ticket(bundle, trip, "return")
     documents = trip_documents(bundle, trip)
+    if semantic_type is not None:
+        documents = tuple(document for document in documents
+                          if document.semantic_type == semantic_type)
     if query_type == "departure":
         if not outbound:
             return ContextQueryResult("missing", "Поездку нашёл, но отправление не удалось определить однозначно.", 1, trip)
@@ -408,7 +424,7 @@ def query_context(data: dict[str, Any], *, actor_key: str, now: datetime, timezo
         return ContextQueryResult("found", "\n".join([
             f"📎 К поездке в {trip.city_hint or trip.destination} прикреплено:",
             *[f"• {_document_label(row)}" for row in documents],
-        ]), 1, trip)
+        ]), 1, trip, attachment_ids=_attachment_ids(documents))
     if query_type == "origin":
         return ContextQueryResult("found", trip.origin, 1, trip) if trip.origin else ContextQueryResult(
             "missing", "Поездку нашёл, но место отправления не указано.", 1, trip)

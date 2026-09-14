@@ -12,6 +12,7 @@ from bot.config import AI_MAX_CLARIFICATIONS, AI_PROPOSAL_TTL_SECONDS, BOT_TIMEZ
 from bot.handlers.afisha import build_afisha_item_text
 from bot.handlers.calendar import build_calendar_event_text
 from bot.handlers.event_attachments import extract_attachment_draft
+from bot.handlers.attachment_delivery import deliver_event_attachments
 from bot.handlers.contextual_actions import trip_callback
 from bot.handlers.films import begin_film_search
 from bot.handlers.film_recommendations import start_from_nl
@@ -381,6 +382,14 @@ async def nl_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             else:
                 markup = _menu_keyboard()
             await response.reply_text(text, reply_markup=markup)
+            if result.attachment_ids:
+                delivery = await deliver_event_attachments(
+                    bot=context.bot, chat_id=update.effective_chat.id,
+                    actor_key=actor_key, attachment_ids=result.attachment_ids,
+                    load_data=storage.load,
+                )
+                if delivery.failed:
+                    await message.reply_text("Не удалось отправить часть документов.")
             return _idle_state(context)
         if parsed.intent is IntentKind.QUERY_WEATHER_CONTEXT:
             if _weather_provider is None:

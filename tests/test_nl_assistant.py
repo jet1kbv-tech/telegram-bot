@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from bot.handlers import nl_assistant
+from bot.handlers.attachment_delivery import AttachmentDeliveryResult
 from bot.services.nl_intent import IntentKind, IntentParserInvalidOutput, IntentParserTimeout, IntentParserUnavailable, ParsedIntent
 from bot.states import ADDING_CALENDAR_EVENT_TITLE, ADDING_EVENT_TITLE, ADDING_PURCHASE_TITLE, AI_CLARIFYING, MENU, SECTION, SELECTING_FILM_METADATA
 from bot.storage import JsonStorage
@@ -55,7 +56,8 @@ def file_update(*, caption):
 
 
 def context():
-    return SimpleNamespace(user_data={}, bot=SimpleNamespace(send_chat_action=AsyncMock()))
+    return SimpleNamespace(user_data={}, bot=SimpleNamespace(
+        send_chat_action=AsyncMock(), send_document=AsyncMock(), send_photo=AsyncMock()))
 
 
 @pytest.fixture(autouse=True)
@@ -219,6 +221,45 @@ def test_handler_two_turn_production_follow_ups_bypass_provider(
     # provider. In both cases the bounded second turn never calls it.
     assert len(parser.calls) == (1 if first_intent.arguments["query_type"] == "departure" else 0)
     assert expected.casefold() in follow.effective_message.waiting.edit_text.await_args.args[0].casefold()
+    if follow_text == "А билеты?":
+        assert [call.kwargs["document"] for call in ctx.bot.send_document.await_args_list] == [
+            "back-file", "out-file"]
+    elif follow_text == "А документы?":
+        ctx.bot.send_document.assert_awaited_once_with(chat_id=1, document="museum-file")
+
+
+def test_context_summary_precedes_delivery_and_reports_one_batch_failure(monkeypatch, tmp_path):
+    store = JsonStorage(tmp_path / "data.json")
+    data = store.default_data()
+    data["afisha"] = [{
+        "id": "museum", "title": "Эрмитаж", "date": "2099-09-20",
+        "time": "12:00", "status": "active",
+    }]
+    data["event_attachments"] = [{
+        "id": "reservation", "parent_type": "afisha", "parent_event_id": "museum",
+        "semantic_type": "reservation", "telegram_file_id": "reservation-file",
+        "telegram_media_type": "document",
+    }]
+    store.save(data)
+    monkeypatch.setattr(nl_assistant, "storage", store)
+    nl_assistant._parser = FakeParser(ParsedIntent(IntentKind.QUERY_CONTEXT, {
+        "query_type": "event_documents", "destination": None, "transport_type": None,
+        "target": "Эрмитаж", "date_expression": None, "person": None,
+        "semantic_type": None, "follow_up": False,
+    }))
+    events = []
+    deliver = AsyncMock(side_effect=lambda **kwargs: events.append("files") or
+                        AttachmentDeliveryResult(0, 1))
+    monkeypatch.setattr(nl_assistant, "deliver_event_attachments", deliver)
+    upd, ctx = update(text="Какие документы у Эрмитажа?"), context()
+    upd.effective_message.waiting.edit_text.side_effect = lambda *args, **kwargs: events.append("text")
+
+    run(nl_assistant.nl_text_handler(upd, ctx))
+
+    assert events == ["text", "files"]
+    deliver.assert_awaited_once()
+    assert [call.args[0] for call in upd.effective_message.reply_text.await_args_list].count(
+        "Не удалось отправить часть документов.") == 1
 
 
 def test_typed_event_document_query_bypasses_provider_and_uses_context_query(monkeypatch, tmp_path):

@@ -19,22 +19,24 @@ def _normalize_question(text: str) -> str:
 
 _FOLLOW_UPS = {
     "event": {
-        "а где": "event_place", "где": "event_place",
-        "а когда": "event_date", "когда": "event_date",
-        "а во сколько": "event_time", "во сколько": "event_time",
-        "а документы": "documents", "документы": "documents",
-        "а билеты": "documents", "билеты": "documents",
+        "а где": ("event_place", None), "где": ("event_place", None),
+        "а когда": ("event_date", None), "когда": ("event_date", None),
+        "а во сколько": ("event_time", None), "во сколько": ("event_time", None),
+        "а документы": ("documents", None), "документы": ("documents", None),
+        "а билеты": ("documents", "transport_ticket"),
+        "билеты": ("documents", "transport_ticket"),
     },
     "trip": {
-        "а обратно": "return", "обратно": "return",
-        "а когда обратно": "return", "когда обратно": "return",
-        "а во сколько обратно": "return", "во сколько обратно": "return",
-        "а во сколько приезжаем": "arrival", "во сколько приезжаем": "arrival",
-        "а билеты": "documents", "билеты": "documents",
-        "а документы": "documents", "документы": "documents",
-        "а откуда": "origin", "откуда": "origin",
-        "а куда": "destination", "куда": "destination",
-        "а во сколько": "event_time", "во сколько": "event_time",
+        "а обратно": ("return", None), "обратно": ("return", None),
+        "а когда обратно": ("return", None), "когда обратно": ("return", None),
+        "а во сколько обратно": ("return", None), "во сколько обратно": ("return", None),
+        "а во сколько приезжаем": ("arrival", None), "во сколько приезжаем": ("arrival", None),
+        "а билеты": ("documents", "transport_ticket"),
+        "билеты": ("documents", "transport_ticket"),
+        "а документы": ("documents", None), "документы": ("documents", None),
+        "а откуда": ("origin", None), "откуда": ("origin", None),
+        "а куда": ("destination", None), "куда": ("destination", None),
+        "а во сколько": ("event_time", None), "во сколько": ("event_time", None),
     },
 }
 
@@ -67,13 +69,14 @@ def typed_event_document_query(text: str) -> ParsedIntent | None:
 
 def short_context_follow_up(text: str, domain: str) -> ParsedIntent | None:
     """Recognize only allow-listed phrases compatible with the active subject."""
-    query_type = _FOLLOW_UPS.get(domain, {}).get(_normalize_question(text))
-    if query_type is None:
+    semantics = _FOLLOW_UPS.get(domain, {}).get(_normalize_question(text))
+    if semantics is None:
         return None
+    query_type, semantic_type = semantics
     return ParsedIntent(IntentKind.QUERY_CONTEXT, {
         "query_type": query_type, "destination": None, "transport_type": None,
         "target": None, "date_expression": None, "person": None,
-        "semantic_type": None, "follow_up": True,
+        "semantic_type": semantic_type, "follow_up": True,
     })
 
 

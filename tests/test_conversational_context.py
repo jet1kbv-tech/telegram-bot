@@ -49,6 +49,27 @@ def test_event_session_follow_ups_and_missing_field_still_establishes_subject():
     assert "документ" in documents and "SECRET" not in documents and "event-ticket" not in documents
 
 
+def test_event_document_follow_up_returns_canonical_attachment_ids():
+    data = snapshot()
+    ask(data, query_type="event_time", target="концерт")
+    result = ask(data, follow_up=True, query_type="documents")
+    assert result.attachment_ids == ("event-ticket",)
+
+
+def test_trip_ticket_follow_up_preserves_canonical_semantic_filter():
+    data = snapshot()
+    data["event_attachments"].append({
+        "id": "insurance", "parent_type": "afisha", "parent_event_id": "trip",
+        "semantic_type": "insurance", "telegram_file_id": "insurance-file",
+        "telegram_media_type": "document",
+    })
+    ask(data, query_type="departure", destination="Санкт-Петербург")
+    result = ask(data, follow_up=True, query_type="documents",
+                 semantic_type="transport_ticket")
+    assert result.attachment_ids == ("back", "out")
+    assert "страховка" not in result.text
+
+
 @pytest.mark.parametrize(("query_type", "expected"), [
     ("return", "18:30"), ("arrival", "12:30"), ("documents", "билет на поезд"),
     ("origin", "Москва"), ("destination", "Санкт-Петербург"), ("event_time", "08:40"),
