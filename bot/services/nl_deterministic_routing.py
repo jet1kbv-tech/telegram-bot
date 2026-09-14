@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from bot.services.context_queries import visible_event_match_count
+from bot.services.nl_entity_resolution import resolve_entities
 from bot.services.nl_intent import IntentKind, ParsedIntent
 
 
@@ -47,6 +48,29 @@ def short_context_follow_up(text: str, domain: str) -> ParsedIntent | None:
         "query_type": query_type, "destination": None, "transport_type": None,
         "target": None, "date_expression": None, "person": None,
         "semantic_type": None, "follow_up": True,
+    })
+
+
+_DELETE_CALENDAR_EVENT = re.compile(r"^удали\s+(.+?)\s*$", re.IGNORECASE)
+
+
+def delete_calendar_event_command(text: str, *, data: dict[str, Any], actor_key: str,
+                                  now: datetime, timezone: str) -> ParsedIntent | None:
+    """Route a bounded delete only when the existing resolver finds one event."""
+    match = _DELETE_CALENDAR_EVENT.fullmatch(unicodedata.normalize("NFKC", text).strip())
+    if match is None:
+        return None
+    target = match.group(1).strip()
+    if not target:
+        return None
+    candidates = resolve_entities(
+        data, IntentKind.DELETE_CALENDAR_EVENT, target, owner=actor_key,
+        include_past=False, now=now, timezone=timezone,
+    )
+    if len(candidates) != 1:
+        return None
+    return ParsedIntent(IntentKind.DELETE_CALENDAR_EVENT, {
+        "target": target, "date_expression": None,
     })
 
 
