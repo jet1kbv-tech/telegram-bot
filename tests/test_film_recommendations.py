@@ -87,6 +87,146 @@ def test_joint_cases_are_deterministic_and_cold_actor_does_not_invent_signal():
     assert dict(score.actor_scores)["sasha"] == 0
 
 
+def test_joint_positive_alignment_and_neutral_are_distinct_from_dislike():
+    both_like = profiles_for_actor(
+        [film("like", actor="vova"), film("like", actor="sasha")], "both"
+    )
+    like_neutral = profiles_for_actor(
+        [film("like", actor="vova"), film("neutral", actor="sasha")], "both"
+    )
+    liked = candidate("liked")
+    unrelated = candidate("unrelated", genres=("Драма",))
+
+    aligned = rank_candidates([unrelated, liked], both_like, constraints=Constraints(limit=2))
+    neutral = rank_candidates([liked], like_neutral)[0]
+
+    assert aligned[0].candidate == liked
+    assert all(value > 0 for _, value in aligned[0].actor_scores)
+    assert "one-person negative-fit penalty" not in aligned[0].penalties
+    assert aligned[0].taste_score > neutral.taste_score > 0
+    assert dict(neutral.actor_scores)["sasha"] == 0
+    assert "one-person negative-fit penalty" not in neutral.penalties
+
+
+def test_joint_explicit_dislike_beats_other_actors_weak_want():
+    items = [
+        film(None, status="want", added_by="Вова", genres=["Комедия"]),
+        film("dislike", actor="sasha", genres=["Комедия"]),
+    ]
+
+    score = rank_candidates([candidate()], profiles_for_actor(items, "both"))[0]
+
+    assert dict(score.actor_scores)["vova"] > 0 > dict(score.actor_scores)["sasha"]
+    assert score.taste_score < 0
+    assert "joint disagreement penalty" in score.penalties
+    assert "one-person negative-fit penalty" in score.penalties
+
+
+def test_joint_shared_want_is_positive_but_weaker_than_shared_explicit_likes():
+    wants = [
+        film(None, status="want", added_by="Вова", genres=["Комедия"]),
+        film(None, status="want", added_by="Саша", genres=["Комедия"]),
+    ]
+    likes = [film("like", actor="vova"), film("like", actor="sasha")]
+
+    wanted = rank_candidates([candidate()], profiles_for_actor(wants, "both"))[0]
+    liked = rank_candidates([candidate()], profiles_for_actor(likes, "both"))[0]
+
+    assert all(value > 0 for _, value in wanted.actor_scores)
+    assert 0 < wanted.taste_score < liked.taste_score
+
+
+def test_joint_different_tastes_reward_a_candidate_that_matches_both():
+    profiles = profiles_for_actor(
+        [
+            film("like", actor="vova", genres=["Комедия"]),
+            film("like", actor="sasha", genres=["Драма"]),
+        ],
+        "both",
+    )
+    comedy = candidate("comedy", genres=("Комедия",))
+    drama = candidate("drama", genres=("Драма",))
+    compromise = candidate("compromise", genres=("Комедия", "Драма"))
+
+    ranked = rank_candidates(
+        [comedy, drama, compromise], profiles, constraints=Constraints(limit=3)
+    )
+
+    assert ranked[0].candidate == compromise
+    assert ranked[0].taste_score > next(
+        score.taste_score for score in ranked if score.candidate == comedy
+    )
+    assert ranked[0].taste_score > next(
+        score.taste_score for score in ranked if score.candidate == drama
+    )
+
+
+def test_joint_rich_and_cold_profiles_use_only_real_evidence():
+    profiles = profiles_for_actor(
+        [film("like", actor="vova"), film("like", actor="vova")], "both"
+    )
+    matching = candidate("matching")
+    unrelated = candidate("unrelated", genres=("Драма",))
+
+    ranked = rank_candidates(
+        [unrelated, matching], profiles, constraints=Constraints(limit=2)
+    )
+
+    assert ranked[0].candidate == matching
+    assert dict(ranked[0].actor_scores)["sasha"] == 0
+    assert "joint disagreement penalty" not in ranked[0].penalties
+
+
+def test_mixed_explicit_genres_keep_negative_evidence_visible_and_deterministic():
+    profile = profiles_for_actor(
+        [
+            film("like", actor="vova", genres=["Комедия"]),
+            film("dislike", actor="vova", genres=["Ужасы"]),
+        ],
+        "vova",
+    )
+    mixed = candidate("mixed", genres=("Комедия", "Ужасы"))
+
+    first = rank_candidates([mixed], profile)[0]
+    second = rank_candidates([mixed], profile)[0]
+
+    assert first.taste_score == second.taste_score == 0
+    assert any("отрицательный сигнал" in reason for reason in first.explanation_reasons)
+
+
+def test_joint_ranking_is_input_order_invariant_and_actor_symmetric():
+    histories = [
+        film("like", actor="vova", genres=["Комедия"]),
+        film("dislike", actor="sasha", genres=["Ужасы"]),
+    ]
+    swapped = [
+        film("like", actor="sasha", genres=["Комедия"]),
+        film("dislike", actor="vova", genres=["Ужасы"]),
+    ]
+    values = [
+        candidate("comedy", title="Comedy", genres=("Комедия",)),
+        candidate("horror", title="Horror", genres=("Ужасы",)),
+        candidate("mixed", title="Mixed", genres=("Комедия", "Ужасы")),
+    ]
+
+    forward = rank_candidates(
+        values, profiles_for_actor(histories, "both"), constraints=Constraints(limit=3)
+    )
+    reverse = rank_candidates(
+        reversed(values), profiles_for_actor(histories, "both"), constraints=Constraints(limit=3)
+    )
+    symmetric = rank_candidates(
+        values, profiles_for_actor(swapped, "both"), constraints=Constraints(limit=3)
+    )
+
+    assert [score.candidate.external_id for score in forward] == [
+        score.candidate.external_id for score in reverse
+    ]
+    assert [(score.total, score.taste_score) for score in forward] == [
+        (score.total, score.taste_score) for score in symmetric
+    ]
+
+
 def test_diversity_promotes_close_different_primary_genre():
     profile = build_film_preference_profile([], "vova")
     values = [candidate(str(i), genres=("Комедия",), popularity=100-i) for i in range(5)]
