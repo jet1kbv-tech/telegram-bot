@@ -52,6 +52,9 @@ from bot.handlers.calendar import (
 )
 from bot.handlers.common import back_to_main, cancel, configure_common_handlers, noop, quick_return_to_main_menu, start, whoami
 from bot.handlers.upcoming import configure_upcoming_handlers, upcoming_callback
+from bot.handlers.important_dates import (birthday_callback, birthday_date_input,
+    birthday_import_file, birthday_title_input, birthday_year_callback,
+    birthday_year_input, configure_important_dates_handlers)
 from bot.handlers.films import (
     add_film_comment,
     add_film_title,
@@ -160,6 +163,10 @@ from bot.states import (
     CONFIRMING_TICKET_ENRICHMENT,
     SELECTING_NL_ATTACHMENT_QUERY,
     WAITING_FOR_AI_TRANSCRIPTION,
+    BIRTHDAY_TITLE,
+    BIRTHDAY_DATE,
+    BIRTHDAY_YEAR,
+    BIRTHDAY_IMPORT_FILE,
     WAITING_FOR_NL_ATTACHMENTS,
     SELECTING_NL_ATTACHMENT_EVENT,
     CONFIRMING_NL_ATTACHMENT,
@@ -232,6 +239,7 @@ def build_app() -> Application:
     app = Application.builder().token(token).build()
     configure_common_handlers(main_menu_keyboard=main_menu_keyboard, safe_edit_message=safe_edit_message)
     configure_upcoming_handlers(safe_edit_message=safe_edit_message)
+    configure_important_dates_handlers(safe_edit_message=safe_edit_message)
     configure_backlog_handlers(build_item_text=build_item_text, item_keyboard=item_keyboard)
     tmdb_token = os.getenv("TMDB_API_READ_ACCESS_TOKEN", "").strip()
     metadata_provider = TmdbMovieMetadataProvider(tmdb_token) if tmdb_token else None
@@ -371,6 +379,7 @@ def build_app() -> Application:
                 CallbackQueryHandler(film_recommendation_callback_router, pattern=r"^filmrec:"),
                 CallbackQueryHandler(back_to_main, pattern=r"^(main|menu:main)$"),
                 CallbackQueryHandler(upcoming_callback, pattern=r"^upcoming:(?:today|7|30)$"),
+                CallbackQueryHandler(birthday_callback, pattern=r"^birthday:"),
                 CallbackQueryHandler(ai_callback, pattern=r"^aif:"),
                 CallbackQueryHandler(menu_router, pattern=r"^menu\|(films|wishlist|leisure|afisha|backlog)$"),
                 CallbackQueryHandler(places_callback_router, pattern=r"^places:"),
@@ -393,6 +402,7 @@ def build_app() -> Application:
                 CallbackQueryHandler(film_filter_callback_router, pattern=r"^filmfilter:"),
                 CallbackQueryHandler(back_to_main, pattern=r"^(main|menu:main)$"),
                 CallbackQueryHandler(upcoming_callback, pattern=r"^upcoming:(?:today|7|30)$"),
+                CallbackQueryHandler(birthday_callback, pattern=r"^birthday:"),
                 CallbackQueryHandler(ai_callback, pattern=r"^aif:"),
                 CallbackQueryHandler(menu_router, pattern=r"^menu\|(films|wishlist|leisure|afisha|backlog)$"),
                 CallbackQueryHandler(places_callback_router, pattern=r"^places:"),
@@ -419,6 +429,16 @@ def build_app() -> Application:
                                receive_media),
                 MessageHandler(filters.ALL, receive_media),
             ],
+            BIRTHDAY_TITLE: [CallbackQueryHandler(birthday_callback, pattern=r"^birthday:"),
+                             MessageHandler(filters.TEXT & ~filters.COMMAND, birthday_title_input)],
+            BIRTHDAY_DATE: [CallbackQueryHandler(birthday_callback, pattern=r"^birthday:"),
+                            MessageHandler(filters.TEXT & ~filters.COMMAND, birthday_date_input)],
+            BIRTHDAY_YEAR: [CallbackQueryHandler(birthday_year_callback, pattern=r"^birthday:skip_year$"),
+                            CallbackQueryHandler(birthday_callback, pattern=r"^birthday:"),
+                            MessageHandler(filters.TEXT & ~filters.COMMAND, birthday_year_input)],
+            BIRTHDAY_IMPORT_FILE: [CallbackQueryHandler(birthday_callback, pattern=r"^birthday:"),
+                                   MessageHandler(filters.Document.ALL, birthday_import_file),
+                                   MessageHandler(filters.ALL, birthday_import_file)],
             ADDING_FILM_TITLE: text_state(add_film_title),
             ADDING_FILM_COMMENT: text_state(add_film_comment),
             SELECTING_FILM_METADATA: [

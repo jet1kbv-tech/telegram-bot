@@ -49,6 +49,7 @@ class JsonStorage:
                 "used": [],
             },
             "event_attachments": [],
+            "important_dates": [],
             "ai_jobs": [],
             "spark": {
                 "active": [],
@@ -140,6 +141,10 @@ class JsonStorage:
         normalize_purchases_root(data, raw_data.get("purchases"))
         normalize_tickets_root(data, raw_data.get("tickets"))
         normalize_event_attachments_root(data, raw_data.get("event_attachments"))
+        raw_important_dates = raw_data.get("important_dates", [])
+        if isinstance(raw_important_dates, list):
+            data["important_dates"] = [item for raw in raw_important_dates
+                                       if (item := normalize_important_date(raw))]
         raw_ai_jobs = raw_data.get("ai_jobs", [])
         if isinstance(raw_ai_jobs, list):
             data["ai_jobs"] = [job for raw in raw_ai_jobs if (job := normalize_ai_job(raw))]
@@ -213,6 +218,34 @@ storage = JsonStorage(DATA_FILE)
 
 def make_id() -> str:
     return uuid.uuid4().hex[:8]
+
+
+def normalize_important_date(raw: Any) -> dict[str, Any] | None:
+    """Normalize the additive v1 Important Dates domain (birthdays only)."""
+    if not isinstance(raw, dict) or raw.get("type") != "birthday":
+        return None
+    title = " ".join(str(raw.get("title") or "").strip().split())
+    if not title:
+        return None
+    try:
+        month, day = int(raw.get("month")), int(raw.get("day"))
+        year_raw = raw.get("year")
+        year = None if year_raw in (None, "") else int(year_raw)
+        # Leap day is a valid recurring date; 2000 is used only to validate month/day.
+        datetime(2000, month, day)
+        if year is not None:
+            datetime(year, month, day)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    visibility = str(raw.get("visibility") or "shared").strip().lower()
+    if visibility not in {"shared", "vova", "sasha"}:
+        return None
+    created_by = str(raw.get("created_by") or "").strip().lower()
+    if created_by not in {"vova", "sasha"}:
+        return None
+    return {"id": str(raw.get("id") or make_id()), "type": "birthday", "title": title,
+            "month": month, "day": day, "year": year, "visibility": visibility,
+            "note": " ".join(str(raw.get("note") or "").strip().split()), "created_by": created_by}
 
 
 def normalize_rating(value: Any) -> int | None:
