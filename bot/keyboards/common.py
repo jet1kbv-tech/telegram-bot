@@ -82,6 +82,7 @@ def more_menu_keyboard() -> InlineKeyboardMarkup:
              InlineKeyboardButton("🧩 Бэклог", callback_data="menu|backlog")],
             [InlineKeyboardButton("🔥 Искра", callback_data="spark:menu"),
              InlineKeyboardButton("🎟 Билеты", callback_data="tickets:menu")],
+            [InlineKeyboardButton("📝 Заметки", callback_data="notes:menu")],
             [InlineKeyboardButton("🏠 В меню", callback_data="menu:main")],
         ]
     )

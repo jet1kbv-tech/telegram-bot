@@ -45,6 +45,7 @@ def test_more_hub_reuses_all_existing_domain_callbacks():
         [("🎁 Вишлист", "menu|wishlist"), ("🛒 Покупки", "purchases:menu")],
         [("🎂 Дни рождения", "birthday:list"), ("🧩 Бэклог", "menu|backlog")],
         [("🔥 Искра", "spark:menu"), ("🎟 Билеты", "tickets:menu")],
+        [("📝 Заметки", "notes:menu")],
         [("🏠 В меню", "menu:main")],
     ]
 
