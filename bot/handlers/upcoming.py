@@ -37,7 +37,6 @@ def upcoming_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("Сегодня", callback_data="upcoming:today"),
          InlineKeyboardButton("7 дней", callback_data="upcoming:7")],
         [InlineKeyboardButton("30 дней", callback_data="upcoming:30")],
-        [InlineKeyboardButton("🎂 Дни рождения", callback_data="birthday:list")],
         [InlineKeyboardButton("📅 Календарь", callback_data="calendar_menu"),
          InlineKeyboardButton("🗓 Афиша", callback_data="menu|afisha")],
         [InlineKeyboardButton("🏠 В меню", callback_data="menu:main")],
