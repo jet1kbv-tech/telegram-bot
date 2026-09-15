@@ -8,8 +8,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from bot.app import build_app
 from bot.config import (BIRTHDAY_REMINDER_CHECK_INTERVAL, NOTIFICATION_CHECK_INTERVAL,
                         TRIP_REMINDER_CHECK_INTERVAL, AIESA_TRANSCRIPTION_POLL_SECONDS)
-from bot.states import (ADDING_NOTE_TEXT, BIRTHDAY_DATE, BIRTHDAY_IMPORT_FILE, BIRTHDAY_TITLE,
-                        BIRTHDAY_YEAR, EDITING_NOTE_TEXT, MENU, SECTION, WAITING_FOR_AI_TRANSCRIPTION)
+from bot.states import (ADDING_NOTE_TEXT, BIRTHDAY_DATE, BIRTHDAY_IMPORT_FILE, BIRTHDAY_TITLE, BIRTHDAY_YEAR,
+                        EDITING_NOTE_TEXT, MENU, SECTION, WAITING_FOR_AI_TRANSCRIPTION)
 from telegram.ext import CallbackQueryHandler, ConversationHandler
 
 
@@ -55,3 +55,24 @@ def test_navigation_callbacks_and_conversation_states_remain_registered(monkeypa
         # calendar_menu, activity:menu, and more:menu deliberately use this
         # existing fallback so legacy and presentation-only routes share ordering.
         assert "section_router" in names
+
+
+def test_capture_callbacks_are_idle_only_and_media_routing_is_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BOT_TOKEN", "123456:TEST_TOKEN")
+    monkeypatch.setenv("POLZA_AI_API_KEY", "test")
+    monkeypatch.setenv("POLZA_AI_MODEL", "test")
+    app = build_app()
+    conversation = next(handler for handler in app.handlers[0] if isinstance(handler, ConversationHandler))
+
+    for state in (MENU, SECTION):
+        assert any(isinstance(handler, CallbackQueryHandler)
+                   and handler.callback.__name__ == "capture_callback_router"
+                   for handler in conversation.states[state])
+        message_callbacks = [handler.callback.__name__ for handler in conversation.states[state]
+                             if not isinstance(handler, CallbackQueryHandler)]
+        assert "nl_text_handler" in message_callbacks
+        assert "orphan_attachment_handler" in message_callbacks
+
+    for state in set(conversation.states) - {MENU, SECTION}:
+        assert all(getattr(handler.callback, "__name__", "") != "capture_callback_router"
+                   for handler in conversation.states[state])

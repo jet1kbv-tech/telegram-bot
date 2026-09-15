@@ -15,6 +15,7 @@ from bot.handlers.event_attachments import extract_attachment_draft
 from bot.handlers.attachment_delivery import deliver_event_attachments
 from bot.handlers.contextual_actions import trip_callback
 from bot.handlers.films import begin_film_search
+from bot.handlers.capture import begin_text_capture
 from bot.handlers.film_recommendations import start_from_nl
 from bot.services.actions.afisha import create_afisha_event
 from bot.services.actions.calendar import create_personal_calendar_event
@@ -335,6 +336,9 @@ async def nl_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await response.discard()
             return await orphan_attachment_handler(update, context)
         if parsed.intent is IntentKind.NO_ACTION:
+            capture_state = await begin_text_capture(update, context, text, response)
+            if capture_state is not None:
+                return capture_state
             await response.reply_text(
                 "Я пока лучше всего умею работать с нашими планами 🙂\n"
                 "Попроси меня добавить, изменить, удалить или найти что-нибудь "
