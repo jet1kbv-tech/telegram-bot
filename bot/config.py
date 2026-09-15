@@ -24,6 +24,7 @@ PAGE_SIZE = 10
 NOTIFY_LOOKAHEAD_MIN = 23 * 60
 NOTIFY_LOOKAHEAD_MAX = 25 * 60
 NOTIFICATION_CHECK_INTERVAL = 60 * 60
+BIRTHDAY_REMINDER_CHECK_INTERVAL = 60 * 60
 TRIP_REMINDER_CHECK_INTERVAL = 15 * 60
 # Two scan opportunities tolerate ordinary scheduler jitter without making the
 # fixed "in two hours" wording materially stale.

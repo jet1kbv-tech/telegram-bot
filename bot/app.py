@@ -13,6 +13,7 @@ from telegram.ext import (
 )
 
 from bot.config import (AI_ATTACHMENT_MAX_BYTES, AI_ATTACHMENT_TIMEOUT_SECONDS,
+                        BIRTHDAY_REMINDER_CHECK_INTERVAL,
                         AI_INTENT_TIMEOUT_SECONDS, NOTIFICATION_CHECK_INTERVAL,
                         TRIP_REMINDER_CHECK_INTERVAL, TMDB_API_TOKEN,
                         WEATHER_CACHE_TTL_SECONDS, WEATHER_TIMEOUT_SECONDS, AIESA_API_PUBLIC,
@@ -197,6 +198,7 @@ from bot.states import (
 from bot.keyboards.common import item_keyboard, main_menu_keyboard
 from bot.runtime import (
     check_afisha_notifications,
+    check_birthday_reminders,
     check_trip_reminders,
     configure_notification_enrichment,
     menu_router,
@@ -327,6 +329,8 @@ def build_app() -> Application:
 
     if app.job_queue is not None:
         app.job_queue.run_repeating(check_afisha_notifications, interval=NOTIFICATION_CHECK_INTERVAL, first=30, name="afisha_notifications")
+        app.job_queue.run_repeating(check_birthday_reminders, interval=BIRTHDAY_REMINDER_CHECK_INTERVAL,
+                                    first=45, name="birthday_reminders")
         app.job_queue.run_repeating(check_trip_reminders, interval=TRIP_REMINDER_CHECK_INTERVAL,
                                     first=60, name="proactive_trip_reminders_v2")
         app.job_queue.run_repeating(process_transcription_jobs, interval=AIESA_TRANSCRIPTION_POLL_SECONDS,
