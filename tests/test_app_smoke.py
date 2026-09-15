@@ -8,8 +8,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from bot.app import build_app
 from bot.config import (BIRTHDAY_REMINDER_CHECK_INTERVAL, NOTIFICATION_CHECK_INTERVAL,
                         TRIP_REMINDER_CHECK_INTERVAL, AIESA_TRANSCRIPTION_POLL_SECONDS)
-from bot.states import (BIRTHDAY_DATE, BIRTHDAY_IMPORT_FILE, BIRTHDAY_TITLE,
-                        BIRTHDAY_YEAR, MENU, SECTION, WAITING_FOR_AI_TRANSCRIPTION)
+from bot.states import (ADDING_NOTE_TEXT, BIRTHDAY_DATE, BIRTHDAY_IMPORT_FILE, BIRTHDAY_TITLE,
+                        BIRTHDAY_YEAR, EDITING_NOTE_TEXT, MENU, SECTION, WAITING_FOR_AI_TRANSCRIPTION)
 from telegram.ext import CallbackQueryHandler, ConversationHandler
 
 
@@ -41,7 +41,9 @@ def test_navigation_callbacks_and_conversation_states_remain_registered(monkeypa
     conversation = next(handler for handler in app.handlers[0] if isinstance(handler, ConversationHandler))
 
     assert {MENU, SECTION, WAITING_FOR_AI_TRANSCRIPTION, BIRTHDAY_TITLE, BIRTHDAY_DATE,
-            BIRTHDAY_YEAR, BIRTHDAY_IMPORT_FILE} <= set(conversation.states)
+            BIRTHDAY_YEAR, BIRTHDAY_IMPORT_FILE, ADDING_NOTE_TEXT, EDITING_NOTE_TEXT} <= set(conversation.states)
+    assert (WAITING_FOR_AI_TRANSCRIPTION, BIRTHDAY_TITLE, BIRTHDAY_DATE, BIRTHDAY_YEAR,
+            BIRTHDAY_IMPORT_FILE, ADDING_NOTE_TEXT, EDITING_NOTE_TEXT) == (77, 78, 79, 80, 81, 82, 83)
     for state in (MENU, SECTION):
         callbacks = [handler for handler in conversation.states[state]
                      if isinstance(handler, CallbackQueryHandler)]

@@ -119,7 +119,11 @@ from bot.handlers.wishlist import (
     add_wishlist_title,
     configure_wishlist_handlers,
 )
+from bot.handlers.notes import (add_note_text, configure_notes_handlers,
+                                edit_note_text, notes_callback_router)
 from bot.states import (
+    ADDING_NOTE_TEXT,
+    EDITING_NOTE_TEXT,
     ADDING_BACKLOG_DESCRIPTION,
     ADDING_BACKLOG_TITLE,
     ADDING_PURCHASE_COMMENT,
@@ -268,6 +272,7 @@ def build_app() -> Application:
                               notify_other_user_about_afisha_item=notify_other_user_about_afisha_item)
     configure_places_handlers(safe_edit_message=safe_edit_message)
     configure_purchases_handlers(safe_edit_message=safe_edit_message)
+    configure_notes_handlers(safe_edit_message=safe_edit_message)
 
     configure_calendar_handlers(
         safe_edit_message=safe_edit_message,
@@ -390,6 +395,7 @@ def build_app() -> Application:
                 CallbackQueryHandler(spark_callback_router, pattern=r"^spark:"),
                 CallbackQueryHandler(tickets_callback_router, pattern=r"^tickets:"),
                 CallbackQueryHandler(purchases_callback_router, pattern=r"^purchases:"),
+                CallbackQueryHandler(notes_callback_router, pattern=r"^notes:"),
                 CallbackQueryHandler(contextual_trip_callback, pattern=r"^ctx:trip:"),
                 CallbackQueryHandler(contextual_trip_list_callback, pattern=r"^ctx:trips:"),
                 CallbackQueryHandler(section_router),
@@ -413,6 +419,7 @@ def build_app() -> Application:
                 CallbackQueryHandler(spark_callback_router, pattern=r"^spark:"),
                 CallbackQueryHandler(tickets_callback_router, pattern=r"^tickets:"),
                 CallbackQueryHandler(purchases_callback_router, pattern=r"^purchases:"),
+                CallbackQueryHandler(notes_callback_router, pattern=r"^notes:"),
                 CallbackQueryHandler(contextual_action_callback, pattern=r"^ctx:event:"),
                 CallbackQueryHandler(contextual_trip_callback, pattern=r"^ctx:trip:"),
                 CallbackQueryHandler(contextual_trip_list_callback, pattern=r"^ctx:trips:"),
@@ -443,6 +450,16 @@ def build_app() -> Application:
             BIRTHDAY_IMPORT_FILE: [CallbackQueryHandler(birthday_callback, pattern=r"^birthday:"),
                                    MessageHandler(filters.Document.ALL, birthday_import_file),
                                    MessageHandler(filters.ALL, birthday_import_file)],
+            ADDING_NOTE_TEXT: [
+                CallbackQueryHandler(back_to_main, pattern=r"^(main|menu:main)$"),
+                CallbackQueryHandler(notes_callback_router, pattern=r"^notes:"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, add_note_text),
+            ],
+            EDITING_NOTE_TEXT: [
+                CallbackQueryHandler(back_to_main, pattern=r"^(main|menu:main)$"),
+                CallbackQueryHandler(notes_callback_router, pattern=r"^notes:"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, edit_note_text),
+            ],
             ADDING_FILM_TITLE: text_state(add_film_title),
             ADDING_FILM_COMMENT: text_state(add_film_comment),
             SELECTING_FILM_METADATA: [

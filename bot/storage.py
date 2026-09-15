@@ -4,6 +4,7 @@ import math
 import os
 import tempfile
 import uuid
+import re
 from datetime import datetime
 from pathlib import Path
 from threading import RLock
@@ -24,6 +25,9 @@ PURCHASE_BUCKETS = ("planned", "bought")
 PURCHASE_PRIORITIES = {"high", "medium", "low", ""}
 FILM_REACTION_VALUES = frozenset({"like", "neutral", "dislike"})
 FILM_REACTION_ACTORS = frozenset({"vova", "sasha"})
+NOTE_OWNERS = frozenset({"vova", "sasha"})
+NOTE_SOURCES = frozenset({"manual", "universal_capture", "voice", "share"})
+MAX_NOTE_TEXT_LENGTH = 4000
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +54,7 @@ class JsonStorage:
             },
             "event_attachments": [],
             "important_dates": [],
+            "notes": [],
             "ai_jobs": [],
             "spark": {
                 "active": [],
@@ -146,6 +151,9 @@ class JsonStorage:
         if isinstance(raw_important_dates, list):
             data["important_dates"] = [item for raw in raw_important_dates
                                        if (item := normalize_important_date(raw))]
+        raw_notes = raw_data.get("notes", [])
+        if isinstance(raw_notes, list):
+            data["notes"] = [note for raw in raw_notes if (note := normalize_note(raw))]
         raw_ai_jobs = raw_data.get("ai_jobs", [])
         if isinstance(raw_ai_jobs, list):
             data["ai_jobs"] = [job for raw in raw_ai_jobs if (job := normalize_ai_job(raw))]
@@ -228,6 +236,35 @@ storage = JsonStorage(DATA_FILE)
 
 def make_id() -> str:
     return uuid.uuid4().hex[:8]
+
+
+def normalize_note(raw: Any) -> dict[str, str] | None:
+    """Normalize one private Notes v1 record without affecting other roots."""
+    if not isinstance(raw, dict):
+        return None
+    owner = str(raw.get("owner") or "").strip().lower()
+    text = str(raw.get("text") or "").strip()
+    if owner not in NOTE_OWNERS or not text or len(text) > MAX_NOTE_TEXT_LENGTH:
+        return None
+    raw_id = str(raw.get("id") or "").strip()
+    note_id = raw_id if re.fullmatch(r"[A-Za-z0-9_-]{1,32}", raw_id) else make_id()
+
+    def timestamp(value: Any) -> str | None:
+        candidate = str(value or "").strip()
+        try:
+            datetime.fromisoformat(candidate.replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            return None
+        return candidate
+
+    now = datetime.now().astimezone().isoformat()
+    created_at = timestamp(raw.get("created_at")) or now
+    updated_at = timestamp(raw.get("updated_at")) or created_at
+    source = str(raw.get("source") or "manual").strip().lower()
+    if source not in NOTE_SOURCES:
+        source = "manual"
+    return {"id": note_id, "owner": owner, "text": text,
+            "created_at": created_at, "updated_at": updated_at, "source": source}
 
 
 def normalize_important_date(raw: Any) -> dict[str, Any] | None:
