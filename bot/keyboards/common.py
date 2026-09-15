@@ -65,11 +65,23 @@ def section_menu_keyboard(section: str, *, unrated_watched_count: int | None = N
 def activity_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("🎬 Фильмы", callback_data="menu|films")],
+            [InlineKeyboardButton("🎬 Фильмы и сериалы", callback_data="menu|films")],
             [InlineKeyboardButton("✨ Досуг", callback_data="menu|leisure")],
+            [InlineKeyboardButton("📍 Места", callback_data="places:menu")],
+            [InlineKeyboardButton("🏠 В меню", callback_data="menu:main")],
+        ]
+    )
+
+
+def more_menu_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("🎁 Вишлист", callback_data="menu|wishlist")],
+            [InlineKeyboardButton("🛒 Покупки", callback_data="purchases:menu")],
+            [InlineKeyboardButton("🎂 Дни рождения", callback_data="birthday:list")],
+            [InlineKeyboardButton("🧩 Бэклог", callback_data="menu|backlog")],
             [InlineKeyboardButton("🔥 Искра", callback_data="spark:menu")],
-            [InlineKeyboardButton("📍 В Москве", callback_data="places:moscow")],
-            [InlineKeyboardButton("🌍 Города", callback_data="places:cities:0")],
+            [InlineKeyboardButton("🎟 Билеты", callback_data="tickets:menu")],
             [InlineKeyboardButton("🏠 В меню", callback_data="menu:main")],
         ]
     )
@@ -78,14 +90,12 @@ def activity_menu_keyboard() -> InlineKeyboardMarkup:
 def main_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("🎲 Чем займемся", callback_data="activity:menu")],
             [InlineKeyboardButton("📆 Ближайшее", callback_data="upcoming:7")],
-            [InlineKeyboardButton("🎁 Вишлист", callback_data="menu|wishlist")],
-            [InlineKeyboardButton("🛒 Покупки", callback_data="purchases:menu")],
-            [InlineKeyboardButton("🗓 Афиша", callback_data="menu|afisha")],
-            [InlineKeyboardButton("📅 Календарь", callback_data="calendar_menu")],
+            [InlineKeyboardButton("🗓 Афиша", callback_data="menu|afisha"),
+             InlineKeyboardButton("📅 Календарь", callback_data="calendar_menu")],
+            [InlineKeyboardButton("🎬 Развлечения", callback_data="activity:menu")],
             [InlineKeyboardButton("🤖 AI-фичи", callback_data="aif:menu")],
-            [InlineKeyboardButton("🧩 Бэклог", callback_data="menu|backlog")],
+            [InlineKeyboardButton("••• Ещё", callback_data="more:menu")],
         ]
     )
 

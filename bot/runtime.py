@@ -158,6 +158,7 @@ from bot.keyboards.common import (
     list_keyboard,
     activity_menu_keyboard,
     main_menu_keyboard,
+    more_menu_keyboard,
     section_menu_keyboard,
     wishlist_owner_keyboard,
 )
@@ -693,7 +694,11 @@ async def section_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return await back_to_main(update, context)
 
     if query.data == "activity:menu":
-        await safe_edit_message(query, "Чем займемся", reply_markup=activity_menu_keyboard())
+        await safe_edit_message(query, "🎬 Развлечения", reply_markup=activity_menu_keyboard())
+        return SECTION
+
+    if query.data == "more:menu":
+        await safe_edit_message(query, "••• Ещё", reply_markup=more_menu_keyboard())
         return SECTION
 
     if action == "menu":
