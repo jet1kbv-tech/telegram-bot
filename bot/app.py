@@ -51,6 +51,7 @@ from bot.handlers.calendar import (
     edit_calendar_time,
 )
 from bot.handlers.common import back_to_main, cancel, configure_common_handlers, noop, quick_return_to_main_menu, start, whoami
+from bot.handlers.upcoming import configure_upcoming_handlers, upcoming_callback
 from bot.handlers.films import (
     add_film_comment,
     add_film_title,
@@ -230,6 +231,7 @@ def build_app() -> Application:
 
     app = Application.builder().token(token).build()
     configure_common_handlers(main_menu_keyboard=main_menu_keyboard, safe_edit_message=safe_edit_message)
+    configure_upcoming_handlers(safe_edit_message=safe_edit_message)
     configure_backlog_handlers(build_item_text=build_item_text, item_keyboard=item_keyboard)
     tmdb_token = os.getenv("TMDB_API_READ_ACCESS_TOKEN", "").strip()
     metadata_provider = TmdbMovieMetadataProvider(tmdb_token) if tmdb_token else None
@@ -368,6 +370,7 @@ def build_app() -> Application:
                 *ai_callback_handlers,
                 CallbackQueryHandler(film_recommendation_callback_router, pattern=r"^filmrec:"),
                 CallbackQueryHandler(back_to_main, pattern=r"^(main|menu:main)$"),
+                CallbackQueryHandler(upcoming_callback, pattern=r"^upcoming:(?:today|7|30)$"),
                 CallbackQueryHandler(ai_callback, pattern=r"^aif:"),
                 CallbackQueryHandler(menu_router, pattern=r"^menu\|(films|wishlist|leisure|afisha|backlog)$"),
                 CallbackQueryHandler(places_callback_router, pattern=r"^places:"),
@@ -389,6 +392,7 @@ def build_app() -> Application:
                 CallbackQueryHandler(film_enrichment_callback_router, pattern=r"^filmenrich:"),
                 CallbackQueryHandler(film_filter_callback_router, pattern=r"^filmfilter:"),
                 CallbackQueryHandler(back_to_main, pattern=r"^(main|menu:main)$"),
+                CallbackQueryHandler(upcoming_callback, pattern=r"^upcoming:(?:today|7|30)$"),
                 CallbackQueryHandler(ai_callback, pattern=r"^aif:"),
                 CallbackQueryHandler(menu_router, pattern=r"^menu\|(films|wishlist|leisure|afisha|backlog)$"),
                 CallbackQueryHandler(places_callback_router, pattern=r"^places:"),
