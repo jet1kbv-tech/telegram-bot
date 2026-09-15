@@ -11,6 +11,7 @@ from bot.config import BOT_TIMEZONE
 from bot.services.context_engine import build_context_bundle
 from bot.services.nl_dates import zoned_now
 from bot.services.upcoming_brief import build_upcoming_brief, render_upcoming_brief
+from bot.services.important_dates import is_visible, occurrence_in_range
 from bot.states import SECTION
 from bot.storage import storage
 from bot.utils import ensure_access, get_wishlist_owner_by_user
@@ -36,6 +37,7 @@ def upcoming_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("Сегодня", callback_data="upcoming:today"),
          InlineKeyboardButton("7 дней", callback_data="upcoming:7")],
         [InlineKeyboardButton("30 дней", callback_data="upcoming:30")],
+        [InlineKeyboardButton("🎂 Дни рождения", callback_data="birthday:list")],
         [InlineKeyboardButton("📅 Календарь", callback_data="calendar_menu"),
          InlineKeyboardButton("🗓 Афиша", callback_data="menu|afisha")],
         [InlineKeyboardButton("🏠 В меню", callback_data="menu:main")],
@@ -56,9 +58,14 @@ async def upcoming_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     actor_key = get_wishlist_owner_by_user(update)
     snapshot = storage.load()
     bundle = build_context_bundle(snapshot, actor_key, now, BOT_TIMEZONE, include_past=True)
-    brief = build_upcoming_brief(
-        bundle, actor_key=actor_key, date_from=date_from, date_to=date_to,
-    )
+    birthdays = []
+    for item in snapshot.get("important_dates", []):
+        occurrence = occurrence_in_range(item, date_from, date_to) if is_visible(item, actor_key) else None
+        if occurrence is not None:
+            birthdays.append((item, occurrence))
+    birthdays.sort(key=lambda pair: (pair[1], pair[0]["id"]))
+    brief = build_upcoming_brief(bundle, actor_key=actor_key, date_from=date_from, date_to=date_to,
+                                 important_dates=tuple(birthdays))
     await _safe_edit_message(
         query,
         render_upcoming_brief(brief, today=date_from),

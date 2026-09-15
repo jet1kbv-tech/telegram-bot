@@ -85,3 +85,6 @@ SELECTING_NL_ATTACHMENT_QUERY = 76
 
 # AI audio transcription intake. Never renumber deployed states above.
 WAITING_FOR_AI_TRANSCRIPTION = 77
+
+# Important Dates v1 native birthday flow. Never renumber deployed states above.
+BIRTHDAY_TITLE, BIRTHDAY_DATE, BIRTHDAY_YEAR, BIRTHDAY_IMPORT_FILE = range(78, 82)

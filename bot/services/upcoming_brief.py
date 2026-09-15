@@ -40,6 +40,7 @@ class UpcomingBrief:
     trips: tuple[UpcomingTrip, ...]
     document_signals: tuple[DocumentSignal, ...]
     weather_target: tuple[str, date, date] | None = None
+    important_dates: tuple[tuple[dict, date], ...] = ()
 
 
 def resolve_brief_range(expression: str | None, now: datetime, timezone: str) -> tuple[date, date]:
@@ -83,7 +84,7 @@ def _trip_signal(bundle: ContextBundle, item: UpcomingTrip) -> DocumentSignal | 
 
 
 def build_upcoming_brief(bundle: ContextBundle, *, actor_key: str, date_from: date, date_to: date,
-                         person: str | None = None) -> UpcomingBrief:
+                         person: str | None = None, important_dates: tuple[tuple[dict, date], ...] = ()) -> UpcomingBrief:
     """Select only actor-visible canonical facts; provider scope can only narrow."""
     trips = []
     for trip in bundle.trips:
@@ -121,7 +122,7 @@ def build_upcoming_brief(bundle: ContextBundle, *, actor_key: str, date_from: da
             weather_target = (location, max(date_from, item.interval[0].date()),
                               min(date_to, item.interval[1].date()))
     return UpcomingBrief(date_from, date_to, tuple(events[:EVENT_LIMIT]), max(0, len(events) - EVENT_LIMIT),
-                         tuple(trips), tuple(signals), weather_target)
+                         tuple(trips), tuple(signals), weather_target, important_dates)
 
 
 def _day(value: date) -> str:
@@ -159,7 +160,15 @@ def render_upcoming_brief(value: UpcomingBrief, *, today: date) -> str:
     if value.document_signals:
         lines += ["", "📎 Документы"]
         lines.extend(f"• {signal.subject} — {signal.label}" for signal in value.document_signals)
-    if not value.events and not value.trips:
+    if value.important_dates:
+        from bot.services.important_dates import age_on_next_occurrence, format_date, russian_age
+        lines += ["", "🎂 Важные даты"]
+        for item, occurrence in value.important_dates:
+            age = age_on_next_occurrence(item, occurrence)
+            suffix = f" · {russian_age(age)}" if age is not None else ""
+            lines.append(f"• {format_date({'day': occurrence.day, 'month': occurrence.month})} — "
+                         f"День рождения {item['title']}{suffix}")
+    if not value.events and not value.trips and not value.important_dates:
         lines += ["", "На этот период ничего не запланировано."]
     return "\n".join(lines)
 
