@@ -1,6 +1,11 @@
 from copy import deepcopy
 from datetime import date
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
+import pytest
+
+from bot.handlers import important_dates as birthday_handlers
 from bot.services.important_dates import (age_on_next_occurrence, days_until, effective_occurrence,
     is_visible, next_occurrence, occurrence_in_range, parse_birthday_date, sort_birthdays)
 from bot.storage import JsonStorage, normalize_important_date
@@ -67,3 +72,36 @@ def test_manual_date_formats_and_invalid_values():
 def test_occurrence_helpers_do_not_mutate():
     item = birthday(month=2, day=29); before = deepcopy(item)
     next_occurrence(item, date(2027, 1, 1)); assert item == before
+
+
+@pytest.mark.parametrize(("year", "accepted"), [(2023, False), (2024, True)])
+async def test_edit_february_29_year_uses_authorized_stored_date(
+        monkeypatch, tmp_path, year, accepted):
+    store = JsonStorage(tmp_path / "data.json")
+    item = birthday(month=2, day=29)
+    store.save({"important_dates": [item]})
+    before = deepcopy(store.load())
+    monkeypatch.setattr(birthday_handlers, "storage", store)
+    monkeypatch.setattr(birthday_handlers, "get_wishlist_owner_by_user", lambda update: "vova")
+    monkeypatch.setattr(birthday_handlers, "_today", lambda: date(2026, 9, 15))
+    reply = AsyncMock()
+    update = SimpleNamespace(message=SimpleNamespace(text=str(year), reply_text=reply))
+    context = SimpleNamespace(user_data={birthday_handlers.SESSION: {
+        "mode": "edit", "id": item["id"], "field": "year",
+        # Deliberately stale/user-controlled values must never be trusted.
+        "month": 1, "day": 1,
+    }})
+
+    state = await birthday_handlers.birthday_year_input(update, context)
+
+    saved = store.load()["important_dates"][0]
+    if accepted:
+        assert saved["year"] == 2024
+        assert "Следующий день рождения" in reply.await_args.args[0]
+        assert {button.text for row in reply.await_args.kwargs["reply_markup"].inline_keyboard
+                for button in row} >= {"✏️ Изменить", "🗑 Удалить", "⬅️ Назад", "🏠 В меню"}
+        assert state == birthday_handlers.SECTION
+    else:
+        assert store.load() == before
+        assert "не подходит" in reply.await_args.args[0]
+        assert state == birthday_handlers.BIRTHDAY_YEAR

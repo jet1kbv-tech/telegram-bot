@@ -1,4 +1,5 @@
 import pytest
+from pathlib import Path
 
 from bot.services.ics_birthdays import ImportCandidate, clean_birthday_title, parse_ics_birthdays, split_duplicates
 
@@ -53,3 +54,18 @@ def test_duplicates_ignore_year_and_normalize_case_space_and_yo():
 def test_title_cleanup():
     assert clean_birthday_title("Alex's birthday") == "Alex"
     assert clean_birthday_title("День рождения: Лёша") == "Лёша"
+
+
+def test_realistic_google_contacts_birthday_calendar_without_summary_markers():
+    content = (Path(__file__).parent / "fixtures" / "google_birthdays.ics").read_bytes()
+    result = parse_ics_birthdays(content)
+    assert [(item.title, item.month, item.day, item.year) for item in result.candidates] == [
+        ("Alex", 5, 3, None),
+        ("Лёша", 2, 29, None),
+    ]
+
+
+def test_markerless_yearly_google_event_outside_contacts_calendar_is_ignored():
+    content = calendar("SUMMARY:Quarterly planning\r\nDTSTART;VALUE=DATE:20260503\r\nRRULE:FREQ=YEARLY")
+    content = content.replace("BEGIN:VCALENDAR", "BEGIN:VCALENDAR\r\nPRODID:-//Google Inc//Google Calendar 70.9054//EN\r\nX-WR-CALNAME:Work")
+    assert parse_ics_birthdays(content).candidates == ()

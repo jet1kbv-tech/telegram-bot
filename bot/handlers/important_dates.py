@@ -180,10 +180,30 @@ async def birthday_year_input(update, context):
     if draft.get("mode") == "edit" and text in {"удалить", "убрать", "нет"}: return await _edit_value(update, context, None)
     try:
         year = int(text)
-        date(year, int(draft.get("month", 1)), int(draft.get("day", 1)))
     except (ValueError, OverflowError):
         await update.message.reply_text("Введи год четырьмя цифрами."); return BIRTHDAY_YEAR
-    if draft.get("mode") == "edit": return await _edit_value(update, context, year)
+    if draft.get("mode") == "edit":
+        # Month/day must come from the currently authorized stored record, not
+        # from conversation data, which may be stale or user-controlled.
+        actor = get_wishlist_owner_by_user(update)
+        current = _visible(str(draft.get("id") or ""), actor)
+        if current is None:
+            context.user_data.pop(SESSION, None)
+            await update.message.reply_text("День рождения не найден или недоступен.")
+            return SECTION
+        try:
+            date(year, current["month"], current["day"])
+        except ValueError:
+            await update.message.reply_text(
+                "Этот год не подходит для указанной даты рождения. Введи другой год."
+            )
+            return BIRTHDAY_YEAR
+        return await _edit_value(update, context, year)
+    try:
+        date(year, int(draft.get("month", 1)), int(draft.get("day", 1)))
+    except (ValueError, OverflowError):
+        await update.message.reply_text("Этот год не подходит для указанной даты рождения.")
+        return BIRTHDAY_YEAR
     draft["year"] = year; return await _confirmation(update, draft)
 
 
@@ -201,27 +221,39 @@ async def _confirmation(target, draft, edit=False):
 
 
 async def _edit_value(update, context, value):
-    draft = context.user_data.pop(SESSION); actor = get_wishlist_owner_by_user(update); field = draft["field"]
+    draft = context.user_data.get(SESSION, {}); actor = get_wishlist_owner_by_user(update); field = draft["field"]
     def mutate(data):
         item = next((x for x in data["important_dates"] if x["id"] == draft["id"] and is_visible(x, actor)), None)
-        if not item: return False
+        if not item: return "missing"
         if field == "date":
             month, day, supplied_year = value
             candidate_year = supplied_year if supplied_year is not None else item.get("year")
             if candidate_year is not None:
                 try: date(candidate_year, month, day)
-                except ValueError: return False
+                except ValueError: return "invalid"
             item["month"], item["day"] = month, day
             if supplied_year is not None: item["year"] = supplied_year
         elif field == "year":
             if value is not None:
                 try: date(value, item["month"], item["day"])
-                except ValueError: return False
+                except ValueError: return "invalid"
             item[field] = value
         else: item[field] = value
-        return True
-    found, _ = storage.update(mutate)
-    await update.message.reply_text("✅ Сохранено." if found else "День рождения не найден или недоступен.")
+        return "ok"
+    result, data = storage.update(mutate)
+    if result == "invalid":
+        await update.message.reply_text("Значение не подходит для этой даты рождения. Попробуй ещё раз.")
+        return {"date": BIRTHDAY_DATE, "year": BIRTHDAY_YEAR}.get(field, BIRTHDAY_TITLE)
+    context.user_data.pop(SESSION, None)
+    updated = next((item for item in data.get("important_dates", [])
+                    if item.get("id") == draft.get("id") and is_visible(item, actor)), None)
+    if result != "ok" or updated is None:
+        await update.message.reply_text("День рождения не найден или недоступен.")
+        return SECTION
+    await update.message.reply_text(
+        detail_text(updated, _today()),
+        reply_markup=detail_keyboard(updated["id"]),
+    )
     return SECTION
 
 

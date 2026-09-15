@@ -50,7 +50,7 @@ def _properties(lines: list[str]) -> dict[str, list[tuple[str, str]]]:
     return props
 
 
-def extract_candidate(lines: list[str]) -> ImportCandidate | None:
+def extract_candidate(lines: list[str], *, google_contacts_calendar: bool = False) -> ImportCandidate | None:
     props = _properties(lines)
     if not props.get("SUMMARY") or not props.get("DTSTART"):
         return None
@@ -59,7 +59,14 @@ def extract_candidate(lines: list[str]) -> ImportCandidate | None:
     marker = any(word in lowered for word in BIRTHDAY_MARKERS)
     yearly = any("FREQ=YEARLY" in value.upper() for _, value in props.get("RRULE", []))
     all_day = "VALUE=DATE" in props["DTSTART"][0][0] or "T" not in props["DTSTART"][0][1]
-    if any(word in lowered for word in NEGATIVE_MARKERS) or not marker or (not yearly and not all_day):
+    # Google Contacts can export an event whose SUMMARY is only the contact's
+    # display name.  We accept that markerless form only inside a structurally
+    # identified Google birthday/Contacts calendar, and only for yearly all-day
+    # events.  This deliberately does not turn arbitrary Google events into birthdays.
+    google_structural_signal = google_contacts_calendar and yearly and all_day
+    if (any(word in lowered for word in NEGATIVE_MARKERS)
+            or (not marker and not google_structural_signal)
+            or (marker and not yearly and not all_day)):
         return None
     raw_date = props["DTSTART"][0][1].strip()
     match = re.fullmatch(r"(\d{4})(\d{2})(\d{2})(?:T.*)?", raw_date)
@@ -95,6 +102,25 @@ def parse_ics_birthdays(content: bytes | str) -> ParseResult:
             logical[-1] += line[1:]
         else:
             logical.append(line)
+    top_level, depth = [], 0
+    for line in logical:
+        upper = line.upper()
+        if upper.startswith("BEGIN:"):
+            depth += 1
+        elif upper.startswith("END:"):
+            depth = max(0, depth - 1)
+        elif depth == 1:
+            top_level.append(line)
+    calendar_properties = _properties(top_level)
+    prodid = " ".join(value for _, value in calendar_properties.get("PRODID", [])).casefold()
+    calendar_text = " ".join(value for key in ("X-WR-CALNAME", "X-WR-CALDESC")
+                             for _, value in calendar_properties.get(key, [])).casefold()
+    relative_ids = " ".join(value for _, value in calendar_properties.get("X-WR-RELCALID", [])).casefold()
+    google_contacts_calendar = (
+        "google" in prodid
+        and (any(marker in calendar_text for marker in BIRTHDAY_MARKERS)
+             or "#contacts@group.v.calendar.google.com" in relative_ids)
+    )
     events, current = [], None
     for line in logical:
         if line.upper() == "BEGIN:VEVENT":
@@ -106,7 +132,7 @@ def parse_ics_birthdays(content: bytes | str) -> ParseResult:
     candidates, skipped = [], 0
     for event in events:
         try:
-            candidate = extract_candidate(event)
+            candidate = extract_candidate(event, google_contacts_calendar=google_contacts_calendar)
         except (ValueError, OverflowError):
             skipped += 1; continue
         if candidate:
