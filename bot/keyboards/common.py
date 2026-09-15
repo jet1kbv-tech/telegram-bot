@@ -66,8 +66,8 @@ def activity_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton("🎬 Фильмы и сериалы", callback_data="menu|films")],
-            [InlineKeyboardButton("✨ Досуг", callback_data="menu|leisure")],
-            [InlineKeyboardButton("📍 Места", callback_data="places:menu")],
+            [InlineKeyboardButton("✨ Досуг", callback_data="menu|leisure"),
+             InlineKeyboardButton("📍 Места", callback_data="places:menu")],
             [InlineKeyboardButton("🏠 В меню", callback_data="menu:main")],
         ]
     )
@@ -76,12 +76,12 @@ def activity_menu_keyboard() -> InlineKeyboardMarkup:
 def more_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("🎁 Вишлист", callback_data="menu|wishlist")],
-            [InlineKeyboardButton("🛒 Покупки", callback_data="purchases:menu")],
-            [InlineKeyboardButton("🎂 Дни рождения", callback_data="birthday:list")],
-            [InlineKeyboardButton("🧩 Бэклог", callback_data="menu|backlog")],
-            [InlineKeyboardButton("🔥 Искра", callback_data="spark:menu")],
-            [InlineKeyboardButton("🎟 Билеты", callback_data="tickets:menu")],
+            [InlineKeyboardButton("🎁 Вишлист", callback_data="menu|wishlist"),
+             InlineKeyboardButton("🛒 Покупки", callback_data="purchases:menu")],
+            [InlineKeyboardButton("🎂 Дни рождения", callback_data="birthday:list"),
+             InlineKeyboardButton("🧩 Бэклог", callback_data="menu|backlog")],
+            [InlineKeyboardButton("🔥 Искра", callback_data="spark:menu"),
+             InlineKeyboardButton("🎟 Билеты", callback_data="tickets:menu")],
             [InlineKeyboardButton("🏠 В меню", callback_data="menu:main")],
         ]
     )

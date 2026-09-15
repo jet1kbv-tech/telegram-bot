@@ -12,6 +12,10 @@ def _buttons(markup):
     return [(button.text, button.callback_data) for row in markup.inline_keyboard for button in row]
 
 
+def _button_rows(markup):
+    return [[(button.text, button.callback_data) for button in row] for row in markup.inline_keyboard]
+
+
 def test_main_menu_has_exactly_the_six_menu_v2_destinations():
     assert _buttons(main_menu_keyboard()) == [
         ("📆 Ближайшее", "upcoming:7"),
@@ -24,11 +28,10 @@ def test_main_menu_has_exactly_the_six_menu_v2_destinations():
 
 
 def test_entertainment_hub_reuses_domain_callbacks_and_places_hub():
-    assert _buttons(activity_menu_keyboard()) == [
-        ("🎬 Фильмы и сериалы", "menu|films"),
-        ("✨ Досуг", "menu|leisure"),
-        ("📍 Места", "places:menu"),
-        ("🏠 В меню", "menu:main"),
+    assert _button_rows(activity_menu_keyboard()) == [
+        [("🎬 Фильмы и сериалы", "menu|films")],
+        [("✨ Досуг", "menu|leisure"), ("📍 Места", "places:menu")],
+        [("🏠 В меню", "menu:main")],
     ]
     assert _buttons(places_menu_keyboard()) == [
         ("📍 Локации в Москве", "places:moscow"),
@@ -38,14 +41,11 @@ def test_entertainment_hub_reuses_domain_callbacks_and_places_hub():
 
 
 def test_more_hub_reuses_all_existing_domain_callbacks():
-    assert _buttons(more_menu_keyboard()) == [
-        ("🎁 Вишлист", "menu|wishlist"),
-        ("🛒 Покупки", "purchases:menu"),
-        ("🎂 Дни рождения", "birthday:list"),
-        ("🧩 Бэклог", "menu|backlog"),
-        ("🔥 Искра", "spark:menu"),
-        ("🎟 Билеты", "tickets:menu"),
-        ("🏠 В меню", "menu:main"),
+    assert _button_rows(more_menu_keyboard()) == [
+        [("🎁 Вишлист", "menu|wishlist"), ("🛒 Покупки", "purchases:menu")],
+        [("🎂 Дни рождения", "birthday:list"), ("🧩 Бэклог", "menu|backlog")],
+        [("🔥 Искра", "spark:menu"), ("🎟 Билеты", "tickets:menu")],
+        [("🏠 В меню", "menu:main")],
     ]
 
 
