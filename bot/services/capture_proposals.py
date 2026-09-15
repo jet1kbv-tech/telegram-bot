@@ -57,3 +57,9 @@ def discard_capture_proposal(user_data: MutableMapping[str, Any], proposal: Capt
         proposals.pop(proposal.proposal_id, None)
     if user_data.get(ACTIVE_KEY) == proposal.proposal_id:
         user_data.pop(ACTIVE_KEY, None)
+
+
+def clear_capture_proposals(user_data: MutableMapping[str, Any]) -> None:
+    """Discard only this actor's ephemeral capture state."""
+    user_data.pop(PROPOSALS_KEY, None)
+    user_data.pop(ACTIVE_KEY, None)

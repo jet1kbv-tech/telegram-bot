@@ -9,7 +9,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from bot.handlers import capture, nl_assistant
+from bot.handlers import capture, common, nl_assistant
 from bot.services.capture import (CaptureContext, CaptureValidationError, NotesCaptureClassifier,
                                   normalize_text_capture, validate_capture_classification)
 from bot.services.capture_proposals import ACTIVE_KEY, PROPOSALS_KEY
@@ -102,19 +102,21 @@ def test_no_action_creates_notes_proposal_without_mutation(configured_capture, s
     assert not store.path.exists()
 
 
-def test_confirm_uses_notes_service_owner_source_and_is_single_use(configured_capture):
+@pytest.mark.parametrize(("section", "expected"), [(False, MENU), (True, SECTION)])
+def test_confirm_uses_notes_service_owner_source_and_is_single_use(
+        configured_capture, section, expected):
     store, service = configured_capture
     spy = Mock(wraps=service.create_note)
     capture._notes_service = SimpleNamespace(create_note=spy)
     nl_assistant._parser = FakeIntentParser(ParsedIntent(IntentKind.NO_ACTION, {}))
-    context = make_context()
+    context = make_context(section=section)
     run(nl_assistant.nl_text_handler(make_update(), context))
     proposal_id = context.user_data[ACTIVE_KEY]
 
     callback = make_update(callback_data=f"cap:confirm:{proposal_id}")
-    assert run(capture.capture_callback_router(callback, context)) == SECTION
+    assert run(capture.capture_callback_router(callback, context)) == expected
     assert run(capture.capture_callback_router(
-        make_update(callback_data=f"cap:confirm:{proposal_id}"), context)) == MENU
+        make_update(callback_data=f"cap:confirm:{proposal_id}"), context)) == expected
 
     spy.assert_called_once_with(owner="vova",
                                 text="Надо посмотреть варианты поездки в Выборг весной",
@@ -204,6 +206,31 @@ def test_unauthorized_user_cannot_create_or_confirm(configured_capture, monkeypa
         username="intruder", callback_data="cap:confirm:not-a-token"), context))
     assert service.list_notes(owner="vova") == []
     assert store.load()["notes"] == []
+
+
+@pytest.mark.parametrize("command", ["start", "cancel"])
+def test_start_and_cancel_discard_pending_capture_without_note(
+        configured_capture, monkeypatch, command):
+    store, service = configured_capture
+    nl_assistant._parser = FakeIntentParser(ParsedIntent(IntentKind.NO_ACTION, {}))
+    context = make_context()
+    run(nl_assistant.nl_text_handler(make_update(), context))
+    assert ACTIVE_KEY in context.user_data
+
+    monkeypatch.setattr(common, "ensure_access", AsyncMock(return_value=True))
+    monkeypatch.setattr(common, "remember_current_chat", AsyncMock())
+    monkeypatch.setattr(common, "get_user_name", lambda update: "Вова")
+    common.configure_common_handlers(main_menu_keyboard=lambda: "main-menu",
+                                     safe_edit_message=AsyncMock())
+    update = make_update(text=f"/{command}")
+
+    assert run(getattr(common, command)(update, context)) == MENU
+
+    assert ACTIVE_KEY not in context.user_data
+    assert PROPOSALS_KEY not in context.user_data
+    assert service.list_notes(owner="vova") == []
+    assert store.load()["notes"] == []
+    update.message.reply_text.assert_awaited_once()
 
 
 @pytest.mark.parametrize("change", [

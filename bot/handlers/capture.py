@@ -175,4 +175,4 @@ async def capture_callback_router(update: Update, context: ContextTypes.DEFAULT_
     discard_capture_proposal(context.user_data, proposal)
     logger.info("capture_proposal_confirmed destination=notes")
     await _safe_edit(query, "✅ Сохранил в твои заметки.", _menu_keyboard())
-    return SECTION
+    return _idle_state(context)
