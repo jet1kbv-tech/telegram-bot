@@ -39,6 +39,7 @@ from bot.config import (
     TRIP_REMINDER_GRACE_MINUTES,
     SECTION_CONFIG,
 )
+from bot.services.birthday_reminders import scan_birthday_reminders
 from bot.services.notification_enrichment import build_notification_context, render_notification_enrichment
 from bot.services.proactive_trip_reminders import scan_trip_reminders
 from bot.services.weather import WeatherProvider
@@ -584,6 +585,11 @@ async def check_afisha_notifications(context: ContextTypes.DEFAULT_TYPE) -> None
 
     if changed:
         storage.save(data)
+
+
+async def check_birthday_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
+    await scan_birthday_reminders(storage=storage, bot=context.bot, actors=ALLOWED_USERS,
+                                  timezone=BOT_TIMEZONE, now=datetime.now(ZoneInfo(BOT_TIMEZONE)))
 
 
 async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:

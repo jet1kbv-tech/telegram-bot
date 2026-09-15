@@ -6,7 +6,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from bot.app import build_app
-from bot.config import NOTIFICATION_CHECK_INTERVAL, TRIP_REMINDER_CHECK_INTERVAL
+from bot.config import (BIRTHDAY_REMINDER_CHECK_INTERVAL, NOTIFICATION_CHECK_INTERVAL,
+                        TRIP_REMINDER_CHECK_INTERVAL)
 
 
 def test_build_app_smoke(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -26,3 +27,5 @@ def test_notification_scheduler_cadences(monkeypatch: pytest.MonkeyPatch) -> Non
     assert TRIP_REMINDER_CHECK_INTERVAL == 15 * 60
     assert jobs["afisha_notifications"].job.trigger.interval.total_seconds() == 60 * 60
     assert NOTIFICATION_CHECK_INTERVAL == 60 * 60
+    assert jobs["birthday_reminders"].job.trigger.interval.total_seconds() == 60 * 60
+    assert BIRTHDAY_REMINDER_CHECK_INTERVAL == 60 * 60

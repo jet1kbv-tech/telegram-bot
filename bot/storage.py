@@ -69,6 +69,7 @@ class JsonStorage:
             "meta": {
                 "user_chats": {},
                 "trip_reminder_deliveries": [],
+                "birthday_reminders": {},
                 "context_sessions": {},
             },
         }
@@ -173,6 +174,15 @@ class JsonStorage:
                 value for value in deliveries
                 if isinstance(value, str) and len(value) == 64
             })
+        birthday_reminders = meta.get("birthday_reminders")
+        if isinstance(birthday_reminders, dict):
+            # Keys are opaque delivery hashes; dates make old acknowledgements
+            # independently prunable without retaining birthday content.
+            data["meta"]["birthday_reminders"] = {
+                key: value for key, value in birthday_reminders.items()
+                if isinstance(key, str) and len(key) == 64
+                and isinstance(value, str) and len(value) == 10
+            }
         data["meta"]["context_sessions"] = normalize_context_sessions(meta.get("context_sessions"))
         return data
 
