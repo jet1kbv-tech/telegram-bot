@@ -93,6 +93,35 @@ _MUTATION_KINDS = {kind for kind in IntentKind if kind.name.startswith(("UPDATE_
 _QUERY_KINDS = {IntentKind.QUERY_PURCHASES, IntentKind.QUERY_FILMS, IntentKind.QUERY_CALENDAR, IntentKind.QUERY_AFISHA}
 _QUERY_PAGE_SIZE = 10
 
+# Keep this policy deliberately narrower than either all read-only intents or
+# all DateExpressionError reasons.  invalid dates can be corrected through the
+# existing query UX, while unknown_timezone is an application configuration
+# failure.  unsupported_date is the one semantic mismatch for which the
+# original text is safe to reconsider as an ordinary note.
+_CAPTURE_FALLBACK_DATE_REASONS = {
+    IntentKind.QUERY_CONTEXT: frozenset({"unsupported_date"}),
+}
+
+
+def _is_capture_fallback_eligible(intent: IntentKind, error: Exception) -> bool:
+    """Return whether a failed, read-only NL execution can become a capture proposal."""
+    return (isinstance(error, DateExpressionError)
+            and str(error) in _CAPTURE_FALLBACK_DATE_REASONS.get(intent, ()))
+
+
+async def _try_capture_fallback(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                                original_text: str, response: Any,
+                                intent: IntentKind, error: Exception) -> int | None:
+    if not _is_capture_fallback_eligible(intent, error):
+        return None
+    try:
+        return await begin_text_capture(update, context, original_text, response)
+    except Exception:
+        # Capture is a best-effort recovery path.  Its own failure must retain
+        # the established NL error response rather than replace the root error.
+        logger.warning("Safe NL capture fallback failed intent=%s", intent.value, exc_info=True)
+        return None
+
 
 class _WaitingResponse:
     """Resolve one progress message, falling back to a normal reply on Telegram errors."""
@@ -312,8 +341,10 @@ async def nl_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         logger.warning("NL waiting message send failed; continuing without progress message")
     response = _WaitingResponse(message, waiting)
     now = zoned_now(BOT_TIMEZONE)
+    parsed = None
     try:
-        text = message.text or message.caption or ""
+        original_text = message.text or message.caption or ""
+        text = original_text
         profile = get_allowed_profile(update) or {}
         actor_key = str(profile.get("wishlist_owner") or "")
         snapshot = storage.load()
@@ -485,8 +516,13 @@ async def nl_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     except IntentParserUnavailable:
         await response.reply_text("Сейчас не получается разобрать команду. Попробуй чуть позже или открой меню.", reply_markup=_menu_keyboard())
         return _idle_state(context)
-    except (IntentParserError, ValueError, DateExpressionError):
+    except (IntentParserError, ValueError, DateExpressionError) as exc:
         logger.info("NL intent parsing or validation failed", exc_info=True)
+        if parsed is not None:
+            capture_state = await _try_capture_fallback(
+                update, context, original_text, response, parsed.intent, exc)
+            if capture_state is not None:
+                return capture_state
         await response.reply_text("Не получилось надёжно разобрать команду. Попробуй сформулировать её чуть иначе.", reply_markup=_menu_keyboard())
         return _idle_state(context)
 

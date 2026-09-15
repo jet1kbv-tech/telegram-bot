@@ -13,7 +13,7 @@ from bot.handlers import capture, common, nl_assistant
 from bot.services.capture import (CaptureContext, CaptureValidationError, NotesCaptureClassifier,
                                   normalize_text_capture, validate_capture_classification)
 from bot.services.capture_proposals import ACTIVE_KEY, PROPOSALS_KEY
-from bot.services.nl_dates import zoned_now
+from bot.services.nl_dates import DateExpressionError, zoned_now
 from bot.services.nl_intent import IntentKind, ParsedIntent
 from bot.services.notes_service import NotesService
 from bot.states import MENU, SECTION
@@ -191,6 +191,85 @@ def test_invalid_capture_classification_fails_closed_with_existing_no_action_hel
     assert ACTIVE_KEY not in context.user_data
     assert "лучше всего умею" in update.message.waiting.edit_text.await_args.args[0]
     assert store.load()["notes"] == []
+
+
+def context_query_intent():
+    return ParsedIntent(IntentKind.QUERY_CONTEXT, {
+        "query_type": "events", "target": None, "date_expression": "весной",
+        "person": None, "follow_up": False, "semantic_type": None,
+    })
+
+
+def test_unsupported_context_date_creates_capture_proposal_then_one_personal_note(
+        configured_capture, monkeypatch):
+    store, service = configured_capture
+    nl_assistant._parser = FakeIntentParser(context_query_intent())
+    monkeypatch.setattr(nl_assistant.storage, "update", lambda callback: callback(store.load()))
+    monkeypatch.setattr(nl_assistant, "execute_context_query",
+                        Mock(side_effect=DateExpressionError("unsupported_date")))
+    update, context = make_update(), make_context()
+
+    assert run(nl_assistant.nl_text_handler(update, context)) == MENU
+    assert service.list_notes(owner="vova") == []
+    proposal_id = context.user_data[ACTIVE_KEY]
+    proposal = context.user_data[PROPOSALS_KEY][proposal_id]
+    assert proposal.classification.candidate_text == update.message.text
+
+    callback = make_update(callback_data=f"cap:confirm:{proposal_id}")
+    assert run(capture.capture_callback_router(callback, context)) == MENU
+    notes = service.list_notes(owner="vova")
+    assert len(notes) == 1
+    assert notes[0]["text"] == update.message.text
+    assert notes[0]["source"] == "universal_capture"
+
+
+def test_mutating_semantic_failure_does_not_fallback_to_capture(configured_capture, monkeypatch):
+    nl_assistant._parser = FakeIntentParser(ParsedIntent(IntentKind.ADD_PURCHASE, {
+        "title": "чай", "price": None, "priority": None, "link": None,
+        "comment": None, "buyer": None,
+    }))
+    monkeypatch.setattr(nl_assistant, "_prepare",
+                        Mock(side_effect=DateExpressionError("unsupported_date")))
+    update, context = make_update(text="Добавь чай"), make_context()
+
+    assert run(nl_assistant.nl_text_handler(update, context)) == MENU
+    assert ACTIVE_KEY not in context.user_data
+    assert "Не получилось надёжно" in update.message.waiting.edit_text.await_args.args[0]
+
+
+@pytest.mark.parametrize("failure", [RuntimeError("bug"), OSError("storage unavailable")])
+def test_context_query_unexpected_or_storage_failure_does_not_fallback(
+        configured_capture, monkeypatch, failure):
+    nl_assistant._parser = FakeIntentParser(context_query_intent())
+    monkeypatch.setattr(nl_assistant.storage, "update", Mock(side_effect=failure))
+    context = make_context()
+
+    with pytest.raises(type(failure), match=str(failure)):
+        run(nl_assistant.nl_text_handler(make_update(), context))
+    assert ACTIVE_KEY not in context.user_data
+
+
+def test_invalid_capture_classification_after_safe_fallback_keeps_nl_error(
+        configured_capture, monkeypatch):
+    store, service = configured_capture
+    capture.configure_capture(classifier=InvalidCaptureClassifier(), notes_service=service)
+    nl_assistant._parser = FakeIntentParser(context_query_intent())
+    monkeypatch.setattr(nl_assistant.storage, "update", lambda callback: callback(store.load()))
+    monkeypatch.setattr(nl_assistant, "execute_context_query",
+                        Mock(side_effect=DateExpressionError("unsupported_date")))
+    update, context = make_update(), make_context()
+
+    assert run(nl_assistant.nl_text_handler(update, context)) == MENU
+    assert ACTIVE_KEY not in context.user_data
+    assert "Не получилось надёжно" in update.message.waiting.edit_text.await_args.args[0]
+    assert store.load()["notes"] == []
+
+
+@pytest.mark.parametrize("reason", ["invalid_date", "invalid_date_range", "unknown_timezone",
+                                     "unsupported_time"])
+def test_other_date_error_reasons_are_not_capture_eligible(reason):
+    assert not nl_assistant._is_capture_fallback_eligible(
+        IntentKind.QUERY_CONTEXT, DateExpressionError(reason))
 
 
 def test_unauthorized_user_cannot_create_or_confirm(configured_capture, monkeypatch):
