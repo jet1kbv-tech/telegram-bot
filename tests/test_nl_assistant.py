@@ -374,14 +374,16 @@ def test_calendar_delete_falls_through_without_one_actor_owned_match(monkeypatch
     assert [call[0] for call in parser.calls] == ["Удали Купить сувениры"]
 
 
-def test_no_action_replaces_waiting_message_with_capabilities_and_menu():
+def test_no_action_replaces_waiting_message_with_capture_proposal():
     nl_assistant._parser = FakeParser(ParsedIntent(IntentKind.NO_ACTION, {}))
     upd = update(text="привет")
     run(nl_assistant.nl_text_handler(upd, context()))
     edit = upd.effective_message.waiting.edit_text
     edit.assert_awaited_once()
-    assert "покупках, фильмах, календаре или Афише" in edit.await_args.args[0]
-    assert edit.await_args.kwargs["reply_markup"].inline_keyboard[0][0].text == "🏠 В меню"
+    assert "🧠 Похоже, это заметка" in edit.await_args.args[0]
+    assert "📝 привет" in edit.await_args.args[0]
+    assert edit.await_args.kwargs["reply_markup"].inline_keyboard[0][0].callback_data.startswith(
+        "cap:confirm:")
 
 
 def test_attachment_command_caption_calls_parser_once_and_routes_once(monkeypatch):
@@ -419,7 +421,7 @@ def test_command_looking_caption_non_attachment_falls_back_without_second_call(m
     orphan.assert_awaited_once()
 
 
-def test_no_action_edit_failure_uses_existing_reply_fallback():
+def test_no_action_capture_edit_failure_uses_existing_reply_fallback():
     nl_assistant._parser = FakeParser(ParsedIntent(IntentKind.NO_ACTION, {}))
     upd = update(text="Почему небо голубое?")
     upd.effective_message.waiting.edit_text.side_effect = RuntimeError("telegram unavailable")
@@ -428,7 +430,7 @@ def test_no_action_edit_failure_uses_existing_reply_fallback():
 
     assert len(nl_assistant._parser.calls) == 1
     assert upd.effective_message.reply_text.await_count == 2
-    assert "работать с нашими планами" in upd.effective_message.reply_text.await_args.args[0]
+    assert "🧠 Похоже, это заметка" in upd.effective_message.reply_text.await_args.args[0]
 
 
 @pytest.mark.parametrize("kind", [

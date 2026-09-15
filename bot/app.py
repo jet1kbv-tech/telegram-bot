@@ -121,6 +121,7 @@ from bot.handlers.wishlist import (
 )
 from bot.handlers.notes import (add_note_text, configure_notes_handlers,
                                 edit_note_text, notes_callback_router)
+from bot.handlers.capture import capture_callback_router, configure_capture
 from bot.states import (
     ADDING_NOTE_TEXT,
     EDITING_NOTE_TEXT,
@@ -220,6 +221,10 @@ from bot.services.weather import OpenMeteoWeatherProvider
 
 logger = logging.getLogger(__name__)
 MAIN_MENU_TEXT = "🏠 В меню"
+CAPTURE_CALLBACK_PATTERN = (
+    r"^cap:(?:(?:confirm|choose|cancel|back):[A-Za-z0-9_-]{8,16}|"
+    r"dest:(?:films|wishlist|purchases|leisure|places|afisha|notes):[A-Za-z0-9_-]{8,16})$"
+)
 
 
 async def handle_application_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -273,6 +278,7 @@ def build_app() -> Application:
     configure_places_handlers(safe_edit_message=safe_edit_message)
     configure_purchases_handlers(safe_edit_message=safe_edit_message)
     configure_notes_handlers(safe_edit_message=safe_edit_message)
+    configure_capture()
 
     configure_calendar_handlers(
         safe_edit_message=safe_edit_message,
@@ -383,6 +389,7 @@ def build_app() -> Application:
         states={
             MENU: [
                 MessageHandler(quick_commands_filter, quick_text_command_router),
+                CallbackQueryHandler(capture_callback_router, pattern=CAPTURE_CALLBACK_PATTERN),
                 *attachment_callback_handlers,
                 *ai_callback_handlers,
                 CallbackQueryHandler(film_recommendation_callback_router, pattern=r"^filmrec:"),
@@ -403,6 +410,7 @@ def build_app() -> Application:
             ],
             SECTION: [
                 MessageHandler(quick_commands_filter, quick_text_command_router),
+                CallbackQueryHandler(capture_callback_router, pattern=CAPTURE_CALLBACK_PATTERN),
                 *attachment_callback_handlers,
                 *ai_callback_handlers,
                 CallbackQueryHandler(film_recommendation_callback_router, pattern=r"^filmrec:"),

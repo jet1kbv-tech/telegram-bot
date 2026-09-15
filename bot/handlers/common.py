@@ -4,6 +4,7 @@ from telegram import InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes, ConversationHandler
 
 from bot.states import MENU, SECTION
+from bot.services.capture_proposals import clear_capture_proposals
 from bot.utils import ensure_access, get_user_name, remember_current_chat
 
 _main_menu_keyboard: Callable[[], InlineKeyboardMarkup] | None = None
@@ -35,6 +36,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         raise RuntimeError("Common handlers are not configured.")
 
     await remember_current_chat(update)
+    clear_capture_proposals(context.user_data)
     context.user_data.clear()
     name = get_user_name(update)
     text = f"Привет, {name}! Это ваш бот для общих списков.\n\nЧто хочешь открыть?"
@@ -64,6 +66,7 @@ async def quick_return_to_main_menu(update: Update, context: ContextTypes.DEFAUL
         raise RuntimeError("Common handlers are not configured.")
 
     await remember_current_chat(update)
+    clear_capture_proposals(context.user_data)
     context.user_data.clear()
     if update.message:
         await update.message.reply_text("Окей, возвращаемся в главное меню.", reply_markup=_main_menu_keyboard())
@@ -85,6 +88,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         raise RuntimeError("Common handlers are not configured.")
 
     await remember_current_chat(update)
+    clear_capture_proposals(context.user_data)
     context.user_data.clear()
     await update.message.reply_text("Окей, возвращаемся в главное меню.", reply_markup=_main_menu_keyboard())
     return MENU
