@@ -27,6 +27,7 @@ from bot.services.polza_master_transcription import PolzaMasterTranscriptionServ
 from bot.services.transcript_processing import PolzaTranscriptCleaner
 from bot.handlers.nl_assistant import configure_nl_assistant, nl_callback_router, nl_clarification_handler, nl_query_callback_router, nl_text_handler
 from bot.services.polza_intent_parser import PolzaIntentParser
+from bot.services.polza_capture_classifier import PolzaCaptureClassifier
 from bot.services.ticket_enrichment import PolzaTicketEnricher
 from bot.handlers.afisha import (
     add_event_date,
@@ -308,6 +309,8 @@ def build_app() -> Application:
     configure_contextual_action_handlers(safe_edit_message=safe_edit_message, weather_provider=weather_provider)
     configure_notification_enrichment(weather_provider)
     if nl_enabled:
+        configure_capture(classifier=PolzaCaptureClassifier(
+            api_key=polza_key, model=polza_model, timeout_seconds=AI_INTENT_TIMEOUT_SECONDS))
         configure_nl_assistant(
             parser=PolzaIntentParser(api_key=polza_key, model=polza_model, timeout_seconds=AI_INTENT_TIMEOUT_SECONDS),
             notify_calendar=notify_other_user_about_calendar_item,
