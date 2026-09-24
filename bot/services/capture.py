@@ -31,12 +31,27 @@ def _string(max_length: int, *, nullable: bool = False) -> dict[str, Any]:
     return value
 
 
-def _candidate_schema(kind: str, properties: dict[str, Any], required: list[str]) -> dict[str, Any]:
-    return {
-        "type": "object", "additionalProperties": False,
-        "properties": {"kind": {"type": "string", "const": kind}, **properties},
-        "required": ["kind", *required],
-    }
+# Polza's OpenAI-compatible strict Structured Outputs boundary follows the
+# subset already used by the NL parser: every object property is required,
+# optional semantic values are nullable, and discriminator oneOf/const shapes
+# are avoided. The provider wire candidate is normalized to the smaller tagged
+# application candidate before validate_capture_classification sees it.
+_PROVIDER_CANDIDATE_PROPERTIES: dict[str, Any] = {
+    "kind": {"type": "string", "enum": sorted(CAPTURE_DESTINATIONS)},
+    "query": _string(MAX_CAPTURE_TITLE_LENGTH, nullable=True),
+    "title": _string(MAX_CAPTURE_TITLE_LENGTH, nullable=True),
+    "price": {"type": ["integer", "null"], "minimum": 0},
+    "name": _string(MAX_CAPTURE_TITLE_LENGTH, nullable=True),
+    "city_name": _string(MAX_CAPTURE_CITY_LENGTH, nullable=True),
+    "place": _string(MAX_CAPTURE_TITLE_LENGTH, nullable=True),
+    "date_expression": _string(MAX_CAPTURE_EXPRESSION_LENGTH, nullable=True),
+    "time_expression": _string(MAX_CAPTURE_EXPRESSION_LENGTH, nullable=True),
+    "end_date_expression": _string(MAX_CAPTURE_EXPRESSION_LENGTH, nullable=True),
+    "end_time_expression": _string(MAX_CAPTURE_EXPRESSION_LENGTH, nullable=True),
+    "link": _string(MAX_CAPTURE_LINK_LENGTH, nullable=True),
+    "comment": _string(MAX_CAPTURE_COMMENT_LENGTH, nullable=True),
+    "text": _string(MAX_CAPTURE_TEXT_LENGTH, nullable=True),
+}
 
 
 CAPTURE_CLASSIFICATION_JSON_SCHEMA = {
@@ -45,46 +60,17 @@ CAPTURE_CLASSIFICATION_JSON_SCHEMA = {
     "schema": {
         "type": "object", "additionalProperties": False,
         "properties": {
-            "contract_version": {"type": "integer", "const": CAPTURE_CONTRACT_VERSION},
+            "contract_version": {"type": "integer", "enum": [CAPTURE_CONTRACT_VERSION]},
             "destination": {"type": "string", "enum": sorted(CAPTURE_DESTINATIONS)},
             "certainty": {"type": "string", "enum": sorted(CAPTURE_CERTAINTIES)},
             "alternatives": {"type": "array", "items": {"type": "string", "enum": sorted(CAPTURE_DESTINATIONS)},
                              "minItems": 0, "maxItems": 2, "uniqueItems": True},
             "reason_code": {"type": "string", "enum": sorted(CAPTURE_REASON_CODES)},
-            "candidate": {"oneOf": [
-                _candidate_schema("films", {"query": _string(MAX_CAPTURE_TITLE_LENGTH)}, ["query"]),
-                _candidate_schema("purchases", {
-                    "title": _string(MAX_CAPTURE_TITLE_LENGTH),
-                    "price": {"type": ["integer", "null"], "minimum": 0},
-                    "link": _string(MAX_CAPTURE_LINK_LENGTH, nullable=True),
-                    "comment": _string(MAX_CAPTURE_COMMENT_LENGTH, nullable=True),
-                }, ["title"]),
-                _candidate_schema("wishlist", {
-                    "title": _string(MAX_CAPTURE_TITLE_LENGTH),
-                    "link": _string(MAX_CAPTURE_LINK_LENGTH, nullable=True),
-                    "comment": _string(MAX_CAPTURE_COMMENT_LENGTH, nullable=True),
-                }, ["title"]),
-                _candidate_schema("leisure", {
-                    "title": _string(MAX_CAPTURE_TITLE_LENGTH),
-                    "comment": _string(MAX_CAPTURE_COMMENT_LENGTH, nullable=True),
-                }, ["title"]),
-                _candidate_schema("places", {
-                    "name": _string(MAX_CAPTURE_TITLE_LENGTH),
-                    "city_name": _string(MAX_CAPTURE_CITY_LENGTH, nullable=True),
-                    "link": _string(MAX_CAPTURE_LINK_LENGTH, nullable=True),
-                    "comment": _string(MAX_CAPTURE_COMMENT_LENGTH, nullable=True),
-                }, ["name"]),
-                _candidate_schema("afisha", {
-                    "title": _string(MAX_CAPTURE_TITLE_LENGTH),
-                    "place": _string(MAX_CAPTURE_TITLE_LENGTH, nullable=True),
-                    "date_expression": _string(MAX_CAPTURE_EXPRESSION_LENGTH, nullable=True),
-                    "time_expression": _string(MAX_CAPTURE_EXPRESSION_LENGTH, nullable=True),
-                    "end_date_expression": _string(MAX_CAPTURE_EXPRESSION_LENGTH, nullable=True),
-                    "end_time_expression": _string(MAX_CAPTURE_EXPRESSION_LENGTH, nullable=True),
-                    "link": _string(MAX_CAPTURE_LINK_LENGTH, nullable=True),
-                }, ["title"]),
-                _candidate_schema("notes", {"text": _string(MAX_CAPTURE_TEXT_LENGTH)}, ["text"]),
-            ]},
+            "candidate": {
+                "type": "object", "additionalProperties": False,
+                "properties": _PROVIDER_CANDIDATE_PROPERTIES,
+                "required": list(_PROVIDER_CANDIDATE_PROPERTIES),
+            },
         },
         "required": ["contract_version", "destination", "certainty", "alternatives",
                      "reason_code", "candidate"],

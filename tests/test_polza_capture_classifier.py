@@ -4,7 +4,8 @@ import json
 import httpx
 import pytest
 
-from bot.services.capture import CaptureContext, CaptureValidationError, normalize_text_capture
+from bot.services.capture import (CAPTURE_CLASSIFICATION_JSON_SCHEMA, CaptureContext,
+                                  CaptureValidationError, normalize_text_capture)
 from bot.services.polza_capture_classifier import (MAX_CAPTURE_PROVIDER_RESPONSE_BYTES,
                                                    PolzaCaptureClassifier)
 from bot.services.nl_dates import zoned_now
@@ -17,6 +18,11 @@ def envelope(value):
 def valid(destination, reason, candidate, *, certainty="clear", alternatives=None):
     return {"contract_version": 2, "destination": destination, "certainty": certainty,
             "alternatives": alternatives or [], "reason_code": reason, "candidate": candidate}
+
+
+def provider_wire(value):
+    fields = CAPTURE_CLASSIFICATION_JSON_SCHEMA["schema"]["properties"]["candidate"]["properties"]
+    return {**value, "candidate": {name: value["candidate"].get(name) for name in fields}}
 
 
 def run_classifier(response, text="source"):
@@ -43,7 +49,36 @@ def run_classifier(response, text="source"):
 def test_provider_accepts_all_destination_responses(destination, reason, candidate, text,
                                                     certainty, alternatives):
     raw = valid(destination, reason, candidate, certainty=certainty, alternatives=alternatives)
-    assert run_classifier(httpx.Response(200, json=envelope(raw)), text)["destination"] == destination
+    assert run_classifier(httpx.Response(200, json=envelope(provider_wire(raw))), text)["destination"] == destination
+
+
+def test_outgoing_request_uses_polza_compatible_strict_schema():
+    seen = {}
+    raw = provider_wire(valid("films", "film_watch_intent", {"kind": "films", "query": "Паразитов"}))
+
+    def response(request):
+        seen["payload"] = json.loads(request.content)
+        return httpx.Response(200, json=envelope(raw))
+
+    run_classifier(response)
+    response_format = seen["payload"]["response_format"]
+    assert response_format == {"type": "json_schema", "json_schema": CAPTURE_CLASSIFICATION_JSON_SCHEMA}
+    assert response_format["json_schema"]["strict"] is True
+
+    schema = response_format["json_schema"]["schema"]
+    candidate = schema["properties"]["candidate"]
+    assert set(schema["required"]) == set(schema["properties"])
+    assert set(candidate["required"]) == set(candidate["properties"])
+    assert candidate["additionalProperties"] is False
+    assert candidate["properties"]["kind"]["enum"] == [
+        "afisha", "films", "leisure", "notes", "places", "purchases", "wishlist"]
+    for name, field_schema in candidate["properties"].items():
+        if name != "kind":
+            assert "null" in field_schema["type"], name
+    serialized = json.dumps(schema, sort_keys=True)
+    assert '"oneOf"' not in serialized
+    assert '"anyOf"' not in serialized
+    assert '"const"' not in serialized
 
 
 @pytest.mark.parametrize("response", [
@@ -66,7 +101,7 @@ def test_provider_timeout_fails_closed():
 
 def test_provider_logs_only_structural_metadata(caplog):
     private = "совершенно секретная мысль"
-    raw = valid("notes", "personal_thought", {"kind": "notes", "text": private})
+    raw = provider_wire(valid("notes", "personal_thought", {"kind": "notes", "text": private}))
     with caplog.at_level("INFO"):
         run_classifier(httpx.Response(200, json=envelope(raw)), private)
     assert private not in caplog.text

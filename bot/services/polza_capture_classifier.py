@@ -34,7 +34,25 @@ certainty=clear и alternatives=[] для уверенного раздела. c
 - notes: личная мысль без подходящего предметного раздела. Для notes поле text обязано дословно совпадать со всем пользовательским текстом.
 - «напомнить себе» без даты/времени может быть notes.
 
-reason_code выбирай строго по смыслу schema. Никогда не возвращай id, owner, actor, user_id, buyer, status, visibility, external_id, tmdb_id, city_id, source_id или added_by."""
+reason_code выбирай строго по смыслу schema. В candidate верни все поля schema: неприменимые и явно не указанные необязательные значения заполни null. Никогда не возвращай id, owner, actor, user_id, buyer, status, visibility, external_id, tmdb_id, city_id, source_id или added_by."""
+
+
+_PROVIDER_CANDIDATE_FIELDS = frozenset(
+    CAPTURE_CLASSIFICATION_JSON_SCHEMA["schema"]["properties"]["candidate"]["properties"]
+)
+
+
+def _normalize_provider_output(raw: Any) -> dict[str, Any]:
+    """Convert the all-required provider wire object to the strict tagged app contract."""
+    if not isinstance(raw, dict) or set(raw) != {
+        "contract_version", "destination", "certainty", "alternatives", "reason_code", "candidate"
+    }:
+        raise CaptureValidationError("invalid_provider_fields")
+    candidate = raw.get("candidate")
+    if not isinstance(candidate, dict) or set(candidate) != _PROVIDER_CANDIDATE_FIELDS:
+        raise CaptureValidationError("invalid_provider_candidate_fields")
+    return {**raw, "candidate": {key: value for key, value in candidate.items()
+                                  if key == "kind" or value is not None}}
 
 
 class PolzaCaptureClassifier:
@@ -96,7 +114,7 @@ class PolzaCaptureClassifier:
             content = body["choices"][0]["message"]["content"]
             if not isinstance(content, str) or len(content.encode("utf-8")) > MAX_CAPTURE_PROVIDER_RESPONSE_BYTES:
                 raise ValueError("invalid content")
-            raw = json.loads(content)
+            raw = _normalize_provider_output(json.loads(content))
             classification = validate_capture_classification(raw, source=capture)
         except (ValueError, KeyError, IndexError, TypeError, json.JSONDecodeError,
                 CaptureValidationError) as exc:
