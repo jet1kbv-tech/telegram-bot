@@ -77,7 +77,8 @@ def configured_capture(monkeypatch, tmp_path):
     monkeypatch.setattr(nl_assistant, "get_allowed_profile",
                         lambda update: profiles.get(update.effective_user.username))
     monkeypatch.setattr(nl_assistant.storage, "load", store.load)
-    return store, service
+    yield store, service
+    capture.configure_capture(classifier=NotesCaptureClassifier(), notes_service=service)
 
 
 @pytest.mark.parametrize(("section", "expected"), [(False, MENU), (True, SECTION)])
@@ -334,3 +335,134 @@ def test_capture_foundation_modules_have_no_storage_dependency():
 
     assert "bot.storage" not in inspect.getsource(capture_models)
     assert "bot.storage" not in inspect.getsource(capture_proposals)
+
+
+V2_CASES = {
+    "films": ("film_watch_intent", {"kind": "films", "query": "Паразитов"}),
+    "wishlist": ("wishlist_intent", {"kind": "wishlist", "title": "Кофемолка", "link": None}),
+    "purchases": ("purchase_intent", {"kind": "purchases", "title": "Штатив", "price": 1200}),
+    "leisure": ("leisure_idea", {"kind": "leisure", "title": "Мастер-класс"}),
+    "places": ("place_intent", {"kind": "places", "name": "Бар X", "city_name": None}),
+    "afisha": ("scheduled_event", {"kind": "afisha", "title": "Концерт",
+                                     "date_expression": "25 сентября", "time_expression": "20:00"}),
+    "notes": ("personal_thought", {"kind": "notes", "text": "thought"}),
+}
+
+
+def v2_raw(destination, *, certainty="clear", alternatives=None, candidate=None):
+    reason, default_candidate = V2_CASES[destination]
+    return {"contract_version": 2, "destination": destination, "certainty": certainty,
+            "alternatives": alternatives or [], "reason_code": reason,
+            "candidate": candidate or default_candidate}
+
+
+@pytest.mark.parametrize("destination", V2_CASES)
+def test_v2_contract_accepts_all_seven_strict_candidates(destination):
+    source = normalize_text_capture("thought" if destination == "notes" else "source")
+    result = validate_capture_classification(v2_raw(destination), source=source)
+    assert result.destination == destination
+    assert result.candidate["kind"] == destination
+
+
+@pytest.mark.parametrize("field", [
+    "owner", "actor", "user_id", "id", "tmdb_id", "external_id", "city_id",
+    "buyer", "visibility", "status", "source_id", "added_by",
+])
+def test_v2_contract_rejects_forbidden_or_unknown_candidate_fields(field):
+    raw = v2_raw("films")
+    raw["candidate"] = {**raw["candidate"], field: "hallucinated"}
+    with pytest.raises(CaptureValidationError):
+        validate_capture_classification(raw, source=normalize_text_capture("source"))
+
+
+@pytest.mark.parametrize("change", [
+    {"extra": True},
+    {"certainty": "clear", "alternatives": ["notes"]},
+    {"certainty": "ambiguous", "alternatives": []},
+    {"certainty": "ambiguous", "alternatives": ["purchases", "purchases"]},
+    {"certainty": "ambiguous", "alternatives": ["films"]},
+])
+def test_v2_contract_rejects_invalid_top_level_and_alternatives(change):
+    raw = v2_raw("films")
+    raw.update(change)
+    with pytest.raises(CaptureValidationError):
+        validate_capture_classification(raw, source=normalize_text_capture("source"))
+
+
+def test_v2_contract_rejects_kind_mismatch_long_field_and_notes_rewrite():
+    source = normalize_text_capture("source")
+    for raw in (
+        v2_raw("films", candidate={"kind": "notes", "query": "X"}),
+        v2_raw("films", candidate={"kind": "films", "query": "x" * 301}),
+        v2_raw("notes", candidate={"kind": "notes", "text": "rewritten"}),
+    ):
+        with pytest.raises(CaptureValidationError):
+            validate_capture_classification(raw, source=source)
+
+
+class FixedV2Classifier:
+    def __init__(self, raw):
+        self.raw = raw
+
+    async def classify(self, source, context):
+        del source, context
+        return self.raw
+
+
+@pytest.mark.parametrize("destination", V2_CASES)
+def test_all_destination_previews_are_non_mutating_until_confirmation(
+        configured_capture, destination):
+    store, service = configured_capture
+    text = "thought" if destination == "notes" else "source"
+    capture.configure_capture(classifier=FixedV2Classifier(v2_raw(destination)), notes_service=service)
+    context, update = make_context(), make_update(text=text)
+
+    assert run(capture.begin_text_capture(update, context, text, update.message)) == MENU
+    proposal_id = context.user_data[ACTIVE_KEY]
+    preview = update.message.reply_text.await_args.args[0]
+    assert "Пока ничего не сохранено" in preview
+    assert not store.path.exists()
+
+    run(capture.capture_callback_router(
+        make_update(callback_data=f"cap:confirm:{proposal_id}"), context))
+    if destination == "notes":
+        assert len(service.list_notes(owner="vova")) == 1
+    else:
+        assert not store.path.exists()
+
+
+def test_ambiguous_choice_opens_second_preview_and_preserves_classification(configured_capture):
+    _, service = configured_capture
+    raw = v2_raw("wishlist", certainty="ambiguous", alternatives=["purchases"],
+                 candidate={"kind": "wishlist", "title": "Новые наушники"})
+    capture.configure_capture(classifier=FixedV2Classifier(raw), notes_service=service)
+    context, update = make_context(), make_update(text="Хочу новые наушники")
+    run(capture.begin_text_capture(update, context, update.message.text, update.message))
+    proposal = context.user_data[PROPOSALS_KEY][context.user_data[ACTIVE_KEY]]
+    keyboard = update.message.reply_text.await_args.kwargs["reply_markup"].inline_keyboard
+    assert [button.text for button in keyboard[0]] == ["🎁 Вишлист", "🛒 Покупки"]
+
+    run(capture.capture_callback_router(make_update(
+        callback_data=f"cap:dest:purchases:{proposal.proposal_id}"), context))
+    assert proposal.selected_destination == "purchases"
+    assert proposal.classification.destination == "wishlist"
+    assert proposal.classification.candidate == raw["candidate"]
+
+
+def test_manual_notes_override_uses_exact_source_and_chooser_has_all_destinations(configured_capture):
+    _, service = configured_capture
+    capture.configure_capture(classifier=FixedV2Classifier(v2_raw("films")), notes_service=service)
+    context, update = make_context(), make_update(text="  Личная исходная мысль  ")
+    run(capture.begin_text_capture(update, context, update.message.text, update.message))
+    proposal_id = context.user_data[ACTIVE_KEY]
+    chooser_update = make_update(callback_data=f"cap:choose:{proposal_id}")
+    run(capture.capture_callback_router(chooser_update, context))
+    buttons = [button.text for row in chooser_update.callback_query.edit_message_text.await_args.kwargs[
+        "reply_markup"].inline_keyboard for button in row]
+    assert buttons[:7] == [label for _, label in capture._DESTINATIONS]
+
+    run(capture.capture_callback_router(make_update(
+        callback_data=f"cap:dest:notes:{proposal_id}"), context))
+    run(capture.capture_callback_router(make_update(
+        callback_data=f"cap:confirm:{proposal_id}"), context))
+    assert service.list_notes(owner="vova")[0]["text"] == "Личная исходная мысль"

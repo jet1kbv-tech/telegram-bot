@@ -22,6 +22,7 @@ class CaptureProposal:
     classification: CaptureClassification
     created_at: datetime
     expires_at: datetime
+    selected_destination: str | None = None
     status: str = "pending"
 
 
